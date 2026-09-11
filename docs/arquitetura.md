@@ -2,13 +2,13 @@
 
 ## Visão geral
 
-O script [Migracao.py](Acme/Migracao.py) é uma aplicação CLI que:
+O script `Migracao.py` é uma aplicação CLI que:
 
 1. Lê a configuração do Acme em `Acme/.env`.
 2. Abre conexão com três bancos.
 3. Gera arquivos `.sql` com `DELETE`, `UPDATE`, `INSERT`, `ALTER TABLE` e `setval`.
 4. Não aplica os dados diretamente na V2.
-5. Delega a execução final para `psql`, usando os arquivos gerados em `Acme/sql/`.
+5. Delega a execução final para `psql`, usando os arquivos gerados em `runs/<cliente>/<timestamp>/sql/`.
 
 ## Bancos envolvidos
 
@@ -30,7 +30,7 @@ A classe `Migracao` concentra toda a execução.
 
 Principais responsabilidades:
 
-- `__init__()`: carrega `.env`, abre conexões, inicializa arquivos e mapas.
+- `__init__()`: carrega `.env`, cria o diretório centralizado da execução, abre conexões, inicializa arquivos e mapas.
 - `dump_tables()`: roda `pg_dump` da V1 com exclusão de tabelas problemáticas ou inexistentes.
 - `set_trigger_commands()`: monta `ALTER TABLE ... DISABLE/ENABLE TRIGGER ALL`.
 - `set_indexes_commands()`: monta comandos para desabilitar e reabilitar índices específicos.
@@ -42,21 +42,25 @@ Principais responsabilidades:
 
 ## Artefatos gerados
 
-Os caminhos vêm do `.env`:
+Os artefatos ficam em `runs/<cliente>/<YYYYmmdd-HHMMSS>/`:
 
-- `sql/empty.sql`
-- `sql/webstagepgj_cmd.dmp.sql`
-- `sql/cmd_ini.sql`
-- `sql/cmd.sql`
-- `sql/cmd_fim.sql`
+- `manifest.json`
+- `logs/migration.log`
+- `logs/*.sql.log`
+- `erros/*.txt`
+- `sql/00_setup.sql`
+- `sql/01_prepare_target.sql`
+- `sql/02_dump_compatible_tables.sql`
+- `sql/03_load_transformed_data.sql`
+- `sql/04_finalize_target.sql`
 
 Responsabilidade de cada artefato:
 
-- `empty.sql`: arquivo inicializado no construtor; hoje não recebe conteúdo relevante durante `run()` mas é importante existir.
-- `webstagepgj_cmd.dmp.sql`: saída do `pg_dump` da V1 para tabelas que podem ser carregadas em bloco.
-- `cmd_ini.sql`: preparação da V2, com desabilitação de triggers/índices e limpeza de dados.
-- `cmd.sql`: carga principal e ajustes intermediários.
-- `cmd_fim.sql`: `setval` de sequences e reativação de índices/triggers.
+- `00_setup.sql`: arquivo inicial da execução.
+- `01_prepare_target.sql`: preparação da V2, com desabilitação de triggers/índices e limpeza de dados.
+- `02_dump_compatible_tables.sql`: saída do `pg_dump` da V1 para tabelas que podem ser carregadas em bloco.
+- `03_load_transformed_data.sql`: carga principal e ajustes intermediários.
+- `04_finalize_target.sql`: `setval` de sequences e reativação de índices/triggers.
 
 ## Estratégia de carga
 
@@ -74,7 +78,7 @@ O script já incorpora decisões de compatibilidade:
 - exclusão de tabelas problemáticas no `pg_dump`;
 - exclusão de tabelas inexistentes no ambiente do Acme;
 - limpeza prévia de tabelas da V2 para evitar `duplicate key`;
-- recriação de índice único em `clients(f_cpf, (f_cpf is not null))`;
+- recriação de índices únicos em tabelas fictícias `acme_*`;
 - correções posteriores, como prefixo de `document_files.f_file` e ajustes em datas;
 - atualização de usernames com encoding inválido em IDs específicos.
 
@@ -89,11 +93,7 @@ Para funcionar, o ambiente precisa ter:
 - `pg_dump`
 - acesso de rede aos bancos configurados
 
-Também é esperado que existam as pastas:
-
-- `Acme/sql`
-- `Acme/logs`
-- `Acme/erros`
+O diretório `runs/` é criado automaticamente na raiz do projeto e ignorado pelo Git.
 
 ## Riscos arquiteturais atuais
 

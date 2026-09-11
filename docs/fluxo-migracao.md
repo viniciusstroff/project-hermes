@@ -5,8 +5,8 @@
 No bloco `main`, o script faz:
 
 1. instancia `Migracao()`;
-2. aplica `enable_debug(100)`;
-3. executa `dump_tables()`;
+2. aplica `enable_debug(<quantidade>)` apenas quando `--debug` é informado;
+3. em modo completo, executa `dump_tables()`;
 4. executa `run()`.
 
 Isso significa que o fluxo padrão já gera:
@@ -21,6 +21,8 @@ Isso significa que o fluxo padrão já gera:
 Durante `__init__()` o script:
 
 - carrega `Acme/.env`;
+- cria `runs/Acme/<timestamp>/`;
+- inicializa `manifest.json`, `logs/migration.log` e `sql/00_setup.sql`;
 - abre conexão com PostgreSQL V1;
 - abre conexão com PostgreSQL V2;
 - abre conexão com Firebird V1;
@@ -43,7 +45,7 @@ Objetivo:
 
 Saída:
 
-- `sql/webstagepgj_cmd.dmp.sql`
+- `runs/<cliente>/<timestamp>/sql/02_dump_compatible_tables.sql`
 
 ## Etapa 3: preparação da base V2
 
@@ -52,14 +54,14 @@ Saída:
 - comandos para desabilitar triggers;
 - comandos para desabilitar índices específicos.
 
-Depois escreve `sql/cmd_ini.sql` com:
+Depois escreve `sql/01_prepare_target.sql` com:
 
 - `ALTER TABLE ... DISABLE TRIGGER ALL`;
 - updates diretos em `pg_index` para certos índices;
 - `DELETE`s em tabelas de destino;
 - `DELETE`s em tabelas do schema `extranet`;
 - `DELETE`s em tabelas sem sequence;
-- ajuste do índice único de CPF em `clients`.
+- ajuste de índices únicos em tabelas fictícias `acme_*`.
 
 Objetivo:
 
@@ -67,7 +69,7 @@ Objetivo:
 
 ## Etapa 4: carga principal
 
-Depois o script troca o arquivo ativo para `sql/cmd.sql` e executa dezenas de rotinas `insert_*()` e `update_*()`.
+Depois o script troca o arquivo ativo para `sql/03_load_transformed_data.sql` e executa as rotinas `insert_*()` e `update_*()`.
 
 A ordem importa. Em alto nível:
 
@@ -80,7 +82,7 @@ A ordem importa. Em alto nível:
 - publicações;
 - documentos;
 - audiências, intimações e históricos;
-- Acmes e participantes;
+- clientes fictícios e participantes;
 - áreas;
 - dados financeiros e complementares;
 - correções finais do conjunto principal.
@@ -112,7 +114,7 @@ Esse helper reduz duplicação, mas não faz validação semântica do dado.
 
 ## Etapa 5: finalização
 
-No final do `run()`, o script abre `sql/cmd_fim.sql` e gera:
+No final do `run()`, o script abre `sql/04_finalize_target.sql` e gera:
 
 - `setval` para sequences;
 - reativação de índices;

@@ -1,6 +1,7 @@
 acme_database.tar
 logs/*
 erros/*
+runs/*
 */sql/*.sql
 */logs/*
 */erros

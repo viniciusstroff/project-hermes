@@ -6,10 +6,10 @@ Cada Acme herda BaseMigration e implementa:
   - dump_non_existing_tables()→ list[str]  tabelas inexistentes no Acme
   - set_indexes_commands()    → configura self.disable_indexes / self.enable_indexes
   - reset_sequences()         → gera setval para as sequences do Acme
-  - run_initial()             → conteúdo do cmd_ini.sql (truncates, deletes, etc.)
-  - run_inserts()             → conteúdo do cmd.sql (inserts e updates)
+  - run_initial()             → conteúdo do 01_prepare_target.sql
+  - run_inserts()             → conteúdo do 03_load_transformed_data.sql
 
-O método run() é um template: gerencia abertura de arquivos, triggers e índices.
+O método run() é um template: gerencia artefatos, arquivos SQL, triggers e índices.
 """
 
 import datetime
@@ -26,6 +26,7 @@ import traceback
 import firebirdsql
 from dotenv import dotenv_values
 
+from core.artifacts import ArtifactManager
 from core.migration_engine import MigrationEngine
 from core.table_migration import TableMigration
 from core.strategies import Copy, Rename, Fixed, Lookup, RegexClean, DateConvert, EmailExtract, CpfClean, PhoneClean, SqlExpression
@@ -39,6 +40,9 @@ class BaseMigration:
 
     def enable_debug(self, quantidade=100):
         self.limit = f'LIMIT {quantidade}'
+        self.debug_limit = quantidade
+        if hasattr(self, 'artifacts'):
+            self._write_manifest('running')
 
     def __init__(self, clientdir: str):
         """
@@ -47,7 +51,9 @@ class BaseMigration:
         """
         self._clientdir = clientdir
         self.config = dotenv_values(os.path.join(clientdir, '.env'))
+        self.artifacts = ArtifactManager(clientdir)
         self.limit = ''
+        self.debug_limit = None
         self._write_buffer = []
         self._buffer_size = 500
         self._cursor_seq = 0
@@ -63,29 +69,38 @@ class BaseMigration:
         self._tui_rows = 0
         self._tui_cols = 0
         self._reference_maps = {}
+        self.file = None
+        self._log_file = open(self.artifacts.log_path('migration.log'), 'a', encoding='utf-8')
+        self._open_sql_file('setup')
+        self._write_manifest('running')
 
-        self.print_log('----- Conectando BD V1 -----')
-        self.file = open(os.path.join(clientdir, self.config['EMPTY_FILENAME']), 'w+', encoding='utf-8')
+        try:
+            self.print_log('Artefatos da execução: ' + self.artifacts.run_dir)
+            self.print_log('----- Conectando BD V1 -----')
 
-        self.pg_v1_conn = psycopg2.connect(
-            host=self.config['PG_V1_HOST'], port=self.config['PG_V1_PORT'],
-            dbname=self.config['PG_V1_NAME'],
-            user=self.config['PG_V1_USER'], password=self.config['PG_V1_PASS'])
+            self.pg_v1_conn = psycopg2.connect(
+                host=self.config['PG_V1_HOST'], port=self.config['PG_V1_PORT'],
+                dbname=self.config['PG_V1_NAME'],
+                user=self.config['PG_V1_USER'], password=self.config['PG_V1_PASS'])
 
-        self.print_log('----- Conectando BD V2 -----')
-        self.pg_v2_conn = psycopg2.connect(
-            host=self.config['PG_V2_HOST'], port=self.config['PG_V2_PORT'],
-            dbname=self.config['PG_V2_NAME'],
-            user=self.config['PG_V2_USER'], password=self.config['PG_V2_PASS'])
+            self.print_log('----- Conectando BD V2 -----')
+            self.pg_v2_conn = psycopg2.connect(
+                host=self.config['PG_V2_HOST'], port=self.config['PG_V2_PORT'],
+                dbname=self.config['PG_V2_NAME'],
+                user=self.config['PG_V2_USER'], password=self.config['PG_V2_PASS'])
 
-        self.print_log('----- Conectando BD Firebird V1 -----')
-        self.fb_v1_conn = firebirdsql.connect(
-            host=self.config['FB_V1_HOST'],
-            port=self.config['FB_V1_PORT'],
-            database=self.config['FB_V1_NAME'],
-            user=self.config['FB_V1_USER'],
-            password=self.config['FB_V1_PASS'],
-            charset=self.config['FB_V1_CHARSET'])
+            self.print_log('----- Conectando BD Firebird V1 -----')
+            self.fb_v1_conn = firebirdsql.connect(
+                host=self.config['FB_V1_HOST'],
+                port=self.config['FB_V1_PORT'],
+                database=self.config['FB_V1_NAME'],
+                user=self.config['FB_V1_USER'],
+                password=self.config['FB_V1_PASS'],
+                charset=self.config['FB_V1_CHARSET'])
+        except Exception as e:
+            self.print_log('[ERRO] ' + str(e))
+            self._write_manifest('failed', str(e))
+            raise
 
         self.disable_triggers = ''
         self.enable_triggers = ''
@@ -102,8 +117,10 @@ class BaseMigration:
                 self.pg_v2_conn.close()
             if hasattr(self, 'fb_v1_conn'):
                 self.fb_v1_conn.close()
-            if hasattr(self, 'file'):
+            if hasattr(self, 'file') and self.file:
                 self.file.close()
+            if hasattr(self, '_log_file') and self._log_file:
+                self._log_file.close()
         except Exception:
             pass
 
@@ -250,6 +267,12 @@ class BaseMigration:
     # I/O de SQL
     # ------------------------------------------------------------------
 
+    def _open_sql_file(self, key: str):
+        self._flush_writes()
+        if self.file:
+            self.file.close()
+        self.file = open(self.artifacts.sql_path(key), 'w+', encoding='utf-8')
+
     def write_sql(self, sql: str):
         self._write_buffer.append(sql)
         if len(self._write_buffer) >= self._buffer_size:
@@ -273,6 +296,9 @@ class BaseMigration:
     def print_log(self, line):
         now = datetime.datetime.now()
         text = '[' + now.strftime('%d/%m/%Y %H:%M:%S') + '] ' + line
+        if hasattr(self, '_log_file') and not self._log_file.closed:
+            self._log_file.write(text + '\n')
+            self._log_file.flush()
         if self._tui_active:
             top, middle, bottom = self._footer_lines()
             sys.stdout.write(f'\033[{self._FOOTER_HEIGHT - 1}A\033[J')
@@ -286,6 +312,14 @@ class BaseMigration:
         self.write_sql('\n-----' + len(line) * '-')
         self.write_sql('\n-----' + line)
         self.write_sql('\n-----' + (len(line) * '-') + '\n\n')
+
+    def _write_manifest(self, status: str, error: str = None):
+        self.artifacts.write_manifest(
+            status=status,
+            config=self.config,
+            debug_limit=self.debug_limit,
+            error=error,
+        )
 
     # ------------------------------------------------------------------
     # Escaping SQL
@@ -378,11 +412,11 @@ class BaseMigration:
         pass
 
     def run_initial(self):
-        """Conteúdo do cmd_ini.sql. Sobrescreva para truncates, deletes e flags iniciais."""
+        """Conteúdo do 01_prepare_target.sql. Sobrescreva para truncates, deletes e flags iniciais."""
         pass
 
     def run_inserts(self):
-        """Conteúdo do cmd.sql. Sobrescreva com todos os insert_* e update_* do Acme."""
+        """Conteúdo do 03_load_transformed_data.sql. Sobrescreva com todos os insert_* e update_* do Acme."""
         pass
 
     # ------------------------------------------------------------------
@@ -399,7 +433,7 @@ class BaseMigration:
             host=self.config['PG_V1_HOST'],
             port=self.config['PG_V1_PORT'],
             user=self.config['PG_V1_USER'],
-            file=self.config['DUMP_FILENAME'],
+            file=self.artifacts.sql_path('dump_compatible_tables'),
             name=self.config['PG_V1_NAME'],
             excludes=''.join([f"-T '{t}' " for t in exclude_tables]),
         )
@@ -408,6 +442,7 @@ class BaseMigration:
         self.print_log('Executando pg_dump de tabelas diferentes e com dados')
 
         if subprocess.call(shlex.split(command), shell=False) != 0:
+            self._write_manifest('failed', 'Comando de dump falhou')
             raise Exception('Comando de dump falhou')
 
         self.file.seek(0, 2)
@@ -425,21 +460,18 @@ class BaseMigration:
             self.set_trigger_commands()
             self.set_indexes_commands()
 
-            # cmd_ini.sql
-            self._flush_writes()
-            self.file = open(os.path.join(self._clientdir, self.config['INICIAL_FILENAME']), 'w+', encoding='utf-8')
+            # 01_prepare_target.sql
+            self._open_sql_file('prepare_target')
             self.run_initial()
 
-            # cmd.sql
-            self._flush_writes()
-            self.file = open(os.path.join(self._clientdir, self.config['PRINCIPAL_FILENAME']), 'w+', encoding='utf-8')
+            # 03_load_transformed_data.sql
+            self._open_sql_file('load_transformed_data')
             self._reset_progress()
             self.run_inserts()
             self._finish_progress()
 
-            # cmd_fim.sql
-            self._flush_writes()
-            self.file = open(os.path.join(self._clientdir, self.config['FINAL_FILENAME']), 'w+', encoding='utf-8')
+            # 04_finalize_target.sql
+            self._open_sql_file('finalize_target')
             self.reset_sequences()
             self.print_comment('HABILITAR ÍNDICES DE TABELAS')
             self.write_sql(self.enable_indexes)
@@ -448,7 +480,9 @@ class BaseMigration:
             self._flush_writes()
 
             self.print_log('----- Fim do script de importação V1 - V2 -----')
+            self._write_manifest('success')
 
         except Exception as e:
             self.print_log('[ERRO] ' + str(e))
             self.print_log(traceback.format_exc())
+            self._write_manifest('failed', str(e))

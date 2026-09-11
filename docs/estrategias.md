@@ -193,8 +193,8 @@ Todas as estratégias funcionam juntas na mesma `TableMigration`:
 
 ```python
 TableMigration(
-    source_sql='SELECT {fields} FROM public.clients {limit}',
-    target='public.clients',
+    source_sql='SELECT {fields} FROM public.acme_v1_customers {limit}',
+    target='public.acme_customers_demo',
     fields=[
         Copy('f_id'),
         Copy('f_name'),
@@ -220,7 +220,7 @@ Nem tudo cabe em `TableMigration`. Use SQL direto em `write_sql()` quando:
 - A migração envolve lógica condicional por linha (ex: `if row['tipo'] == 'X': ...`).
 - Há `UPDATE`s na V2 após a carga (não `INSERT`s).
 
-Nesses casos, crie um método `insert_*` ou `update_*` na classe do Acme com a lógica manual, exatamente como acontece hoje em `Acme/Acme.py` para `insert_process` e `insert_publications`.
+Nesses casos, crie um método `insert_*` ou `update_*` na classe do Acme com a lógica manual, por exemplo `insert_acme_orders` ou `update_acme_customer_status`.
 
 ---
 

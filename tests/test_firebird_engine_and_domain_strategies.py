@@ -45,7 +45,7 @@ class FakeFirebirdConnection:
 class FirebirdEngineTest(unittest.TestCase):
     def test_translates_limit_and_maps_rows_to_dict(self):
         conn = FakeFirebirdConnection(
-            rows=[(1, '(11) 98888-7777', '123.456.789-00')],
+            rows=[(1, '(00) 90000-0000', '000.000.000-00')],
             description=[('F_ID',), ('F_PHONE',), ('F_CPF',)],
         )
         writes = []
@@ -53,22 +53,22 @@ class FirebirdEngineTest(unittest.TestCase):
         engine = MigrationEngine(conn, writes.append, limit='LIMIT 10', source='firebird')
 
         TableMigration(
-            source_sql='SELECT {fields} FROM users {limit}',
-            target='public.users',
+            source_sql='SELECT {fields} FROM acme_v1_users_demo {limit}',
+            target='public.acme_users_demo',
             fields=[Copy('f_id'), PhoneClean('f_phone'), CpfClean('f_cpf')],
         ).run(engine)
 
         self.assertEqual(
             conn.cursor_calls[0].executed_sql,
-            'SELECT COUNT(*) FROM (SELECT f_id, f_phone, f_cpf FROM users ROWS 10) progress_src',
+            'SELECT COUNT(*) FROM (SELECT f_id, f_phone, f_cpf FROM acme_v1_users_demo ROWS 10) progress_src',
         )
         self.assertEqual(
             conn.cursor_calls[1].executed_sql,
-            'SELECT f_id, f_phone, f_cpf FROM users ROWS 10',
+            'SELECT f_id, f_phone, f_cpf FROM acme_v1_users_demo ROWS 10',
         )
         self.assertEqual(
             writes,
-            ["INSERT INTO public.users (f_id, f_phone, f_cpf) VALUES (1, E'11988887777', E'12345678900');\n"],
+            ["INSERT INTO public.acme_users_demo (f_id, f_phone, f_cpf) VALUES (1, E'00900000000', E'00000000000');\n"],
         )
 
 
@@ -82,12 +82,12 @@ class DomainStrategiesTest(unittest.TestCase):
     def test_phone_clean_supports_rename(self):
         strategy = PhoneClean('f_mobile2', 'f_number1')
         self.assertEqual(strategy.insert_col, 'f_number1')
-        self.assertEqual(strategy.value({'f_mobile2': '(51) 9 9988-7766'}), "E'51999887766'")
+        self.assertEqual(strategy.value({'f_mobile2': '(00) 9 0000-0000'}), "E'00900000000'")
 
     def test_cpf_clean_removes_formatting(self):
         strategy = CpfClean('f_cpf')
         self.assertEqual(strategy.insert_col, 'f_cpf')
-        self.assertEqual(strategy.value({'f_cpf': '123.456.789-00'}), "E'12345678900'")
+        self.assertEqual(strategy.value({'f_cpf': '000.000.000-00'}), "E'00000000000'")
 
 
 if __name__ == '__main__':

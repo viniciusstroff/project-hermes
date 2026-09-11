@@ -11,20 +11,19 @@ Migracao/
 └── NomeAcme/
     ├── NomeAcme.py   ← script de migração
     ├── .env             ← credenciais e caminhos (nunca comitar)
-    ├── .env.example     ← versão sem valores reais (comitar)
-    ├── sql/             ← arquivos SQL gerados (ignorados pelo git)
-    ├── logs/            ← logs de execução psql (ignorados pelo git)
-    └── erros/           ← erros filtrados dos logs (ignorados pelo git)
+    └── .env.example     ← versão sem valores reais (comitar)
 ```
 
 O nome do diretório e do arquivo `.py` devem ser idênticos (case-sensitive). Esse nome é passado como argumento para `python3 Migracao.py <NomeAcme>`.
 
+Os artefatos de execução são criados automaticamente em `runs/<NomeAcme>/<YYYYmmdd-HHMMSS>/`.
+
 ---
 
-## Passo 1 — Criar o diretório e os subdiretórios
+## Passo 1 — Criar o diretório do cliente
 
 ```bash
-mkdir -p NomeAcme/sql NomeAcme/logs NomeAcme/erros
+mkdir -p NomeAcme
 ```
 
 ---
@@ -61,13 +60,6 @@ FB_V1_NAME=
 FB_V1_USER=
 FB_V1_PASS=
 FB_V1_CHARSET=ISO8859_1
-
-# Arquivos de saída
-EMPTY_FILENAME=sql/empty.sql
-DUMP_FILENAME=sql/webstagepgj_cmd.dmp.sql
-FINAL_FILENAME=sql/cmd_fim.sql
-INICIAL_FILENAME=sql/cmd_ini.sql
-PRINCIPAL_FILENAME=sql/cmd.sql
 ```
 
 ---
@@ -117,8 +109,8 @@ class Migracao(BaseMigration):
 
     def reset_sequences(self):
         tables = [
-            'process',
-            'clients',
+            'acme_customers_demo',
+            'acme_orders_demo',
             # adicione as demais tabelas com sequences
         ]
         for table in tables:
@@ -128,7 +120,7 @@ class Migracao(BaseMigration):
             )
 
     # ------------------------------------------------------------------
-    # Fase inicial (cmd_ini.sql)
+    # Fase inicial (01_prepare_target.sql)
     # ------------------------------------------------------------------
 
     def run_initial(self):
@@ -139,7 +131,7 @@ class Migracao(BaseMigration):
         self.write_sql(self.disable_indexes)
 
     # ------------------------------------------------------------------
-    # Fase de carga (cmd.sql)
+    # Fase de carga (03_load_transformed_data.sql)
     # ------------------------------------------------------------------
 
     def run_inserts(self):
@@ -193,10 +185,10 @@ Consulte [estrategias.md](estrategias.md) para o catálogo completo de estratég
 
 `run_inserts()` deve inserir as tabelas de forma que nenhuma FK seja violada:
 
-1. Tabelas de domínio (sem FKs): `users`, `hearingtypes`, `actiontypes`, etc.
-2. Tabelas que dependem de domínio: `clients`, `process`.
-3. Tabelas que dependem de `process` e `clients`: `participants`, `publications`, etc.
-4. Tabelas dependentes das anteriores: `histories`, `documents`, etc.
+1. Tabelas de domínio (sem FKs): `acme_departments_demo`, `acme_statuses_demo`, etc.
+2. Tabelas que dependem de domínio: `acme_customers_demo`, `acme_contracts_demo`.
+3. Tabelas que dependem dessas entidades: `acme_orders_demo`, `acme_order_items_demo`, etc.
+4. Tabelas dependentes das anteriores: `acme_notes_demo`, `acme_files_demo`, etc.
 
 ---
 
@@ -209,7 +201,7 @@ python3 Migracao.py NomeAcme --debug 100
 Isso limita cada `SELECT` a 100 linhas. Verifique:
 
 - Nenhum erro de Python na saída do terminal.
-- Os arquivos em `NomeAcme/sql/` foram gerados.
+- Os arquivos em `runs/NomeAcme/<timestamp>/sql/` foram gerados.
 - O SQL gerado parece correto (amostragem manual).
 
 ---
@@ -222,7 +214,7 @@ Veja o passo a passo completo em [execucao.md](execucao.md).
 
 ## Checklist resumido
 
-- [ ] Diretório `NomeAcme/` criado com `sql/`, `logs/` e `erros/`
+- [ ] Diretório `NomeAcme/` criado com script e `.env`
 - [ ] `.env` criado e configurado
 - [ ] `.env.example` criado sem valores reais
 - [ ] `NomeAcme/NomeAcme.py` criado herdando `BaseMigration`

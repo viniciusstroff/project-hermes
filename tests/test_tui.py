@@ -63,10 +63,10 @@ def main():
     sys.stdout.flush()
 
     tables = [
-        ('clients', 200),
-        ('participants', 80),
-        ('process', 350),
-        ('publications', 120),
+        ('acme_customers_demo', 200),
+        ('acme_people_demo', 80),
+        ('acme_orders_demo', 350),
+        ('acme_messages_demo', 120),
     ]
 
     started_at = time.monotonic()

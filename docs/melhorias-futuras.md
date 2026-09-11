@@ -136,7 +136,7 @@ Separar “gerar comandos” de “como entregar/executar esses comandos”.
 
 ### Cenários desejados
 
-- `sql-file`: escreve `cmd_ini.sql`, `cmd.sql`, `cmd_fim.sql`
+- `sql-file`: escreve `01_prepare_target.sql`, `03_load_transformed_data.sql`, `04_finalize_target.sql`
 - `direct-db`: executa diretamente no destino
 - `buffered-db`: executa em lotes no destino
 - `stdout`: emite comandos para pipe/processamento externo
@@ -231,9 +231,9 @@ Fase 2:
 
 ---
 
-## 3 — Migrar os outros Acmes para a nova arquitetura
+## 3 — Migrar os outros clientes fictícios para a nova arquitetura
 
-Os Acmes `Diehlcella`, `Fatima`, `Olisilva` e `martiniadv_112025` ainda têm seus próprios `print_log`, `write_sql`, `set_trigger_commands` e buffers. Qualquer melhoria feita no `core/` não chega automaticamente neles.
+Os clientes fictícios `AcmeAlpha`, `AcmeBeta`, `AcmeGamma` e `AcmeDelta` ainda têm seus próprios `print_log`, `write_sql`, `set_trigger_commands` e buffers. Qualquer melhoria feita no `core/` não chega automaticamente neles.
 
 **O que fazer para cada Acme:**
 - herdar `BaseMigration`
@@ -242,7 +242,7 @@ Os Acmes `Diehlcella`, `Fatima`, `Olisilva` e `martiniadv_112025` ainda têm seu
 - substituir acesso direto a conexões por helpers/adapters do core
 - seguir o checklist em [novo-Acme.md](novo-Acme.md)
 
-**Arquivos:** `Diehlcella/Migracao.py`, `Fatima/Migracao.py`, `Olisilva/Migracao.py`, `martiniadv_112025/Migracao.py`
+**Arquivos:** `AcmeAlpha/Migracao.py`, `AcmeBeta/Migracao.py`, `AcmeGamma/Migracao.py`, `AcmeDelta/Migracao.py`
 
 ---
 
@@ -300,7 +300,7 @@ Deixar o Acme o mais declarativo possível, e empurrar o comportamento genérico
 
 ## 6 — Expandir o uso de `MultiTargetMigration`
 
-`MultiTargetMigration` já cobre o padrão “uma linha da V1 gera inserts em múltiplas tabelas da V2”. Hoje isso já beneficia `publications` e `depositvalues`, mas a abstração ainda pode crescer.
+`MultiTargetMigration` já cobre o padrão “uma linha da V1 gera inserts em múltiplas tabelas da V2”. Hoje isso já beneficia exemplos fictícios como `acme_messages_demo` e `acme_payments_demo`, mas a abstração ainda pode crescer.
 
 ### Possíveis evoluções
 

@@ -1,18 +1,18 @@
 # Documentação da Migração Acme
 
-Esta pasta descreve a arquitetura do script `Acme/Migracao.py`, o fluxo operacional da migração e o checklist específico do Acme Acme.
+Esta pasta descreve a arquitetura do script `Acme/Acme.py`, o fluxo operacional da migração e o checklist de um cliente fictício.
 
 Arquivos:
 
 - `arquitetura.md`: componentes, conexões e artefatos gerados.
 - `fluxo-migracao.md`: sequência de execução do script e papel de cada arquivo SQL.
-- `operacao-Acme.md`: passo a passo prático para rodar a migração do Acme Acme hoje.
+- `execucao.md`: passo a passo prático para rodar a migração fictícia da Acme.
 
 Ponto de entrada:
 
-- Script principal: [Migracao.py](/home/office/projects/Migracao/Acme/Migracao.py)
-- Configuração local: [Acme/.env](/home/office/projects/Migracao/Acme/.env)
+- Script principal: `Acme/Acme.py`
+- Configuração local: `Acme/.env`
 
 Observação importante:
 
-- O script usa `enable_debug(100)` no `main`, então por padrão ele gera queries limitadas a 100 registros por seleção. Para uma migração completa, isso precisa ser removido, comentado, ou substituído por uma execução sem `LIMIT`.
+- O modo debug só é ativado com `--debug <quantidade>`. Sem esse parâmetro, o entry point executa `pg_dump` e gera a migração completa.

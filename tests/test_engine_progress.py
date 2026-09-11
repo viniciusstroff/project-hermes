@@ -111,10 +111,10 @@ class ExpandMigrationTest(unittest.TestCase):
         conn = FakeConnection([
             {
                 'f_id': 10,
-                'f_appointmenttype': 2,
+                'f_plan_type': 2,
                 'f_days': 3,
-                'f_managervalidate': True,
-                'f_maximum': 4,
+                'f_requires_approval': True,
+                'f_maximum_items': 4,
                 'f_status': 1,
             }
         ])
@@ -122,24 +122,24 @@ class ExpandMigrationTest(unittest.TestCase):
         progress = []
 
         ExpandMigration(
-            source_sql='SELECT {fields} FROM public.rescheduling_appointmenttypes {limit}',
-            target='public.rescheduling_appointmenttypes',
+            source_sql='SELECT {fields} FROM public.acme_schedule_rules_demo {limit}',
+            target='public.acme_schedule_rules_demo',
             fields=[
-                Copy('f_appointmenttype'),
+                Copy('f_plan_type'),
                 Copy('f_days'),
-                Copy('f_managervalidate'),
-                Copy('f_maximum'),
+                Copy('f_requires_approval'),
+                Copy('f_maximum_items'),
                 Copy('f_status'),
             ],
             first_fields=[
                 Copy('f_id'),
-                Copy('f_appointmenttype'),
+                Copy('f_plan_type'),
                 Copy('f_days'),
-                Copy('f_managervalidate'),
-                Copy('f_maximum'),
+                Copy('f_requires_approval'),
+                Copy('f_maximum_items'),
                 Copy('f_status'),
             ],
-            expand_col='f_state',
+            expand_col='f_region',
             expand_values=[1, 2, 3],
         ).run(
             MigrationEngine(
@@ -152,26 +152,26 @@ class ExpandMigrationTest(unittest.TestCase):
 
         self.assertEqual(
             conn.cursor_calls[0].executed_sql,
-            'SELECT COUNT(*) FROM (SELECT f_id, f_appointmenttype, f_days, f_managervalidate, f_maximum, f_status FROM public.rescheduling_appointmenttypes ) progress_src',
+            'SELECT COUNT(*) FROM (SELECT f_id, f_plan_type, f_days, f_requires_approval, f_maximum_items, f_status FROM public.acme_schedule_rules_demo ) progress_src',
         )
         self.assertEqual(
             conn.cursor_calls[1].executed_sql,
-            'SELECT f_id, f_appointmenttype, f_days, f_managervalidate, f_maximum, f_status FROM public.rescheduling_appointmenttypes ',
+            'SELECT f_id, f_plan_type, f_days, f_requires_approval, f_maximum_items, f_status FROM public.acme_schedule_rules_demo ',
         )
         self.assertEqual(
             writes,
             [
-                'INSERT INTO public.rescheduling_appointmenttypes (f_id, f_appointmenttype, f_days, f_managervalidate, f_maximum, f_status, f_state) VALUES (10, 2, 3, true, 4, 1, 1);\n',
-                'INSERT INTO public.rescheduling_appointmenttypes (f_appointmenttype, f_days, f_managervalidate, f_maximum, f_status, f_state) VALUES (2, 3, true, 4, 1, 2);\n',
-                'INSERT INTO public.rescheduling_appointmenttypes (f_appointmenttype, f_days, f_managervalidate, f_maximum, f_status, f_state) VALUES (2, 3, true, 4, 1, 3);\n',
+                'INSERT INTO public.acme_schedule_rules_demo (f_id, f_plan_type, f_days, f_requires_approval, f_maximum_items, f_status, f_region) VALUES (10, 2, 3, true, 4, 1, 1);\n',
+                'INSERT INTO public.acme_schedule_rules_demo (f_plan_type, f_days, f_requires_approval, f_maximum_items, f_status, f_region) VALUES (2, 3, true, 4, 1, 2);\n',
+                'INSERT INTO public.acme_schedule_rules_demo (f_plan_type, f_days, f_requires_approval, f_maximum_items, f_status, f_region) VALUES (2, 3, true, 4, 1, 3);\n',
             ],
         )
         self.assertEqual(
             progress,
             [
-                ('public.rescheduling_appointmenttypes', 0, 3, False),
-                ('public.rescheduling_appointmenttypes', 2, 3, False),
-                ('public.rescheduling_appointmenttypes', 3, 3, True),
+                ('public.acme_schedule_rules_demo', 0, 3, False),
+                ('public.acme_schedule_rules_demo', 2, 3, False),
+                ('public.acme_schedule_rules_demo', 3, 3, True),
             ],
         )
 
@@ -219,7 +219,7 @@ class MultiTargetMigrationTest(unittest.TestCase):
             {
                 'f_id': 9,
                 'f_description': "texto\x01",
-                'f_process_id': 0,
+                'f_order_id': 0,
                 'f_status': 2,
             }
         ])
@@ -227,26 +227,26 @@ class MultiTargetMigrationTest(unittest.TestCase):
         progress = []
 
         MultiTargetMigration(
-            source_sql='SELECT {fields} FROM public.publications {limit}',
-            label='public.publications',
+            source_sql='SELECT {fields} FROM public.acme_messages_demo {limit}',
+            label='public.acme_messages_demo',
             targets=[
                 TargetMigration(
-                    target='public.publications',
+                    target='public.acme_messages_demo',
                     fields=[Copy('f_id')],
                 ),
                 TargetMigration(
-                    target='public.publications_descriptions',
+                    target='public.acme_message_bodies_demo',
                     fields=[
                         Transform('f_description', lambda value, row: str(value).replace('\x01', '')),
-                        Transform('f_id', lambda value, row: value, v2_name='f_publication'),
+                        Transform('f_id', lambda value, row: value, v2_name='f_message'),
                     ],
                 ),
                 TargetMigration(
-                    target='public.publications_relationship',
+                    target='public.acme_message_links_demo',
                     fields=[
                         Copy('f_status'),
-                        Transform('f_process_id', lambda value, row: None if value == 0 else value, v2_name='f_process'),
-                        Transform('f_id', lambda value, row: value, v2_name='f_publication'),
+                        Transform('f_order_id', lambda value, row: None if value == 0 else value, v2_name='f_order'),
+                        Transform('f_id', lambda value, row: value, v2_name='f_message'),
                     ],
                 ),
             ],
@@ -261,26 +261,26 @@ class MultiTargetMigrationTest(unittest.TestCase):
 
         self.assertEqual(
             conn.cursor_calls[0].executed_sql,
-            'SELECT COUNT(*) FROM (SELECT f_id, f_description, f_status, f_process_id FROM public.publications ) progress_src',
+            'SELECT COUNT(*) FROM (SELECT f_id, f_description, f_status, f_order_id FROM public.acme_messages_demo ) progress_src',
         )
         self.assertEqual(
             conn.cursor_calls[1].executed_sql,
-            'SELECT f_id, f_description, f_status, f_process_id FROM public.publications ',
+            'SELECT f_id, f_description, f_status, f_order_id FROM public.acme_messages_demo ',
         )
         self.assertEqual(
             writes,
             [
-                'INSERT INTO public.publications (f_id) VALUES (9);\n',
-                "INSERT INTO public.publications_descriptions (f_description, f_publication) VALUES ('texto', 9);\n",
-                'INSERT INTO public.publications_relationship (f_status, f_process, f_publication) VALUES (2, NULL, 9);\n',
+                'INSERT INTO public.acme_messages_demo (f_id) VALUES (9);\n',
+                "INSERT INTO public.acme_message_bodies_demo (f_description, f_message) VALUES ('texto', 9);\n",
+                'INSERT INTO public.acme_message_links_demo (f_status, f_order, f_message) VALUES (2, NULL, 9);\n',
             ],
         )
         self.assertEqual(
             progress,
             [
-                ('public.publications', 0, 1, False),
-                ('public.publications', 1, 1, False),
-                ('public.publications', 1, 1, True),
+                ('public.acme_messages_demo', 0, 1, False),
+                ('public.acme_messages_demo', 1, 1, False),
+                ('public.acme_messages_demo', 1, 1, True),
             ],
         )
 

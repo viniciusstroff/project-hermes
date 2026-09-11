@@ -53,29 +53,38 @@ docker exec -it migracao python3 Migracao.py Acme --debug 100
 
 ## Arquivos gerados
 
-Após a execução, os arquivos ficam em `<Acme>/sql/`:
+Após a execução, os artefatos ficam em `runs/<cliente>/<YYYYmmdd-HHMMSS>/`:
 
-| Arquivo | Executar quando |
+| Arquivo | Função |
 |---|---|
-| `empty.sql` | Antes de tudo (inicialização) |
-| `webstagepgj_cmd.dmp.sql` | Segundo (pg_dump das tabelas compatíveis) |
-| `cmd_ini.sql` | Terceiro (disable triggers, DELETEs) |
-| `cmd.sql` | Quarto (INSERTs e UPDATEs principais) |
-| `cmd_fim.sql` | Por último (setval, enable triggers/indexes) |
+| `manifest.json` | Metadados da execução, caminhos, modo debug e bancos sem senha |
+| `logs/migration.log` | Log da geração feita pelo Python |
+| `sql/00_setup.sql` | Arquivo inicial da execução |
+| `sql/01_prepare_target.sql` | Preparação da V2, disable triggers/índices e limpeza |
+| `sql/02_dump_compatible_tables.sql` | `pg_dump` das tabelas compatíveis |
+| `sql/03_load_transformed_data.sql` | `INSERT`s e `UPDATE`s principais |
+| `sql/04_finalize_target.sql` | `setval`, enable triggers e enable indexes |
 
 ---
 
 ## Executando os SQLs no banco V2
 
-
-### Com Docker
+Informe o diretório da execução criada pela migração:
 
 ```bash
-date ; cat sql/empty.sql | psql -a -h tenant-database -d tenant -p 5432 -U tenant > logs/empty.sql.log 2>&1 ; date
-date ; cat sql/cmd_ini.sql | psql -a -h tenant-database -d tenant -p 5432 -U tenant > logs/cmd_ini.sql.log 2>&1 ; date
-date ; cat sql/webstagepgj_cmd.dmp.sql | psql -a -h tenant-database -d tenant -p 5432 -U tenant tenant > logs/webstagepgj_cmd.dmp.sql.log 2>&1 ; date
-date ; cat sql/cmd.sql | psql -a -h tenant-database -d tenant -p 5432 -U tenant > logs/cmd.sql.log 2>&1 ; date
-date ; cat sql/cmd_fim.sql | psql -a -h tenant-database -d tenant -p 5432 -U tenant > logs/cmd_fim.sql.log 2>&1 ; date
+RUN_DIR=runs/Acme/20260910-220000 ./rodar2.sh
+```
+
+O script lê os SQLs de `$RUN_DIR/sql/`, grava logs em `$RUN_DIR/logs/` e grava erros filtrados em `$RUN_DIR/erros/`.
+
+### Com Docker manual
+
+```bash
+date ; cat "$RUN_DIR/sql/00_setup.sql" | psql -a -h tenant-database -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/00_setup.sql.log" 2>&1 ; date
+date ; cat "$RUN_DIR/sql/01_prepare_target.sql" | psql -a -h tenant-database -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/01_prepare_target.sql.log" 2>&1 ; date
+date ; cat "$RUN_DIR/sql/02_dump_compatible_tables.sql" | psql -a -h tenant-database -d tenant -p 5432 -U tenant tenant > "$RUN_DIR/logs/02_dump_compatible_tables.sql.log" 2>&1 ; date
+date ; cat "$RUN_DIR/sql/03_load_transformed_data.sql" | psql -a -h tenant-database -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/03_load_transformed_data.sql.log" 2>&1 ; date
+date ; cat "$RUN_DIR/sql/04_finalize_target.sql" | psql -a -h tenant-database -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/04_finalize_target.sql.log" 2>&1 ; date
 ```
 
 ---
@@ -83,13 +92,13 @@ date ; cat sql/cmd_fim.sql | psql -a -h tenant-database -d tenant -p 5432 -U ten
 ## Verificando erros nos logs
 
 ```bash
-grep "ERROR:\|WARNING:" -B 5 -A 5 logs/cmd_fim.sql.log > erros/cmd_fim_erros.txt
-grep "ERROR:\|WARNING:" -B 15 -A 15 logs/cmd.sql.log > erros/cmd_erros.txt
-grep "ERROR:\|WARNING:" -B 5 -A 5 logs/webstagepgj_cmd.dmp.sql.log > erros/webstagepgj_cmd_erros.txt
-grep "ERROR:\|WARNING:" -B 5 -A 5 logs/cmd_ini.sql.log > erros/cmd_ini_erros.txt
+grep "ERROR:\|WARNING:" -B 5 -A 5 "$RUN_DIR/logs/04_finalize_target.sql.log" > "$RUN_DIR/erros/04_finalize_target_contexto.txt"
+grep "ERROR:\|WARNING:" -B 15 -A 15 "$RUN_DIR/logs/03_load_transformed_data.sql.log" > "$RUN_DIR/erros/03_load_transformed_data_contexto.txt"
+grep "ERROR:\|WARNING:" -B 5 -A 5 "$RUN_DIR/logs/02_dump_compatible_tables.sql.log" > "$RUN_DIR/erros/02_dump_compatible_tables_contexto.txt"
+grep "ERROR:\|WARNING:" -B 5 -A 5 "$RUN_DIR/logs/01_prepare_target.sql.log" > "$RUN_DIR/erros/01_prepare_target_contexto.txt"
 ```
 
-Os arquivos em `erros/` ficam vazios se não houver problemas.
+Os arquivos em `$RUN_DIR/erros/` ficam vazios se não houver problemas.
 
 ---
 
@@ -98,9 +107,9 @@ Os arquivos em `erros/` ficam vazios se não houver problemas.
 Útil para simular o ambiente de produção a partir de um dump de homologação:
 
 ```bash
-dropdb -h localhost -p 4003 -U judice-tenant judice-tenant
-createdb -h localhost -p 4003 -U judice-tenant judice-tenant
-pg_restore -h localhost -p 4003 -U judice-tenant -W -F t -d judice-tenant --no-owner --no-privileges ../acme_database.tar
+dropdb -h localhost -p 4003 -U tenant-demo tenant-demo
+createdb -h localhost -p 4003 -U tenant-demo tenant-demo
+pg_restore -h localhost -p 4003 -U tenant-demo -W -F t -d tenant-demo --no-owner --no-privileges ../acme_database.tar
 ```
 
 
@@ -118,8 +127,8 @@ Em seguida pressione `F5` no VS Code (configuração `launch.json` já existente
 
 ```bash
 # Enviando as queries geradas (compactadas)
-scp sql/Acme.zip seu_usuario@servidor:
+scp "$RUN_DIR"/Acme.zip seu_usuario@servidor:
 
 # Obtendo os logs de volta
-scp seu_usuario@dev.officeadv.com.br:/tmp/Acme_logs.zip .
+scp seu_usuario@servidor-demo:/tmp/Acme_logs.zip .
 ```
