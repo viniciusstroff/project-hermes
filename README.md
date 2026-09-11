@@ -1,68 +1,42 @@
 # Project Hermes
  Aplicação cli para gerar as queries de migração de dados do banco v1 para a v2
 
-## Passos
 
-* conectar no ssh o banco da v1, por padrão 3050 => firebird, 3396 => banco da V1
-  exemplo
-  ```bash
-  -L 172.17.0.1:3050:10.0.2.XXX:3050 -L 172.17.0.1:3396:10.0.2.XXX:5432
+**Hermes** é o projeto responsável pela execução e orquestração da migração de bancos de dados da plataforma, garantindo a integridade, rastreabilidade e consistência dos dados durante o processo de transição.
 
-  ```
+---
 
-* criar um diretorio com o nome do Acme a ser migrado, copiando como base a ultima migração realizada(de preferência)
+## 🎯 Objetivo
 
-* criar o .env para o Acme a ser migrado
+O objetivo principal do Hermes é prover um mecanismo confiável e reprodutível para transportar schemas e/ou massas de dados entre fontes, minimizando *downtime* e prevenindo perda de dados.
 
-## Observações
- * na raiz do projeto o arquivo queries_duplicidade_dados.sql, são queries comuns para serem executadas no banco da V1, quando há duplicidade de registros
+---
 
-```
-após finalizado, os arquivos com as queries a serem executadas serão geradas.
+## 🛠️ Tecnologias & Arquitetura
 
-* empty.sql
-* webstagepgj_cmd.dmp.sql
-* cmd_fim.sql
-* cmd_ini.sql
-* cmd.sql
+- **Interface:** CLI / Pipeline de Execução
+- **Linguagem/Stack:** *(Adicione aqui a linguagem, ex: Go, Node.js, Python, Rust)*
+- **Bancos Suportados:** *(Adicione aqui, ex: PostgreSQL, MySQL, MongoDB)*
 
-## Rodar queries de migração geradas:
-```bash
-# Caso não utilize o docker
-date ; cat sql/empty.sql | psql -a -h localhost -d judice-tenant -p 5432 -U judice-tenant judice-tenant > logs/empty.sql.log 2>&1 ; date
-date ; cat sql/cmd_ini.sql | psql -a -h localhost -d judice-tenant -p 4003 -U judice-tenant judice-tenant > logs/cmd_ini.sql.log 2>&1 ; date
-date ; cat sql/webstagepgj_cmd.dmp.sql | psql -a -h localhost -d judice-tenant -p 4003 -U judice-tenant judice-tenant > logs/webstagepgj_cmd.dmp.sql.log 2>&1 ; date
-date ; cat sql/cmd.sql | psql -a -h localhost -d judice-tenant -p 4003 -U judice-tenant judice-tenant > logs/cmd.sql.log 2>&1 ; date
-date ; cat sql/cmd_fim.sql | psql -a -h localhost -d judice-tenant -p 4003 -U judice-tenant judice-tenant > logs/cmd_fim.sql.log 2>&1 ; date
+---
 
-#Para o caso de utilizar o docker @Legal
-date ; cat sql/empty.sql | psql -a -h tenant-database -d tenant -p 5432 -U tenant > logs/empty.sql.log 2>&1 ; date
-date ; cat sql/cmd_ini.sql | psql -a -h tenant-database -d tenant -p 5432 -U tenant > logs/cmd_ini.sql.log 2>&1 ; date
-date ; cat sql/webstagepgj_cmd.dmp.sql | psql -a -h tenant-database -d tenant -p 5432 -U tenant tenant > logs/webstagepgj_cmd.dmp.sql.log 2>&1 ; date
-date ; cat sql/cmd.sql | psql -a -h tenant-database -d tenant -p 5432 -U tenant > logs/cmd.sql.log 2>&1 ; date
-date ; cat sql/cmd_fim.sql | psql -a -h tenant-database -d tenant -p 5432 -U tenant > logs/cmd_fim.sql.log 2>&1 ; date
-```
+## 🚀 Como Executar
 
-## Verificar erros e warnings dos logs
+### Pré-requisitos
+- Docker & Docker Compose *(opcional, se aplicável)*
+- Variáveis de ambiente configuradas no arquivo `.env`
 
-```bash
-grep "ERROR:\|WARNING:" -B 5 -A 5 logs/cmd_fim.sql.log > erros/cmd_fim_erros.txt
-grep "ERROR:\|WARNING:" -B 15 -A 15 logs/cmd.sql.log > erros/cmd_erros.txt;
-grep "ERROR:\|WARNING:" -B 5 -A 5 logs/webstagepgj_cmd.dmp.sql.log > erros/webstagepgj_cmd_erros.txt
-grep "ERROR:\|WARNING:" -B 5 -A 5 logs/cmd_ini.sql.log > erros/cmd_ini_erros.txt
-```
-
-## Enviando as queries e Obtendo os logs
-Compactar os arquivos gerados das queries para serem enviados
-```bash
-#enviando queries compactado
-scp sql/Acme.zip seu_usuario@servidor.com.br:
-
-```
+### Configuração de Ambiente
+Crie um arquivo `.env` baseado no modelo disponível:
 
 
 
 
+## 🏛️ Por que "Hermes"?
+
+Na mitologia grega, **Hermes** é o deus mensageiro, encarregado de transitar livremente entre diferentes reinos para conduzir e entregar mensagens e almas com absoluta precisão e velocidade.
+
+O projeto recebe este nome porque desempenha exatamente esse papel no ecossistema de dados: atua como o **guia confiável que transporta as informações do seu estado de origem ao seu novo destino**, garantindo velocidade na entrega, integridade no caminho e zero perda de dados durante a travessia.
 
 Para debugar:
 
