@@ -1,0 +1,17 @@
+networks:
+  manager_dev-net:
+    external: true
+
+services:
+  app:
+    build:
+      context: ./
+    container_name: project-hermes
+    volumes:
+      - ./:/home/project-hermes
+    networks:
+      - manager_dev-net
+    ports:
+      - "5678:5678"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

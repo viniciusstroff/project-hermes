@@ -1,0 +1,4 @@
+firebirdsql==1.2.2
+psycopg2-binary>=2.9.9
+python-dotenv>=1.2.1
+

@@ -1,0 +1,11 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "start-docker-debug",
+      "type": "shell",
+      "command": "docker exec migracao sh -c \"pkill -f debugpy 2>/dev/null || true; python3 -Xfrozen_modules=off -m debugpy --listen 0.0.0.0:5678 --wait-for-client /home/migracao/Acme/Migracao.py\"",
+      "problemMatcher": []
+    }
+  ]
+}

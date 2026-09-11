@@ -1,0 +1,11 @@
+acme_database.tar
+logs/*
+erros/*
+*/sql/*.sql
+*/logs/*
+*/erros
+**/__pycache__/**
+.cache
+.local/
+*.env
+*.zip
