@@ -18,6 +18,11 @@ O script usa três conexões independentes:
 - `PG_V2_*`: PostgreSQL da base destino V2.
 - `FB_V1_*`: Firebird legado, usado para complementar parte das informações migradas.
 
+O contrato novo de ambiente para o destino usa `TARGET_DB_*` e o hostname Docker
+`target-db`. As variáveis `PG_V2_*` ainda são necessárias porque o core atual
+abre conexões PostgreSQL diretamente; elas devem espelhar `TARGET_DB_*` até a
+introdução dos adapters.
+
 Resumo do papel de cada origem:
 
 - `PG_V1`: principal fonte dos `SELECT`s e do `pg_dump`.

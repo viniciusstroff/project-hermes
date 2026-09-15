@@ -43,12 +43,20 @@ python3 Migracao.py Acme --debug 500
 ### Via Docker
 
 ```bash
+# App + PostgreSQL local de destino
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
+
 # Migração completa dentro do container
-docker exec -it migracao python3 Migracao.py Acme
+docker exec -it project-hermes python3 Migracao.py Acme
 
 # Debug
-docker exec -it migracao python3 Migracao.py Acme --debug 100
+docker exec -it project-hermes python3 Migracao.py Acme --debug 100
 ```
+
+O contrato Docker do destino usa o hostname interno `target-db` na rede `hermes-net`.
+Para alterar a porta exposta no host sem mudar o contrato interno, ajuste `TARGET_DB_PUBLISHED_PORT`.
+Por exemplo, `TARGET_DB_PUBLISHED_PORT=5434` publica o PostgreSQL como `localhost:5434`,
+mas o container da aplicação continua acessando `target-db:5432`.
 
 
 ## Arquivos gerados
@@ -80,11 +88,11 @@ O script lê os SQLs de `$RUN_DIR/sql/`, grava logs em `$RUN_DIR/logs/` e grava 
 ### Com Docker manual
 
 ```bash
-date ; cat "$RUN_DIR/sql/00_setup.sql" | psql -a -h tenant-database -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/00_setup.sql.log" 2>&1 ; date
-date ; cat "$RUN_DIR/sql/01_prepare_target.sql" | psql -a -h tenant-database -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/01_prepare_target.sql.log" 2>&1 ; date
-date ; cat "$RUN_DIR/sql/02_dump_compatible_tables.sql" | psql -a -h tenant-database -d tenant -p 5432 -U tenant tenant > "$RUN_DIR/logs/02_dump_compatible_tables.sql.log" 2>&1 ; date
-date ; cat "$RUN_DIR/sql/03_load_transformed_data.sql" | psql -a -h tenant-database -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/03_load_transformed_data.sql.log" 2>&1 ; date
-date ; cat "$RUN_DIR/sql/04_finalize_target.sql" | psql -a -h tenant-database -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/04_finalize_target.sql.log" 2>&1 ; date
+date ; cat "$RUN_DIR/sql/00_setup.sql" | psql -a -h target-db -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/00_setup.sql.log" 2>&1 ; date
+date ; cat "$RUN_DIR/sql/01_prepare_target.sql" | psql -a -h target-db -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/01_prepare_target.sql.log" 2>&1 ; date
+date ; cat "$RUN_DIR/sql/02_dump_compatible_tables.sql" | psql -a -h target-db -d tenant -p 5432 -U tenant tenant > "$RUN_DIR/logs/02_dump_compatible_tables.sql.log" 2>&1 ; date
+date ; cat "$RUN_DIR/sql/03_load_transformed_data.sql" | psql -a -h target-db -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/03_load_transformed_data.sql.log" 2>&1 ; date
+date ; cat "$RUN_DIR/sql/04_finalize_target.sql" | psql -a -h target-db -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/04_finalize_target.sql.log" 2>&1 ; date
 ```
 
 ---
@@ -116,7 +124,7 @@ pg_restore -h localhost -p 4003 -U tenant-demo -W -F t -d tenant-demo --no-owner
 ## Debug com breakpoint (VS Code + Docker)
 
 ```bash
-docker exec -it migracao python3 -m debugpy --listen 0.0.0.0:5678 --wait-for-client Migracao.py Acme
+docker exec -it project-hermes python3 -m debugpy --listen 0.0.0.0:5678 --wait-for-client Migracao.py Acme
 ```
 
 Em seguida pressione `F5` no VS Code (configuração `launch.json` já existente no projeto).

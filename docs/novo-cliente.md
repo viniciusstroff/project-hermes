@@ -46,12 +46,21 @@ PG_V1_NAME=
 PG_V1_USER=
 PG_V1_PASS=
 
-# Base destino PostgreSQL V2
-PG_V2_HOST=
-PG_V2_PORT=
-PG_V2_NAME=
-PG_V2_USER=
-PG_V2_PASS=
+# Contrato generico do banco de destino
+TARGET_DB_ADAPTER=postgres
+TARGET_DB_HOST=target-db
+TARGET_DB_PORT=5432
+TARGET_DB_NAME=tenant
+TARGET_DB_USER=tenant
+TARGET_DB_PASS=tenant
+TARGET_DB_PUBLISHED_PORT=5432
+
+# Base destino PostgreSQL V2, mantida enquanto o core ainda usa PG_V2_*
+PG_V2_HOST=target-db
+PG_V2_PORT=5432
+PG_V2_NAME=tenant
+PG_V2_USER=tenant
+PG_V2_PASS=tenant
 
 # Firebird V1 (se não usar, manter preenchido com valores fictícios — a conexão é sempre tentada)
 FB_V1_HOST=
