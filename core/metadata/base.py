@@ -34,3 +34,7 @@ class MetadataProvider(Protocol):
     def reset_sequence_sql(self, table: str, column: str = 'f_id') -> str:
         """Return SQL that resets a target table sequence."""
         ...
+
+    def reset_sequences_sql(self, tables: list[str], column: str = 'f_id') -> str:
+        """Return SQL that resets several target table sequences."""
+        ...

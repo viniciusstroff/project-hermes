@@ -49,15 +49,7 @@ class Migracao(BaseMigration):
             'acme_orders_demo_idx',
         ]
 
-        for index in indexes:
-            self.disable_indexes += (
-                "UPDATE pg_index SET indisready=false WHERE indrelid = "
-                "(SELECT oid FROM pg_class WHERE relname='{index}');"
-            ).format(index=index) + '\n'
-            self.enable_indexes += (
-                "UPDATE pg_index SET indisready=true WHERE indrelid = "
-                "(SELECT oid FROM pg_class WHERE relname='{index}');"
-            ).format(index=index) + '\n'
+        self.set_index_commands_for(indexes)
 
         self.print_log('Indices ficticios habilitados/desabilitados:')
         self.print_log(', '.join(indexes))
@@ -84,7 +76,7 @@ class Migracao(BaseMigration):
                 EmailExtract('f_email'),
                 Fixed('f_status', 1),
             ],
-        ).run(self._engine)
+        ).run(self.context.engine('pg_v1'))
 
     def insert_acme_orders(self):
         self.print_log('Inserindo pedidos ficticios da Acme')
@@ -100,7 +92,7 @@ class Migracao(BaseMigration):
                 Fixed('f_create_user', 1),
                 Fixed('f_status', 1),
             ],
-        ).run(self._engine)
+        ).run(self.context.engine('pg_v1'))
 
     def reset_sequences(self):
         self.print_log('Gerando setval para sequences ficticias')
@@ -110,11 +102,6 @@ class Migracao(BaseMigration):
             'acme_orders_demo',
         ]
 
-        for table in tables:
-            self.write_sql(
-                "SELECT pg_catalog.setval('{table}_f_id_seq', "
-                "COALESCE((SELECT MAX(f_id) FROM public.{table}), 1));\n"
-                .format(table=table)
-            )
+        self.write_reset_sequences(tables)
 
         self.print_log(', '.join(tables))

@@ -2,30 +2,29 @@
 Estratégias de campo para migrações.
 
 Cada estratégia representa a transformação de UM campo: como selecioná-lo
-da V1 e qual valor inserir na V2.
+da V1 e qual valor bruto inserir na V2.
 
 Interface comum:
-  - select_columns  → list[str]  colunas a incluir no SELECT (Fixed retorna [])
-  - insert_col      → str        nome da coluna no INSERT
-  - value(row)      → str        valor SQL-escaped pronto para VALUES(...)
+  - select_columns   → list[str]  colunas a incluir no SELECT (Fixed retorna [])
+  - insert_col       → str        nome da coluna no INSERT
+  - raw_value(row)   → any        valor Python bruto preferido para APIs novas
+  - render(row, target_adapter) → SqlLiteral já serializado pelo destino
+  - value(row)       → str        compatibilidade: valor PostgreSQL pronto para VALUES(...)
 """
 from abc import ABC, abstractmethod
 import re
 import datetime
 
+from core.dialects import PostgresDialect
+from core.sql import SqlLiteral
+
+
+_POSTGRES_DIALECT = PostgresDialect()
+
 
 def sql_value(value) -> str:
-    """Escapa um valor Python para uso direto em SQL."""
-    if value is None:
-        return 'NULL'
-    if isinstance(value, bool):
-        return 'true' if value else 'false'
-    if isinstance(value, (int, float)):
-        return str(value)
-    escaped = str(value).replace("'", "''")
-    if '\\' in escaped:
-        return "E'" + escaped + "'"
-    return "'" + escaped + "'"
+    """Compatibility helper that renders a value with the default PostgreSQL dialect."""
+    return _POSTGRES_DIALECT.serialize_value(value)
 
 
 class FieldStrategy(ABC):
@@ -41,9 +40,14 @@ class FieldStrategy(ABC):
     def insert_col(self):
         raise NotImplementedError
 
-    @abstractmethod
+    def raw_value(self, row):
+        return row[self.insert_col]
+
+    def render(self, row, target_adapter):
+        return SqlLiteral(target_adapter.serialize_value(self.raw_value(row)))
+
     def value(self, row):
-        raise NotImplementedError
+        return sql_value(self.raw_value(row))
 
 
 class Copy(FieldStrategy):
@@ -60,8 +64,8 @@ class Copy(FieldStrategy):
     def insert_col(self):
         return self.name
 
-    def value(self, row):
-        return sql_value(row[self.name])
+    def raw_value(self, row):
+        return row[self.name]
 
 
 class Rename(FieldStrategy):
@@ -79,8 +83,8 @@ class Rename(FieldStrategy):
     def insert_col(self):
         return self.v2_name
 
-    def value(self, row):
-        return sql_value(row[self.v1_name])
+    def raw_value(self, row):
+        return row[self.v1_name]
 
 
 class Fixed(FieldStrategy):
@@ -99,8 +103,8 @@ class Fixed(FieldStrategy):
     def insert_col(self):
         return self.col
 
-    def value(self, row):
-        return sql_value(self._value)
+    def raw_value(self, row):
+        return self._value
 
 
 class SqlExpression(FieldStrategy):
@@ -118,8 +122,8 @@ class SqlExpression(FieldStrategy):
     def insert_col(self):
         return self.col
 
-    def value(self, row):
-        return sql_value(row[self.col])
+    def raw_value(self, row):
+        return row[self.col]
 
 
 class Lookup(FieldStrategy):
@@ -149,13 +153,12 @@ class Lookup(FieldStrategy):
     def insert_col(self):
         return self.v2_name
 
-    def value(self, row):
+    def raw_value(self, row):
         raw = row[self.name]
         if raw is None:
-            return sql_value(self.fallback)
+            return self.fallback
         key = self.key_normalizer(raw)
-        resolved = self.lookup_dict.get(key, self.fallback)
-        return sql_value(resolved)
+        return self.lookup_dict.get(key, self.fallback)
 
 
 class Transform(FieldStrategy):
@@ -174,8 +177,8 @@ class Transform(FieldStrategy):
     def insert_col(self):
         return self.v2_name
 
-    def value(self, row):
-        return sql_value(self.transform_fn(row[self.name], row))
+    def raw_value(self, row):
+        return self.transform_fn(row[self.name], row)
 
 
 class RegexClean(FieldStrategy):
@@ -195,12 +198,21 @@ class RegexClean(FieldStrategy):
     def insert_col(self):
         return self.name
 
-    def value(self, row):
+    def raw_value(self, row):
         raw = row[self.name]
         if raw is None:
-            return 'NULL'
+            return None
         cleaned = re.sub(self.pattern, self.replacement, str(raw))
-        escaped = cleaned.replace("'", "''").replace('\\', '')
+        return cleaned.replace('\\', '')
+
+    def render(self, row, target_adapter):
+        return SqlLiteral(self.value(row))
+
+    def value(self, row):
+        raw = self.raw_value(row)
+        if raw is None:
+            return 'NULL'
+        escaped = str(raw).replace("'", "''")
         return "E'" + escaped + "'"
 
 
@@ -247,15 +259,15 @@ class DateConvert(FieldStrategy):
     def insert_col(self):
         return self._v2_name or self.name
 
-    def value(self, row):
+    def raw_value(self, row):
         raw = row[self.name]
         if raw is None or str(raw).strip() == '':
-            return 'NULL'
+            return None
         try:
             parsed = datetime.datetime.strptime(str(raw).strip(), self.from_fmt)
-            return "'" + parsed.strftime(self.to_fmt) + "'"
+            return parsed.strftime(self.to_fmt)
         except ValueError:
-            return 'NULL'
+            return None
 
 
 class EmailExtract(FieldStrategy):
@@ -272,11 +284,11 @@ class EmailExtract(FieldStrategy):
     def insert_col(self):
         return self.name
 
-    def value(self, row):
+    def raw_value(self, row):
         raw = row[self.name]
         if raw is None or str(raw).strip() == '':
-            return 'NULL'
+            return None
         match = re.search(r'[\w.\-+]+@[\w.\-]+', str(raw))
         if match:
-            return "'" + match.group(0).replace("'", "''") + "'"
-        return 'NULL'
+            return match.group(0)
+        return None

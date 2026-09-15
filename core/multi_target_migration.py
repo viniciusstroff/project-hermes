@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+from core.sql import SqlLiteral
+
 
 @dataclass
 class TargetMigration:
@@ -26,9 +28,11 @@ class MultiTargetMigration:
                 raise TypeError(f'Invalid target migration {target!r}: target is required')
             for field in target.fields:
                 missing = [
-                    attr for attr in ('select_columns', 'insert_col', 'value')
+                    attr for attr in ('select_columns', 'insert_col')
                     if not hasattr(field, attr)
                 ]
+                if not hasattr(field, 'render') and not hasattr(field, 'value'):
+                    missing.append('render/value')
                 if missing:
                     raise TypeError(
                         f'Invalid field strategy {field!r}: missing {", ".join(missing)}'
@@ -60,20 +64,22 @@ class MultiTargetMigration:
             return None
         return int(total) if total is not None else 0
 
-    def insert_sql(self, row: dict, target: TargetMigration):
+    def insert_sql(self, row: dict, target: TargetMigration, engine):
         insert_cols = [field.insert_col for field in target.fields]
-        insert_vals = [field.value(row) for field in target.fields]
-        return 'INSERT INTO {table} ({cols}) VALUES ({vals});\n'.format(
-            table=target.target,
-            cols=', '.join(insert_cols),
-            vals=', '.join(insert_vals),
-        )
+        insert_vals = [self._field_value(field, row, engine) for field in target.fields]
+        return engine.insert_statement(target.target, insert_cols, insert_vals)
+
+    @staticmethod
+    def _field_value(field, row: dict, engine):
+        if hasattr(field, 'render'):
+            return field.render(row, engine.target_adapter)
+        return SqlLiteral(field.value(row))
 
     def run_row(self, row: dict, engine):
         for target in self.targets:
             if not target.should_write(row):
                 continue
-            engine.write_sql(self.insert_sql(row, target))
+            engine.write_sql(self.insert_sql(row, target, engine))
 
     def run(self, engine):
         sql = self.build_source_sql(engine)

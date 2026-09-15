@@ -1,6 +1,7 @@
 import unittest
 import sys
 import types
+from pathlib import Path
 
 psycopg2 = types.ModuleType('psycopg2')
 psycopg2_extras = types.ModuleType('psycopg2.extras')
@@ -9,6 +10,7 @@ psycopg2.extras = psycopg2_extras
 sys.modules.setdefault('psycopg2', psycopg2)
 sys.modules.setdefault('psycopg2.extras', psycopg2_extras)
 
+from core.adapters import PostgresSourceAdapter, PostgresTargetAdapter
 from core.migration_engine import MigrationEngine
 from core.expand_migration import ExpandMigration
 from core.table_migration import TableMigration
@@ -58,7 +60,22 @@ class FakeConnection:
         return cursor
 
 
+def make_engine(conn, writer, **kwargs):
+    return MigrationEngine(
+        PostgresSourceAdapter(conn, cursor_factory=object),
+        PostgresTargetAdapter(),
+        writer,
+        **kwargs,
+    )
+
+
 class TableMigrationProgressTest(unittest.TestCase):
+    def test_engine_has_no_direct_driver_or_firebird_branch(self):
+        engine_source = Path('core/migration_engine.py').read_text(encoding='utf-8')
+
+        self.assertNotIn('psycopg2', engine_source)
+        self.assertNotIn("source == 'firebird'", engine_source)
+
     def test_rejects_invalid_field_strategy(self):
         with self.assertRaises(TypeError):
             TableMigration(
@@ -73,7 +90,7 @@ class TableMigrationProgressTest(unittest.TestCase):
         writes = []
         progress = []
 
-        engine = MigrationEngine(
+        engine = make_engine(
             conn,
             writes.append,
             progress_fn=lambda table, count, total, done: progress.append((table, count, total, done)),
@@ -142,7 +159,7 @@ class ExpandMigrationTest(unittest.TestCase):
             expand_col='f_region',
             expand_values=[1, 2, 3],
         ).run(
-            MigrationEngine(
+            make_engine(
                 conn,
                 writes.append,
                 progress_fn=lambda table, count, total, done: progress.append((table, count, total, done)),
@@ -179,7 +196,7 @@ class ExpandMigrationTest(unittest.TestCase):
         conn = FakeConnection([])
         progress = []
 
-        engine = MigrationEngine(
+        engine = make_engine(
             conn,
             lambda sql: None,
             progress_fn=lambda table, count, total, done: progress.append((table, count, total, done)),
@@ -201,7 +218,7 @@ class ExpandMigrationTest(unittest.TestCase):
             source_sql='SELECT {fields} FROM public.source {limit}',
             target='public.target',
             fields=[FakeField('f_id'), FakeField('f_id')],
-        ).run(MigrationEngine(conn, lambda sql: None))
+        ).run(make_engine(conn, lambda sql: None))
 
         self.assertEqual(
             conn.cursor_calls[0].executed_sql,
@@ -251,7 +268,7 @@ class MultiTargetMigrationTest(unittest.TestCase):
                 ),
             ],
         ).run(
-            MigrationEngine(
+            make_engine(
                 conn,
                 writes.append,
                 progress_fn=lambda table, count, total, done: progress.append((table, count, total, done)),

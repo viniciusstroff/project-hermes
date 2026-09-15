@@ -9,6 +9,7 @@ psycopg2.extras = psycopg2_extras
 sys.modules.setdefault('psycopg2', psycopg2)
 sys.modules.setdefault('psycopg2.extras', psycopg2_extras)
 
+from core.adapters import FirebirdSourceAdapter, PostgresTargetAdapter
 from core.migration_engine import MigrationEngine
 from core.table_migration import TableMigration
 from core.strategies import Copy, CpfClean, PhoneClean, SqlExpression
@@ -50,7 +51,12 @@ class FirebirdEngineTest(unittest.TestCase):
         )
         writes = []
 
-        engine = MigrationEngine(conn, writes.append, limit='LIMIT 10', source='firebird')
+        engine = MigrationEngine(
+            FirebirdSourceAdapter(conn),
+            PostgresTargetAdapter(),
+            writes.append,
+            limit='LIMIT 10',
+        )
 
         TableMigration(
             source_sql='SELECT {fields} FROM acme_v1_users_demo {limit}',

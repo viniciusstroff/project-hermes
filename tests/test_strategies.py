@@ -1,5 +1,6 @@
 import unittest
 
+from core.adapters import PostgresTargetAdapter
 from core.strategies import DateConvert, EmailExtract, Fixed, Lookup, RegexClean, Rename, SqlExpression, sql_value
 
 
@@ -12,6 +13,14 @@ class SqlValueTest(unittest.TestCase):
         self.assertEqual(sql_value(1.5), '1.5')
         self.assertEqual(sql_value("O'Brien"), "'O''Brien'")
         self.assertEqual(sql_value(r'a\b'), r"E'a\b'")
+
+    def test_strategy_render_uses_target_adapter_without_breaking_value_compatibility(self):
+        strategy = Rename('legacy', 'modern')
+        target = PostgresTargetAdapter()
+
+        self.assertEqual(strategy.raw_value({'legacy': "O'Brien"}), "O'Brien")
+        self.assertEqual(strategy.value({'legacy': "O'Brien"}), "'O''Brien'")
+        self.assertEqual(str(strategy.render({'legacy': "O'Brien"}, target)), "'O''Brien'")
 
 
 class LookupTest(unittest.TestCase):

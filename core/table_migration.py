@@ -1,4 +1,5 @@
 from core.migration_engine import MigrationEngine
+from core.sql import SqlLiteral
 
 class TableMigration:
     """Declaração de uma migração de tabela — descreve O QUÊ, não O COMO."""
@@ -13,9 +14,11 @@ class TableMigration:
     def _validate_fields(fields: list):
         for field in fields:
             missing = [
-                attr for attr in ('select_columns', 'insert_col', 'value')
+                attr for attr in ('select_columns', 'insert_col')
                 if not hasattr(field, attr)
             ]
+            if not hasattr(field, 'render') and not hasattr(field, 'value'):
+                missing.append('render/value')
             if missing:
                 raise TypeError(
                     f'Invalid field strategy {field!r}: missing {", ".join(missing)}'
@@ -46,18 +49,20 @@ class TableMigration:
             return None
         return int(total) if total is not None else 0
 
-    def insert_sql(self, row: dict, fields: list = None):
+    def insert_sql(self, row: dict, engine: MigrationEngine, fields: list = None):
         active_fields = fields or self.fields
         insert_cols = [field.insert_col for field in active_fields]
-        insert_vals = [field.value(row) for field in active_fields]
-        return 'INSERT INTO {table} ({cols}) VALUES ({vals});\n'.format(
-            table=self.target,
-            cols=', '.join(insert_cols),
-            vals=', '.join(insert_vals),
-        )
+        insert_vals = [self._field_value(field, row, engine) for field in active_fields]
+        return engine.insert_statement(self.target, insert_cols, insert_vals)
+
+    @staticmethod
+    def _field_value(field, row: dict, engine: MigrationEngine):
+        if hasattr(field, 'render'):
+            return field.render(row, engine.target_adapter)
+        return SqlLiteral(field.value(row))
 
     def run_row(self, row: dict, engine: MigrationEngine, fields: list = None):
-        engine.write_sql(self.insert_sql(row, fields))
+        engine.write_sql(self.insert_sql(row, engine, fields))
 
     def run(self, engine: MigrationEngine):
         sql = self.build_source_sql(engine)
