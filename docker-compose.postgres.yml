@@ -1,0 +1,29 @@
+services:
+  target-db:
+    image: postgres:16-alpine
+    container_name: hermes-target-db
+    environment:
+      POSTGRES_DB: ${TARGET_DB_NAME:-tenant}
+      POSTGRES_USER: ${TARGET_DB_USER:-tenant}
+      POSTGRES_PASSWORD: ${TARGET_DB_PASS:-tenant}
+    ports:
+      - "${TARGET_DB_PUBLISHED_PORT:-5432}:5432"
+    volumes:
+      - hermes-target-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      hermes-net:
+        aliases:
+          - target-db
+          - tenant-database
+
+volumes:
+  hermes-target-db-data:
+
+networks:
+  hermes-net:
+    name: hermes-net

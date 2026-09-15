@@ -1,6 +1,6 @@
 networks:
-  manager_dev-net:
-    external: true
+  hermes-net:
+    name: hermes-net
 
 services:
   app:
@@ -10,7 +10,7 @@ services:
     volumes:
       - ./:/home/project-hermes
     networks:
-      - manager_dev-net
+      - hermes-net
     ports:
       - "5678:5678"
     extra_hosts:

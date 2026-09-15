@@ -40,4 +40,4 @@ O projeto recebe este nome porque desempenha exatamente esse papel no ecossistem
 
 Para debugar:
 
-docker exec -it migracao python3 -m debugpy --listen 0.0.0.0:5678 --wait-for-client Migracao.py
+docker exec -it project-hermes python3 -m debugpy --listen 0.0.0.0:5678 --wait-for-client Migracao.py
