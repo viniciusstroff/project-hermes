@@ -31,19 +31,49 @@ Resumo do papel de cada origem:
 
 ## Estrutura lógica do script
 
-A classe `Migracao` concentra toda a execução.
+O script de cada cliente declara a migração, mas o runtime compartilhado é
+montado por composição. A classe `BaseMigration` continua disponível para
+compatibilidade, porém delega as responsabilidades de infraestrutura para
+componentes menores.
 
-Principais responsabilidades:
+Componentes principais:
 
-- `__init__()`: carrega `.env`, cria o diretório centralizado da execução, abre conexões, inicializa arquivos e mapas.
-- `dump_tables()`: roda `pg_dump` da V1 com exclusão de tabelas problemáticas ou inexistentes.
-- `set_trigger_commands()`: monta `ALTER TABLE ... DISABLE/ENABLE TRIGGER ALL`.
-- `set_indexes_commands()`: monta comandos para desabilitar e reabilitar índices específicos.
-- `create_deletes*()`: prepara limpeza da V2 antes da carga.
-- `insert_*()`: gera `INSERT`s por domínio funcional.
-- `update_*()`: corrige campos após a carga.
-- `reset_sequences()`: reposiciona sequences no final.
-- `run()`: orquestra a ordem completa.
+- `MigrationContext`: agrupa configuração, artefatos, adapters de origem,
+  adapter de destino, provider de metadados, writer, logger e progresso.
+- `DefaultMigrationContextFactory`: cria o contexto padrão a partir das chaves
+  `.env` atuais (`PG_V1_*`, `PG_V2_*`, `FB_V1_*`).
+- `MigrationRunner`: orquestra as fases padrão da execução.
+- `SourceAdapter`: lê linhas e escalares da origem, incluindo diferenças como
+  `LIMIT` no PostgreSQL e `ROWS` no Firebird.
+- `TargetAdapter` e `Dialect`: renderizam `INSERT`s e valores SQL para o destino.
+- `MetadataProvider`: concentra operações auxiliares do destino, como triggers,
+  índices, mapas de referência e sequences.
+- `BaseMigration`: fachada transitória para scripts que ainda usam herança.
+
+Responsabilidades do cliente:
+
+- listar tabelas ignoradas ou ausentes no `pg_dump`;
+- declarar SQL bruto específico do cliente quando necessário;
+- declarar migrações de tabelas, transformações, inserts e updates;
+- indicar índices ou sequences por meio dos helpers do core quando a operação
+  for recorrente.
+
+SQL PostgreSQL puro continua permitido no cliente como escape hatch. A regra
+prática é: lógica excepcional do cliente pode ficar no Acme; operações
+recorrentes de infraestrutura devem passar por adapter, dialect ou provider.
+
+## API de composição e compatibilidade
+
+O caminho preferido para novas integrações é receber um `MigrationContext` por
+composição e usar `context.engine('pg_v1')`, `context.engine('fb_v1')`,
+`context.writer.write_sql(...)` e `context.metadata`. O `BaseMigration` usa esse
+mesmo contexto por baixo, então os scripts antigos podem continuar herdando da
+base durante a transição.
+
+Os atributos `pg_v1_conn`, `pg_v2_conn` e `fb_v1_conn` permanecem disponíveis
+na fachada por compatibilidade. Código novo deve preferir adapters, providers e
+helpers como `load_reference_map()`, `set_index_commands_for()` e
+`write_reset_sequences()`.
 
 ## Artefatos gerados
 

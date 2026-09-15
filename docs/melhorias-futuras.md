@@ -38,13 +38,13 @@ Também inclui um plano para desacoplar a forma de saída da migração. Hoje o 
 
 ## 1 — Tornar a migração agnóstica de adapter de origem/destino
 
-Hoje o projeto já tem uma boa separação entre Acme e core, mas ainda existe acoplamento forte com PostgreSQL e Firebird:
+O projeto já separa o runtime de migração por adapters e providers, mas essa
+camada ainda pode evoluir para novos bancos e novos tipos de saída:
 
-- `BaseMigration` abre conexões concretas de `psycopg2` e `firebirdsql`
-- `MigrationEngine` conhece detalhes de cursor de PostgreSQL e Firebird
-- o Acme ainda acessa `pg_v1_conn`, `pg_v2_conn` e `fb_v1_conn` diretamente em alguns pontos
-- a serialização SQL de saída assume PostgreSQL
-- manutenção de triggers, índices e sequences está toda acoplada a PostgreSQL
+- `DefaultMigrationContextFactory` ainda monta o contexto padrão com PostgreSQL e Firebird
+- `BaseMigration` ainda expõe `pg_v1_conn`, `pg_v2_conn` e `fb_v1_conn` como compatibilidade transitória
+- a saída padrão ainda é SQL PostgreSQL em arquivos
+- novos bancos ainda exigem adapters, dialects e providers concretos
 
 ### Contrato de infraestrutura local
 
@@ -134,11 +134,10 @@ class MetadataProvider(Protocol):
 
 ### O que precisa mudar
 
-- `BaseMigration` deixa de abrir conexões concretas diretamente
-- `MigrationEngine` passa a depender de `SourceAdapter`
-- `sql_value()` e geração de `INSERT` passam a depender de `TargetAdapter` ou `TargetDialect`
-- `set_trigger_commands()` e `reset_sequences()` deixam de falar com PostgreSQL diretamente
-- Acmes deixam de acessar `pg_v1_conn.cursor()` e similares; usam adapters ou helpers do core
+- adicionar adapters concretos para outros bancos quando houver demanda real
+- remover atributos legados `pg_v1_conn`, `pg_v2_conn` e `fb_v1_conn` depois que os Acmes privados migrarem
+- evoluir a saída para outros targets além de SQL PostgreSQL em arquivo
+- manter novos Acmes usando adapters, providers e helpers do core em vez de cursores diretos
 
 ### Benefício real
 

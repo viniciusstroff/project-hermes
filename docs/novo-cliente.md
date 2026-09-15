@@ -114,7 +114,9 @@ class Migracao(BaseMigration):
     def set_indexes_commands(self):
         # Desabilitar índices que tornam a carga muito lenta.
         # Deixe vazio se não houver índices problemáticos.
-        pass
+        self.set_index_commands_for([
+            # 'indice_problematico',
+        ])
 
     def reset_sequences(self):
         tables = [
@@ -122,11 +124,7 @@ class Migracao(BaseMigration):
             'acme_orders_demo',
             # adicione as demais tabelas com sequences
         ]
-        for table in tables:
-            self.write_sql(
-                f"SELECT pg_catalog.setval('{table}_f_id_seq', "
-                f"(SELECT MAX(f_id) FROM public.{table}), true);\n"
-            )
+        self.write_reset_sequences(tables)
 
     # ------------------------------------------------------------------
     # Fase inicial (01_prepare_target.sql)
