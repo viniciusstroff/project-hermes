@@ -25,6 +25,19 @@ class OutputAdapter(Protocol):
         """Push any buffered commands to the destination."""
         ...
 
+    def finish(self, success: bool) -> None:
+        """Receive the run result once, after the last command of the run.
+
+        ``True`` confirms the delivered commands; ``False`` means the run
+        failed. An output closed without ``finish(True)`` must treat the run
+        as unconfirmed (a database output rolls back, for instance).
+        """
+        ...
+
+    def describe(self) -> dict:
+        """Return a JSON-serializable description recorded in the manifest."""
+        ...
+
     def close(self) -> None:
         """Flush pending commands and release resources owned by the output."""
         ...

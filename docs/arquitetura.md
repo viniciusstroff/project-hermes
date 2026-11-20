@@ -50,6 +50,7 @@ Componentes principais:
   índices, mapas de referência e sequences.
 - `OutputAdapter`: recebe o SQL gerado, fase por fase. A implementação padrão é
   `SqlFileOutput`, que grava os arquivos em `runs/<cliente>/<timestamp>/sql/`.
+  O `MirrorOutput` entrega os mesmos comandos para mais de um output.
 - `BaseMigration`: fachada transitória para scripts que ainda usam herança.
 
 Responsabilidades do cliente:
@@ -99,27 +100,63 @@ class OutputAdapter(Protocol):
     def write(self, sql: str) -> None: ...
     def comment(self, text: str) -> None: ...
     def flush(self) -> None: ...
+    def finish(self, success: bool) -> None: ...
+    def describe(self) -> dict: ...
     def close(self) -> None: ...
 ```
 
 As fases são chaves lógicas: `setup`, `prepare_target`, `load_transformed_data`
 e `finalize_target`. A `DefaultMigrationContextFactory` abre `setup` ao montar o
 contexto. O `MigrationRunner` abre as outras três na ordem padrão, escreve os
-comandos finais de índices e triggers e chama `flush()`. O `close()` acontece em
-`MigrationContext.close()`. Os engines criados por `context.engine()` escrevem
-pelo mesmo `output.write`.
+comandos finais de índices e triggers e chama `flush()`. Os engines criados por
+`context.engine()` escrevem pelo mesmo `output.write`.
+
+O output fica sabendo do resultado pelo `finish(success)`, que o runner chama
+uma vez por execução. Na execução que termina bem, `finish(True)` vem depois do
+último `flush()` e antes de o manifesto receber `success`. Se o próprio
+`finish(True)` falhar, a execução fica `failed` e o runner não chama
+`finish(False)` em seguida. Quando um hook levanta exceção, o runner chama
+`finish(False)` e grava `failed`. Um erro dentro desse `finish(False)` vai para
+o log sem trocar o erro registrado no manifesto.
+
+O `close()` só libera recursos e acontece em `MigrationContext.close()`, que no
+caminho por herança roda a partir do `__del__` do `BaseMigration`. Por isso o
+resultado não passa pelo `close()`. Um output fechado sem `finish(True)` deve
+tratar a execução como não confirmada, o que para um output de banco significa
+`ROLLBACK`.
+
+O `describe()` devolve um dicionário que o manifesto grava na chave `output`.
+Com o contexto padrão o valor é `{"type": "sql-file"}`.
 
 A implementação padrão é `SqlFileOutput`, em `core/outputs/sql_file.py`. Ela
 resolve cada fase pelo `ArtifactManager.sql_path()`, então os nomes de arquivo
 continuam definidos em um só lugar. O SQL fica em um buffer de até 500 trechos
 antes de ir para o arquivo. Trocar de fase, chamar `flush()` ou `close()` grava
 o que estiver pendente. O `comment()` gera o mesmo bloco `-----` que já aparecia
-nos arquivos.
+nos arquivos. O `finish()` grava o buffer nos dois resultados: quando a execução
+falha, os arquivos parciais ficam no disco, como antes.
 
-O output padrão não executa nada no banco de destino. O próximo output previsto
-é o `MirrorOutput`, que encaminha os comandos para mais de um destino. A
-execução direta no banco vem depois, com modo de dry run. Os dois estão
-descritos no item 2 de [melhorias-futuras.md](melhorias-futuras.md).
+O `MirrorOutput`, em `core/outputs/mirror.py`, recebe uma lista de outputs e
+repassa cada chamada para todos, na ordem em que foram passados:
+
+```python
+output = MirrorOutput(SqlFileOutput(artifacts), outro_output)
+```
+
+`open_phase()`, `write()`, `comment()` e `flush()` param no primeiro erro, que
+derruba a execução. `finish()` e `close()` chegam a todos os outputs mesmo que
+um falhe, e o primeiro erro é relançado no fim. O `describe()` devolve
+`{"type": "mirror", "outputs": [...]}` com a descrição de cada output. Com
+`MirrorOutput`, a propriedade `BaseMigration.file` devolve `None`.
+
+A `DefaultMigrationContextFactory` ainda monta só o `SqlFileOutput`. Para usar
+o `MirrorOutput` hoje é preciso montar o `MigrationContext` à mão ou trocar
+`context.output` antes de rodar. A escolha pelo CLI fica para quando houver
+outro output concreto.
+
+Nenhum output do core executa SQL no banco de destino. O próximo output previsto
+é o `DirectDatabaseOutput`, com modo de dry run, descrito no item 2 de
+[melhorias-futuras.md](melhorias-futuras.md).
 
 ## Artefatos gerados
 

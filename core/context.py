@@ -44,6 +44,7 @@ class MigrationContext:
             config=self.config,
             debug_limit=self.debug_limit,
             error=error,
+            output=self.output.describe(),
         )
 
     def engine(self, source_name: str = 'pg_v1') -> MigrationEngine:
@@ -102,7 +103,7 @@ class DefaultMigrationContextFactory:
         logger.progress = progress
         output.open_phase('setup')
 
-        artifacts.write_manifest(status='running', config=config, debug_limit=None)
+        artifacts.write_manifest(status='running', config=config, debug_limit=None, output=output.describe())
 
         pg_v1_conn = None
         pg_v2_conn = None
@@ -132,7 +133,13 @@ class DefaultMigrationContextFactory:
                 charset=config['FB_V1_CHARSET'])
         except Exception as exc:
             logger.print_log('[ERRO] ' + str(exc))
-            artifacts.write_manifest(status='failed', config=config, debug_limit=None, error=str(exc))
+            artifacts.write_manifest(
+                status='failed',
+                config=config,
+                debug_limit=None,
+                error=str(exc),
+                output=output.describe(),
+            )
             for connection in (pg_v1_conn, pg_v2_conn, fb_v1_conn):
                 if connection is not None and hasattr(connection, 'close'):
                     connection.close()

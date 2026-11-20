@@ -216,7 +216,6 @@ class BaseMigration:
             self._write_manifest('failed', 'Comando de dump falhou')
             raise Exception('Comando de dump falhou')
 
-        self.file.seek(0, 2)
         self.print_log('Tabelas ignoradas: ' + ', '.join(exclude_tables))
         self.print_log('Dump finalizado')
 

@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import tempfile
@@ -40,7 +41,7 @@ sys.modules.setdefault('dotenv', dotenv)
 import core
 from core.artifacts import ArtifactManager
 from core.context import DefaultMigrationContextFactory, MigrationContext
-from core.outputs import OutputAdapter, SqlFileOutput
+from core.outputs import MirrorOutput, OutputAdapter, SqlFileOutput
 from core.runner import MigrationRunner
 from core.runtime import MigrationLogger, MigrationProgress
 
@@ -53,25 +54,57 @@ def read_file(path):
 class RecordingOutput:
     """In-memory OutputAdapter that records every call in order."""
 
-    def __init__(self):
+    def __init__(self, name='recording', log=None, fail_on=()):
+        self.name = name
         self.events = []
+        self.log = log
+        self.fail_on = set(fail_on)
         self.closed = False
 
+    def _record(self, *event):
+        self.events.append(event)
+        if self.log is not None:
+            self.log.append((self.name, *event))
+        if event[0] in self.fail_on:
+            raise RuntimeError(f'{self.name} falhou em {event[0]}')
+
     def open_phase(self, phase):
-        self.events.append(('open_phase', phase))
+        self._record('open_phase', phase)
 
     def write(self, sql):
-        self.events.append(('write', sql))
+        self._record('write', sql)
 
     def comment(self, text):
-        self.events.append(('comment', text))
+        self._record('comment', text)
 
     def flush(self):
-        self.events.append(('flush',))
+        self._record('flush')
+
+    def finish(self, success):
+        self._record('finish', success)
+
+    def describe(self):
+        return {'type': self.name}
 
     def close(self):
-        self.events.append(('close',))
         self.closed = True
+        self._record('close')
+
+
+class FailingMigration:
+    """Composed migration whose load phase raises after writing SQL."""
+
+    enable_indexes = ''
+
+    def __init__(self, context):
+        self.context = context
+
+    def run_initial(self):
+        self.context.output.write('-- prepare\n')
+
+    def run_inserts(self):
+        self.context.output.write('INSERT INTO public.demo VALUES (1);\n')
+        raise RuntimeError('falha no insert')
 
 
 class FakeCursor:
@@ -224,13 +257,39 @@ class SqlFileOutputTest(unittest.TestCase):
 
     def test_core_package_exports_output_types(self):
         self.assertIs(core.SqlFileOutput, SqlFileOutput)
+        self.assertIs(core.MirrorOutput, MirrorOutput)
         self.assertIs(core.OutputAdapter, OutputAdapter)
         self.assertFalse(hasattr(core, 'SqlArtifactWriter'))
 
     def test_sql_file_output_implements_output_adapter_contract(self):
-        for method in ('open_phase', 'write', 'comment', 'flush', 'close'):
+        for method in ('open_phase', 'write', 'comment', 'flush', 'finish', 'describe', 'close'):
             self.assertTrue(hasattr(OutputAdapter, method), method)
             self.assertTrue(callable(getattr(SqlFileOutput, method, None)), method)
+            self.assertTrue(callable(getattr(MirrorOutput, method, None)), method)
+
+    def test_finish_flushes_pending_sql_for_both_results(self):
+        for success in (True, False):
+            output = SqlFileOutput(self.artifacts)
+            output.open_phase('load_transformed_data')
+            file_writes = []
+            real_write = output.file.write
+
+            def recording_write(text, real_write=real_write, file_writes=file_writes):
+                file_writes.append(text)
+                return real_write(text)
+
+            output.file.write = recording_write
+            output.write(f'-- {success}\n')
+            self.assertEqual(file_writes, [])
+
+            output.finish(success)
+
+            self.assertEqual(file_writes, [f'-- {success}\n'])
+            output.close()
+            self.assertEqual(read_file(self.artifacts.sql_path('load_transformed_data')), f'-- {success}\n')
+
+    def test_describe_identifies_sql_file_output(self):
+        self.assertEqual(SqlFileOutput(self.artifacts).describe(), {'type': 'sql-file'})
 
 
 class OutputAdapterIntegrationTest(unittest.TestCase):
@@ -325,6 +384,7 @@ class OutputAdapterIntegrationTest(unittest.TestCase):
                 ('comment', 'HABILITAR TRIGGERS DE TABELAS'),
                 ('write', 'ALTER TABLE public.demo ENABLE TRIGGER ALL;\n'),
                 ('flush',),
+                ('finish', True),
                 ('close',),
             ],
         )
@@ -379,6 +439,172 @@ class OutputAdapterIntegrationTest(unittest.TestCase):
         self.assertNotIn('DELETE FROM public.demo;\n', executed)
         self.assertNotIn('INSERT INTO public.demo VALUES (1);\n', executed)
         self.assertTrue(all(sql.startswith('SELECT') for sql in executed))
+
+        with open(context.artifacts.manifest_path, encoding='utf-8') as manifest_file:
+            self.assertEqual(json.load(manifest_file)['output'], {'type': 'sql-file'})
+
+    def _run(self, context, migration):
+        with redirect_stdout(StringIO()):
+            MigrationRunner(context, migration).run()
+        context.close()
+        with open(context.artifacts.manifest_path, encoding='utf-8') as manifest_file:
+            return json.load(manifest_file)
+
+    def test_failed_run_finishes_output_once_with_failure(self):
+        output = RecordingOutput()
+        context = self._context(output)
+
+        manifest = self._run(context, FailingMigration(context))
+
+        self.assertEqual([event for event in output.events if event[0] == 'finish'], [('finish', False)])
+        self.assertEqual(output.events[-2:], [('finish', False), ('close',)])
+        self.assertEqual(manifest['status'], 'failed')
+        self.assertEqual(manifest['error'], 'falha no insert')
+
+    def test_failing_finish_true_marks_run_failed_without_finish_false(self):
+        output = RecordingOutput(fail_on={'finish'})
+        context = self._context(output)
+
+        class EmptyMigration:
+            enable_indexes = ''
+
+        manifest = self._run(context, EmptyMigration())
+
+        self.assertEqual([event for event in output.events if event[0] == 'finish'], [('finish', True)])
+        self.assertEqual(manifest['status'], 'failed')
+        self.assertEqual(manifest['error'], 'recording falhou em finish')
+
+    def test_failing_finish_false_is_logged_and_keeps_original_error(self):
+        output = RecordingOutput(fail_on={'finish'})
+        context = self._context(output)
+
+        manifest = self._run(context, FailingMigration(context))
+
+        self.assertEqual(manifest['status'], 'failed')
+        self.assertEqual(manifest['error'], 'falha no insert')
+        self.assertIn(
+            '[ERRO] Falha ao finalizar o output: recording falhou em finish',
+            read_file(context.artifacts.log_path('migration.log')),
+        )
+
+    def test_failed_run_keeps_partial_sql_artifacts(self):
+        artifacts = ArtifactManager(self.clientdir)
+        context = self._context(SqlFileOutput(artifacts))
+        context.artifacts = artifacts
+
+        manifest = self._run(context, FailingMigration(context))
+
+        self.assertEqual(manifest['status'], 'failed')
+        self.assertEqual(read_file(artifacts.sql_path('prepare_target')), '-- prepare\n')
+        self.assertEqual(
+            read_file(artifacts.sql_path('load_transformed_data')),
+            'INSERT INTO public.demo VALUES (1);\n',
+        )
+
+    def test_manifest_records_output_description(self):
+        output = MirrorOutput(RecordingOutput('a'), RecordingOutput('b'))
+        context = self._context(output)
+
+        class EmptyMigration:
+            enable_indexes = ''
+
+        manifest = self._run(context, EmptyMigration())
+
+        self.assertEqual(manifest['status'], 'success')
+        self.assertEqual(manifest['output'], {'type': 'mirror', 'outputs': [{'type': 'a'}, {'type': 'b'}]})
+
+    def test_mirror_of_sql_file_outputs_writes_identical_artifacts(self):
+        first = ArtifactManager(self.clientdir, timestamp='20260915-120000')
+        second = ArtifactManager(self.clientdir, timestamp='20260915-120001')
+        context = self._context(MirrorOutput(SqlFileOutput(first), SqlFileOutput(second)))
+
+        class ComposedMigration:
+            enable_indexes = 'REINDEX demo;\n'
+
+            def __init__(self, context):
+                self.context = context
+
+            def run_initial(self):
+                self.context.output.comment('PREPARACAO')
+                self.context.output.write('DELETE FROM public.demo;\n')
+
+            def run_inserts(self):
+                for index in range(3):
+                    self.context.output.write(f'INSERT INTO public.demo VALUES ({index});\n')
+
+        manifest = self._run(context, ComposedMigration(context))
+
+        self.assertEqual(manifest['status'], 'success')
+        for phase in ('prepare_target', 'load_transformed_data', 'finalize_target'):
+            self.assertEqual(read_file(first.sql_path(phase)), read_file(second.sql_path(phase)), phase)
+        self.assertIn('DELETE FROM public.demo;\n', read_file(first.sql_path('prepare_target')))
+
+
+class MirrorOutputTest(unittest.TestCase):
+    def test_requires_at_least_one_output(self):
+        with self.assertRaises(ValueError):
+            MirrorOutput()
+
+    def test_forwards_every_call_to_each_output_in_order(self):
+        log = []
+        first = RecordingOutput('first', log)
+        second = RecordingOutput('second', log)
+        output = MirrorOutput(first, second)
+
+        output.open_phase('prepare_target')
+        output.write('DELETE FROM demo;\n')
+        output.comment('SECAO')
+        output.flush()
+        output.finish(True)
+        output.close()
+
+        calls = [
+            ('open_phase', 'prepare_target'),
+            ('write', 'DELETE FROM demo;\n'),
+            ('comment', 'SECAO'),
+            ('flush',),
+            ('finish', True),
+            ('close',),
+        ]
+        self.assertEqual(first.events, calls)
+        self.assertEqual(second.events, calls)
+        self.assertEqual(
+            log,
+            [entry for call in calls for entry in (('first', *call), ('second', *call))],
+        )
+
+    def test_write_stops_at_first_error(self):
+        first = RecordingOutput('first', fail_on={'write'})
+        second = RecordingOutput('second')
+        output = MirrorOutput(first, second)
+
+        with self.assertRaisesRegex(RuntimeError, 'first falhou em write'):
+            output.write('INSERT INTO demo VALUES (1);\n')
+
+        self.assertEqual(second.events, [])
+
+    def test_finish_and_close_reach_every_output_and_raise_first_error(self):
+        for method, args in (('finish', (False,)), ('close', ())):
+            first = RecordingOutput('first', fail_on={method})
+            second = RecordingOutput('second', fail_on={method})
+            third = RecordingOutput('third')
+            output = MirrorOutput(first, second, third)
+
+            with self.assertRaisesRegex(RuntimeError, f'first falhou em {method}'):
+                getattr(output, method)(*args)
+
+            for child in (first, second, third):
+                self.assertEqual(child.events, [(method, *args)], (method, child.name))
+
+    def test_describe_lists_wrapped_outputs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            artifacts = ArtifactManager(os.path.join(tmpdir, 'Acme'))
+            output = MirrorOutput(SqlFileOutput(artifacts), SqlFileOutput(artifacts))
+
+            self.assertEqual(
+                output.describe(),
+                {'type': 'mirror', 'outputs': [{'type': 'sql-file'}, {'type': 'sql-file'}]},
+            )
 
 
 if __name__ == '__main__':

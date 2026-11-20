@@ -3,7 +3,7 @@ from importlib import import_module
 from core.adapters import SourceAdapter, SourceCursor, TargetAdapter
 from core.dialects import Dialect, FirebirdDialect, PostgresDialect
 from core.metadata import MetadataProvider, PostgresMetadataProvider
-from core.outputs import OutputAdapter, SqlFileOutput
+from core.outputs import MirrorOutput, OutputAdapter, SqlFileOutput
 
 _LAZY_EXPORTS = {
     'ArtifactManager': ('core.artifacts', 'ArtifactManager'),
@@ -40,6 +40,7 @@ __all__ = [
     'MigrationLogger',
     'MigrationProgress',
     'MigrationRunner',
+    'MirrorOutput',
     'MultiTargetMigration',
     'OutputAdapter',
     'PostgresDialect',

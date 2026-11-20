@@ -156,7 +156,9 @@ A migração escreve SQL em arquivos. Isso funciona bem para auditoria e reexecu
 
 O output adapter v1 foi implementado pela change `introduzir-output-adapter-sql-file`. Ela criou o contrato `OutputAdapter` em `core/outputs/` e transformou o antigo `SqlArtifactWriter` no adapter padrão `SqlFileOutput`. `MigrationContext`, `MigrationRunner` e `BaseMigration` passaram a escrever por `context.output` sem mudar os arquivos gerados nem o manifesto. Como o projeto não está em produção, `context.writer` e `SqlArtifactWriter` foram removidos em vez de virarem alias. Os detalhes estão em [arquitetura.md](arquitetura.md#saída-da-migração).
 
-O próximo output é o `MirrorOutput`. A execução direta no banco vem depois e deve ter um modo de dry run, avaliado mais abaixo. Ainda não existe forma de escolher o output pelo CLI ou pelo `.env`.
+A change `introduzir-mirror-output` fez a Fase 2. O contrato ganhou `finish(success)`, chamado pelo `MigrationRunner` uma vez por execução, e `describe()`, cuja saída o manifesto grava na chave `output`. O `MirrorOutput` entrega os mesmos comandos para mais de um output.
+
+O próximo output é o `DirectDatabaseOutput`, com um modo de dry run avaliado mais abaixo. Ainda não existe forma de escolher o output pelo CLI ou pelo `.env`.
 
 ### Objetivo
 
@@ -173,7 +175,7 @@ Separar “gerar comandos” de “como entregar/executar esses comandos”.
 
 ### Direção de design
 
-A abstração de saída implementada na v1 é:
+A abstração de saída atual é:
 
 ```python
 class OutputAdapter(Protocol):
@@ -181,6 +183,8 @@ class OutputAdapter(Protocol):
     def write(self, sql: str): ...
     def comment(self, text: str): ...
     def flush(self): ...
+    def finish(self, success: bool): ...
+    def describe(self) -> dict: ...
     def close(self): ...
 ```
 
@@ -193,13 +197,15 @@ Comportamento atual, em `core/outputs/sql_file.py`:
 - acumula até 500 trechos em buffer
 - grava o buffer ao trocar de fase, em `flush()` e em `close()`
 
-#### `MirrorOutput` (próximo output)
+#### `MirrorOutput` (implementado)
 
-Encaminha para mais de um destino:
-- arquivo + banco
-- arquivo + stdout
+Comportamento atual, em `core/outputs/mirror.py`:
+- repassa cada chamada para todos os outputs, na ordem recebida
+- `open_phase`, `write`, `comment` e `flush` param no primeiro erro
+- `finish` e `close` chegam a todos os outputs mesmo que um falhe e relançam o primeiro erro
+- combinações previstas: arquivo + banco, arquivo + stdout
 
-#### `DirectDatabaseOutput`
+#### `DirectDatabaseOutput` (próximo output)
 
 Executa direto no destino:
 - recebe SQL ou operação estruturada
@@ -245,14 +251,14 @@ O mesmo `DirectDatabaseOutput`, em modo normal, apontado para um clone do destin
 
 Vale ter dry run, implementado como modo do próprio output, por exemplo `DirectDatabaseOutput(conexao, mode='apply' | 'rollback')`. Na change do `DirectDatabaseOutput`, a entrega seria o modo `rollback` com savepoint por lote, `setval` pulado e relatório de erros por fase e comando em `erros/`, restrito a destino sem uso concorrente. A cópia descartável deve ser documentada como validação preferida antes de cargas completas, porque não exige código novo. A validação por `EXPLAIN` fica para depois, caso o modo `rollback` se mostre caro demais para uso frequente.
 
-Com o `MirrorOutput` chegando antes, a combinação natural é `MirrorOutput(SqlFileOutput, DirectDatabaseOutput(mode='rollback'))`: uma única execução grava os arquivos para auditoria e valida contra o banco.
+Com o `MirrorOutput` já implementado, a combinação natural é `MirrorOutput(SqlFileOutput, DirectDatabaseOutput(mode='rollback'))`: uma única execução grava os arquivos para auditoria e valida contra o banco.
 
 Passar no dry run não garante a execução real. A transação única do dry run difere dos commits por lote do modo normal. O destino também pode mudar entre as duas execuções.
 
-Dois pontos do contrato precisam mudar antes. Eles valem também para o `MirrorOutput`:
+Os dois pontos de contrato que o dry run exigia já foram resolvidos na Fase 2:
 
-- `close()` não sabe se a execução deu certo. O `MigrationRunner` captura a exceção e grava `failed` no manifesto, mas o output nunca recebe esse resultado. Um output que executa no banco precisa dele para escolher entre `COMMIT` e `ROLLBACK`. O contrato deve ganhar algo como `close(success: bool)` ou um `finish(status)` chamado pelo runner.
-- O manifesto precisa registrar o output usado e se a execução foi dry run, para que uma execução validada não seja confundida com uma aplicada.
+- O output recebe o resultado por `finish(success)`, chamado pelo runner uma vez por execução. O `DirectDatabaseOutput` faz `COMMIT` no `finish(True)` e `ROLLBACK` no `finish(False)` ou num `close()` sem `finish(True)`. No modo `rollback`, o `finish(True)` também termina em `ROLLBACK`.
+- O manifesto grava `describe()` na chave `output`. O `DirectDatabaseOutput` deve incluir o modo na descrição, por exemplo `{"type": "direct-db", "mode": "rollback"}`, para que uma execução validada não seja confundida com uma aplicada.
 
 Se o item 11 (`ExecutionAdapter`) avançar, esse modo vira a implementação de `dry_run()` para a estratégia `direct-db`.
 
@@ -263,11 +269,16 @@ Se o item 11 (`ExecutionAdapter`) avançar, esse modo vira a implementação de 
 - o `MigrationRunner` continua definindo as fases, mas delega a abertura de cada uma ao output
 - `context.writer` e `SqlArtifactWriter` foram removidos; `BaseMigration.write_sql()`, `print_comment()` e `_open_sql_file()` continuam como API da fachada por herança
 
+### O que mudou na Fase 2
+
+- o contrato ganhou `finish(success)`, chamado pelo `MigrationRunner` uma vez por execução
+- o contrato ganhou `describe()`, e o manifesto grava a descrição do output na chave `output`
+- `MirrorOutput` entrega os mesmos comandos para mais de um output
+- `BaseMigration.dump_tables()` deixou de depender de `self.file`
+
 ### O que ainda precisa mudar
 
-- implementar `MirrorOutput` (próximo passo)
-- incluir no contrato o resultado da execução, para o output decidir entre commit e rollback
-- implementar `DirectDatabaseOutput` com modo de dry run
+- implementar `DirectDatabaseOutput` com modo de dry run (próximo passo)
 - permitir que a factory ou o CLI escolham o output
 
 ### Possível configuração futura
@@ -302,12 +313,13 @@ Fase 1 (output adapter v1, implementada):
 - manter SQL em arquivo como padrão
 - introduzir `OutputAdapter` sem mudar o comportamento externo
 
-Fase 2 (próximo passo):
+Fase 2 (implementada):
 - adicionar `MirrorOutput`
 - incluir no contrato o resultado da execução
 
-Fase 3:
+Fase 3 (próximo passo):
 - adicionar `DirectDatabaseOutput` para ambientes controlados, com modo de dry run
+- permitir escolher o output pela factory ou pelo CLI
 
 ---
 
@@ -775,12 +787,12 @@ Banco origem
 
 Para evoluir com segurança, a ordem sugerida é:
 
-1. Introduzir contratos de `SourceAdapter`, `TargetAdapter` e `OutputAdapter`
-2. Adaptar `BaseMigration` para depender desses contratos sem mudar o comportamento externo
-3. Manter `SqlFileOutput` como padrão e extrair o buffer atual para ele
+1. Introduzir contratos de `SourceAdapter`, `TargetAdapter` e `OutputAdapter` (feito)
+2. Adaptar `BaseMigration` para depender desses contratos sem mudar o comportamento externo (feito)
+3. Manter `SqlFileOutput` como padrão e extrair o buffer atual para ele (feito)
 4. Migrar Acmes restantes para o `core/`
 5. Reduzir SQL manual residual
-6. Adicionar `MirrorOutput` e depois `DirectDatabaseOutput` com dry run
+6. Adicionar `MirrorOutput` (feito) e depois `DirectDatabaseOutput` com dry run
 7. Definir um formato declarativo para planos de migração
 8. Criar `ExecutionAdapter` para separar orquestração de execução pesada
 9. Adicionar logs estruturados, métricas e relatórios
