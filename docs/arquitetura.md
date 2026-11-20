@@ -39,7 +39,7 @@ componentes menores.
 Componentes principais:
 
 - `MigrationContext`: agrupa configuração, artefatos, adapters de origem,
-  adapter de destino, provider de metadados, writer, logger e progresso.
+  adapter de destino, provider de metadados, output, logger e progresso.
 - `DefaultMigrationContextFactory`: cria o contexto padrão a partir das chaves
   `.env` atuais (`PG_V1_*`, `PG_V2_*`, `FB_V1_*`).
 - `MigrationRunner`: orquestra as fases padrão da execução.
@@ -48,6 +48,8 @@ Componentes principais:
 - `TargetAdapter` e `Dialect`: renderizam `INSERT`s e valores SQL para o destino.
 - `MetadataProvider`: concentra operações auxiliares do destino, como triggers,
   índices, mapas de referência e sequences.
+- `OutputAdapter`: recebe o SQL gerado, fase por fase. A implementação padrão é
+  `SqlFileOutput`, que grava os arquivos em `runs/<cliente>/<timestamp>/sql/`.
 - `BaseMigration`: fachada transitória para scripts que ainda usam herança.
 
 Responsabilidades do cliente:
@@ -66,14 +68,58 @@ recorrentes de infraestrutura devem passar por adapter, dialect ou provider.
 
 O caminho preferido para novas integrações é receber um `MigrationContext` por
 composição e usar `context.engine('pg_v1')`, `context.engine('fb_v1')`,
-`context.writer.write_sql(...)` e `context.metadata`. O `BaseMigration` usa esse
-mesmo contexto por baixo, então os scripts antigos podem continuar herdando da
-base durante a transição.
+`context.output` e `context.metadata`. Para escrever SQL fora de um engine, use
+`context.output.write(...)` e `context.output.comment(...)`. O `BaseMigration`
+usa esse mesmo contexto por baixo, então os scripts antigos podem continuar
+herdando da base durante a transição.
+
+O contexto expõe a saída só por `context.output`. O antigo `context.writer` e a
+classe `SqlArtifactWriter` foram removidos. Quem monta um `MigrationContext` à
+mão passa o output no argumento `output=`.
+
+Na fachada por herança, `BaseMigration.write_sql()`, `print_comment()`,
+`_open_sql_file()` e `_flush_writes()` continuam disponíveis e delegam para
+`context.output`, então funcionam com qualquer `OutputAdapter`. A propriedade
+`file` devolve o arquivo aberto pelo `SqlFileOutput` ou `None` quando o output
+não grava em arquivo.
 
 Os atributos `pg_v1_conn`, `pg_v2_conn` e `fb_v1_conn` permanecem disponíveis
 na fachada por compatibilidade. Código novo deve preferir adapters, providers e
 helpers como `load_reference_map()`, `set_index_commands_for()` e
 `write_reset_sequences()`.
+
+## Saída da migração
+
+O runtime não abre arquivos SQL por conta própria. Ele entrega os comandos para
+um `OutputAdapter`, definido em `core/outputs/base.py`:
+
+```python
+class OutputAdapter(Protocol):
+    def open_phase(self, phase: str) -> None: ...
+    def write(self, sql: str) -> None: ...
+    def comment(self, text: str) -> None: ...
+    def flush(self) -> None: ...
+    def close(self) -> None: ...
+```
+
+As fases são chaves lógicas: `setup`, `prepare_target`, `load_transformed_data`
+e `finalize_target`. A `DefaultMigrationContextFactory` abre `setup` ao montar o
+contexto. O `MigrationRunner` abre as outras três na ordem padrão, escreve os
+comandos finais de índices e triggers e chama `flush()`. O `close()` acontece em
+`MigrationContext.close()`. Os engines criados por `context.engine()` escrevem
+pelo mesmo `output.write`.
+
+A implementação padrão é `SqlFileOutput`, em `core/outputs/sql_file.py`. Ela
+resolve cada fase pelo `ArtifactManager.sql_path()`, então os nomes de arquivo
+continuam definidos em um só lugar. O SQL fica em um buffer de até 500 trechos
+antes de ir para o arquivo. Trocar de fase, chamar `flush()` ou `close()` grava
+o que estiver pendente. O `comment()` gera o mesmo bloco `-----` que já aparecia
+nos arquivos.
+
+O output padrão não executa nada no banco de destino. O próximo output previsto
+é o `MirrorOutput`, que encaminha os comandos para mais de um destino. A
+execução direta no banco vem depois, com modo de dry run. Os dois estão
+descritos no item 2 de [melhorias-futuras.md](melhorias-futuras.md).
 
 ## Artefatos gerados
 

@@ -43,19 +43,78 @@ from core.base_migration import BaseMigration
 
 
 class FakeCursor:
+    def __init__(self, rows=None):
+        self.rows = rows or []
+
     def execute(self, sql):
         self.executed_sql = sql
 
     def __iter__(self):
-        return iter([])
+        return iter(self.rows)
 
 
 class FakeConnection:
+    def __init__(self, rows=None):
+        self.rows = rows or []
+
     def cursor(self, *args, **kwargs):
-        return FakeCursor()
+        return FakeCursor(self.rows)
 
     def close(self):
         pass
+
+
+class RecordingOutput:
+    def __init__(self):
+        self.events = []
+
+    def open_phase(self, phase):
+        self.events.append(('open_phase', phase))
+
+    def write(self, sql):
+        self.events.append(('write', sql))
+
+    def comment(self, text):
+        self.events.append(('comment', text))
+
+    def flush(self):
+        self.events.append(('flush',))
+
+    def close(self):
+        self.events.append(('close',))
+
+
+def comment_block(text):
+    dashes = '-' * len(text)
+    return f'\n-----{dashes}\n-----{text}\n-----{dashes}\n\n'
+
+
+def read_file(path):
+    with open(path, encoding='utf-8') as sql_file:
+        return sql_file.read()
+
+
+INSERT_COUNT = 501
+
+
+class FullArtifactMigration(BaseMigration):
+    def set_indexes_commands(self):
+        self.set_index_commands_for(['idx_demo'])
+
+    def run_initial(self):
+        self.print_comment('PREPARACAO')
+        self.write_sql(self.disable_triggers)
+        self.write_sql(self.disable_indexes)
+
+    def run_inserts(self):
+        self.print_comment('INSERTS')
+        for index in range(INSERT_COUNT):
+            self.write_sql(f'INSERT INTO public.demo (f_id) VALUES ({index});\n')
+        self._flush_writes()
+        self.write_sql('-- after flush\n')
+
+    def reset_sequences(self):
+        self.write_reset_sequences(['demo'])
 
 
 class ArtifactMigration(BaseMigration):
@@ -161,6 +220,80 @@ class BaseMigrationArtifactsTest(unittest.TestCase):
 
             self.assertEqual(manifest['status'], 'running')
             self.assertEqual(manifest['debug'], {'enabled': True, 'limit': 25})
+
+    def test_inherited_migration_artifacts_keep_names_order_and_content(self):
+        trigger_rows = [
+            ('ALTER TABLE public.demo DISABLE TRIGGER ALL;', 'ALTER TABLE public.demo ENABLE TRIGGER ALL;'),
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            clientdir = os.path.join(tmpdir, 'Acme')
+            os.makedirs(clientdir)
+            self._write_env(clientdir)
+
+            with patch('core.base_migration.psycopg2.connect',
+                       side_effect=[FakeConnection(), FakeConnection(trigger_rows)]), \
+                 patch('core.base_migration.firebirdsql.connect', return_value=FakeConnection()):
+                with redirect_stdout(StringIO()):
+                    migration = FullArtifactMigration(clientdir)
+                    migration.write_sql('-- setup\n')
+                    migration.run()
+            migration.context.close()
+
+            self.assertEqual(
+                sorted(os.listdir(migration.artifacts.sql_dir)),
+                ['00_setup.sql', '01_prepare_target.sql', '03_load_transformed_data.sql', '04_finalize_target.sql'],
+            )
+
+            index_where = "WHERE indrelid = (SELECT oid FROM pg_class WHERE relname='idx_demo');\n"
+            self.assertEqual(read_file(migration.artifacts.sql_path('setup')), '-- setup\n')
+            self.assertEqual(
+                read_file(migration.artifacts.sql_path('prepare_target')),
+                comment_block('PREPARACAO')
+                + 'ALTER TABLE public.demo DISABLE TRIGGER ALL;\n'
+                + 'UPDATE pg_index SET indisready=false ' + index_where,
+            )
+            self.assertEqual(
+                read_file(migration.artifacts.sql_path('load_transformed_data')),
+                comment_block('INSERTS')
+                + ''.join(f'INSERT INTO public.demo (f_id) VALUES ({index});\n' for index in range(INSERT_COUNT))
+                + '-- after flush\n',
+            )
+            self.assertEqual(
+                read_file(migration.artifacts.sql_path('finalize_target')),
+                "SELECT pg_catalog.setval('demo_f_id_seq', COALESCE((SELECT MAX(f_id) FROM public.demo), 1));\n"
+                + comment_block('HABILITAR ÍNDICES DE TABELAS')
+                + 'UPDATE pg_index SET indisready=true ' + index_where
+                + comment_block('HABILITAR TRIGGERS DE TABELAS')
+                + 'ALTER TABLE public.demo ENABLE TRIGGER ALL;\n',
+            )
+
+    def test_compatibility_helpers_delegate_to_configured_output(self):
+        output = RecordingOutput()
+        context = types.SimpleNamespace(
+            config={},
+            artifacts=None,
+            _reference_maps={},
+            legacy_connections={},
+            output=output,
+            close=lambda: None,
+        )
+
+        migration = ArtifactMigration('Acme', context=context)
+        migration._open_sql_file('prepare_target')
+        migration.print_comment('SECAO')
+        migration.write_sql('-- base\n')
+        migration._flush_writes()
+
+        self.assertEqual(
+            output.events,
+            [
+                ('open_phase', 'prepare_target'),
+                ('comment', 'SECAO'),
+                ('write', '-- base\n'),
+                ('flush',),
+            ],
+        )
+        self.assertIsNone(migration.file)
 
 
 if __name__ == '__main__':

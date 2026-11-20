@@ -43,7 +43,8 @@ class BaseMigration:
 
     @property
     def file(self):
-        return self.context.writer.file
+        """Current SQL artifact file, when the configured output is file-based."""
+        return getattr(self.context.output, 'file', None)
 
     @property
     def limit(self):
@@ -104,13 +105,13 @@ class BaseMigration:
         self.context.progress.finish()
 
     def _open_sql_file(self, key: str):
-        self.context.writer.open_sql_file(key)
+        self.context.output.open_phase(key)
 
     def write_sql(self, sql: str):
-        self.context.writer.write_sql(sql)
+        self.context.output.write(sql)
 
     def _flush_writes(self):
-        self.context.writer.flush()
+        self.context.output.flush()
 
     def _v1_cursor(self, factory=None):
         return self.context.sources['pg_v1'].cursor()
@@ -119,7 +120,7 @@ class BaseMigration:
         self.context.logger.print_log(line)
 
     def print_comment(self, line):
-        self.context.writer.print_comment(line)
+        self.context.output.comment(line)
 
     def _write_manifest(self, status: str, error: str = None):
         self.context.write_manifest(status, error)

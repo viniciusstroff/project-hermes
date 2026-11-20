@@ -105,7 +105,7 @@ core/
     postgres.py
   outputs/
     base.py
-    sql_file_output.py
+    sql_file.py
     direct_db_output.py
   migrations/
     table_migration.py
@@ -150,7 +150,13 @@ Não significa “migrar para qualquer banco em um clique”. Significa que:
 
 ## 2 — Tornar a saída da migração configurável: migração direta vs gerar arquivos
 
-Hoje a migração escreve SQL em arquivos e esse comportamento está embutido no fluxo principal. Isso funciona bem para auditoria e reexecução parcial, mas não deveria ser a única forma de entrega.
+A migração escreve SQL em arquivos. Isso funciona bem para auditoria e reexecução parcial, mas não deveria ser a única forma de entrega.
+
+### Situação atual
+
+O output adapter v1 foi implementado pela change `introduzir-output-adapter-sql-file`. Ela criou o contrato `OutputAdapter` em `core/outputs/` e transformou o antigo `SqlArtifactWriter` no adapter padrão `SqlFileOutput`. `MigrationContext`, `MigrationRunner` e `BaseMigration` passaram a escrever por `context.output` sem mudar os arquivos gerados nem o manifesto. Como o projeto não está em produção, `context.writer` e `SqlArtifactWriter` foram removidos em vez de virarem alias. Os detalhes estão em [arquitetura.md](arquitetura.md#saída-da-migração).
+
+O próximo output é o `MirrorOutput`. A execução direta no banco vem depois e deve ter um modo de dry run, avaliado mais abaixo. Ainda não existe forma de escolher o output pelo CLI ou pelo `.env`.
 
 ### Objetivo
 
@@ -167,24 +173,31 @@ Separar “gerar comandos” de “como entregar/executar esses comandos”.
 
 ### Direção de design
 
-Criar uma abstração de saída:
+A abstração de saída implementada na v1 é:
 
 ```python
 class OutputAdapter(Protocol):
     def open_phase(self, phase: str): ...
     def write(self, sql: str): ...
+    def comment(self, text: str): ...
     def flush(self): ...
     def close(self): ...
 ```
 
 ### Implementações possíveis
 
-#### `SqlFileOutput`
+#### `SqlFileOutput` (implementado)
 
-Comportamento atual:
-- abre arquivos por fase
-- acumula buffer
-- flush em disco
+Comportamento atual, em `core/outputs/sql_file.py`:
+- abre um arquivo por fase usando `ArtifactManager.sql_path()`
+- acumula até 500 trechos em buffer
+- grava o buffer ao trocar de fase, em `flush()` e em `close()`
+
+#### `MirrorOutput` (próximo output)
+
+Encaminha para mais de um destino:
+- arquivo + banco
+- arquivo + stdout
 
 #### `DirectDatabaseOutput`
 
@@ -193,12 +206,7 @@ Executa direto no destino:
 - controla transações
 - pode fazer commit por lote
 - exige estratégia de rollback e observabilidade
-
-#### `MirrorOutput`
-
-Encaminha para mais de um destino:
-- arquivo + banco
-- arquivo + stdout
+- deve oferecer um modo de dry run (ver avaliação abaixo)
 
 #### `ManifestOutput`
 
@@ -209,12 +217,58 @@ Além dos comandos, gera um manifesto:
 - quantidade de linhas por step
 - hash dos artefatos
 
-### O que precisa mudar
+### Dry run do `DirectDatabaseOutput` (avaliação)
 
-- `BaseMigration.write_sql()` deixa de escrever em arquivo diretamente
-- `BaseMigration` recebe um `OutputAdapter`
-- o buffer atual passa a ser responsabilidade do output, não da migração
-- o `run()` continua definindo fases, mas delega a abertura/troca de artefato para o output
+A ideia é rodar a migração contra o destino e descobrir o que falharia antes da execução de fato, sem deixar alteração no banco.
+
+Hoje o `rodar2.sh` aplica cada arquivo com `psql` em autocommit e sem `ON_ERROR_STOP`. Um erro não interrompe a carga: o comando que falhou é pulado, o resto é aplicado e os erros são filtrados do log depois. Quando algo dá errado, o destino fica carregado pela metade e a saída é recriar a base a partir do dump de homologação, como descrito em [execucao.md](execucao.md). O dry run resolve exatamente isso: mostrar os erros antes de tocar no destino real.
+
+#### Opção 1: transação com rollback
+
+O output abre uma transação, executa todas as fases e termina com `ROLLBACK`. O PostgreSQL tem DDL transacional, então `TRUNCATE`, `ALTER TABLE ... DISABLE TRIGGER`, o `UPDATE pg_index` e os `INSERT`s são desfeitos. É o modo mais próximo da execução real sem precisar de outro ambiente. O desenho precisa tratar alguns limites:
+
+- Sequences não voltam no rollback. O `setval` da fase `finalize_target`, os `setval` que o `pg_dump` grava em `02_dump_compatible_tables.sql` e o `nextval` de colunas com default ficariam aplicados. No dry run o output deve pular `setval` ou trocá-lo por uma checagem de que a sequence existe.
+- O `TRUNCATE` segura `ACCESS EXCLUSIVE` até o fim da transação. As tabelas ficam bloqueadas durante todo o dry run, então ele só serve para destino sem uso concorrente.
+- O primeiro erro aborta a transação. Para listar todos os erros, como o log do `psql` faz hoje, é preciso `SAVEPOINT`. Um savepoint por comando (o que o `psql` faz com `ON_ERROR_ROLLBACK`) gera milhões de subtransações na fase de carga. Acima de 64 subtransações numa mesma transação o PostgreSQL perde o cache de subtransações, o que deixa outras sessões e réplicas mais lentas. O caminho mais seguro é um savepoint por lote: se o lote falhar, o output volta ao savepoint e reexecuta aquele lote comando a comando para achar as linhas com erro.
+- O dry run faz o mesmo I/O e gera o mesmo WAL da carga real para jogar tudo fora no fim.
+- A fase `02_dump_compatible_tables.sql` não passa pelo output, porque o `pg_dump` grava o arquivo direto. Se ela ficar fora da transação, a carga roda sobre um destino sem os dados do dump e o resultado diverge da execução real.
+
+#### Opção 2: execução real em cópia descartável
+
+O mesmo `DirectDatabaseOutput`, em modo normal, apontado para um clone do destino: `CREATE DATABASE ... TEMPLATE` (exige que ninguém esteja conectado à base de origem), restore do dump de homologação ou o `target-db` do Docker. O output não precisa de nada novo, porque o dry run vira só outra conexão. É a opção mais fiel, já que commits e sequences se comportam como na execução real. O tempo medido também serve de estimativa para a janela de carga. O custo é ter onde clonar e esperar o clone. O reset manual descrito em `execucao.md` já é uma versão disso.
+
+#### Complemento: validação sem execução
+
+`EXPLAIN` sem `ANALYZE` não executa o comando, mas valida tabela, colunas e conversão de literais para o tipo da coluna em `INSERT`, `UPDATE` e `DELETE`. Não cobre DDL nem constraints como `NOT NULL` e FK. Também não pega erros que dependem do estado do banco, como chave duplicada. Pode rodar sobre uma amostra de cada fase contra o destino real sem bloquear tabela, junto com um resumo de quantos comandos cada fase gera por tabela.
+
+#### Recomendação
+
+Vale ter dry run, implementado como modo do próprio output, por exemplo `DirectDatabaseOutput(conexao, mode='apply' | 'rollback')`. Na change do `DirectDatabaseOutput`, a entrega seria o modo `rollback` com savepoint por lote, `setval` pulado e relatório de erros por fase e comando em `erros/`, restrito a destino sem uso concorrente. A cópia descartável deve ser documentada como validação preferida antes de cargas completas, porque não exige código novo. A validação por `EXPLAIN` fica para depois, caso o modo `rollback` se mostre caro demais para uso frequente.
+
+Com o `MirrorOutput` chegando antes, a combinação natural é `MirrorOutput(SqlFileOutput, DirectDatabaseOutput(mode='rollback'))`: uma única execução grava os arquivos para auditoria e valida contra o banco.
+
+Passar no dry run não garante a execução real. A transação única do dry run difere dos commits por lote do modo normal. O destino também pode mudar entre as duas execuções.
+
+Dois pontos do contrato precisam mudar antes. Eles valem também para o `MirrorOutput`:
+
+- `close()` não sabe se a execução deu certo. O `MigrationRunner` captura a exceção e grava `failed` no manifesto, mas o output nunca recebe esse resultado. Um output que executa no banco precisa dele para escolher entre `COMMIT` e `ROLLBACK`. O contrato deve ganhar algo como `close(success: bool)` ou um `finish(status)` chamado pelo runner.
+- O manifesto precisa registrar o output usado e se a execução foi dry run, para que uma execução validada não seja confundida com uma aplicada.
+
+Se o item 11 (`ExecutionAdapter`) avançar, esse modo vira a implementação de `dry_run()` para a estratégia `direct-db`.
+
+### O que já mudou na v1
+
+- `BaseMigration.write_sql()` deixou de escrever em arquivo e delega para `context.output`
+- o buffer passou a ser responsabilidade do `SqlFileOutput`
+- o `MigrationRunner` continua definindo as fases, mas delega a abertura de cada uma ao output
+- `context.writer` e `SqlArtifactWriter` foram removidos; `BaseMigration.write_sql()`, `print_comment()` e `_open_sql_file()` continuam como API da fachada por herança
+
+### O que ainda precisa mudar
+
+- implementar `MirrorOutput` (próximo passo)
+- incluir no contrato o resultado da execução, para o output decidir entre commit e rollback
+- implementar `DirectDatabaseOutput` com modo de dry run
+- permitir que a factory ou o CLI escolham o output
 
 ### Possível configuração futura
 
@@ -233,6 +287,7 @@ ou:
 python3 Migracao.py Acme --output sql-file
 python3 Migracao.py Acme --output direct-db
 python3 Migracao.py Acme --output hybrid
+python3 Migracao.py Acme --output direct-db --dry-run
 ```
 
 ### Riscos
@@ -243,13 +298,16 @@ python3 Migracao.py Acme --output hybrid
 
 ### Estratégia recomendada
 
-Fase 1:
+Fase 1 (output adapter v1, implementada):
 - manter SQL em arquivo como padrão
 - introduzir `OutputAdapter` sem mudar o comportamento externo
 
-Fase 2:
+Fase 2 (próximo passo):
 - adicionar `MirrorOutput`
-- adicionar `DirectDatabaseOutput` para ambientes controlados
+- incluir no contrato o resultado da execução
+
+Fase 3:
+- adicionar `DirectDatabaseOutput` para ambientes controlados, com modo de dry run
 
 ---
 
@@ -722,7 +780,7 @@ Para evoluir com segurança, a ordem sugerida é:
 3. Manter `SqlFileOutput` como padrão e extrair o buffer atual para ele
 4. Migrar Acmes restantes para o `core/`
 5. Reduzir SQL manual residual
-6. Adicionar novo output (`MirrorOutput` ou `DirectDatabaseOutput`)
+6. Adicionar `MirrorOutput` e depois `DirectDatabaseOutput` com dry run
 7. Definir um formato declarativo para planos de migração
 8. Criar `ExecutionAdapter` para separar orquestração de execução pesada
 9. Adicionar logs estruturados, métricas e relatórios

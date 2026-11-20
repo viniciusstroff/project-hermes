@@ -15,21 +15,23 @@ class MigrationRunner:
             self._prepare_trigger_commands()
             self._call_hook('set_indexes_commands')
 
-            self.context.writer.open_sql_file('prepare_target')
+            output = self.context.output
+
+            output.open_phase('prepare_target')
             self._call_hook('run_initial')
 
-            self.context.writer.open_sql_file('load_transformed_data')
+            output.open_phase('load_transformed_data')
             self.context.progress.reset()
             self._call_hook('run_inserts')
             self.context.progress.finish()
 
-            self.context.writer.open_sql_file('finalize_target')
+            output.open_phase('finalize_target')
             self._call_hook('reset_sequences')
-            self.context.writer.print_comment('HABILITAR ÍNDICES DE TABELAS')
-            self.context.writer.write_sql(getattr(self.migration, 'enable_indexes', ''))
-            self.context.writer.print_comment('HABILITAR TRIGGERS DE TABELAS')
-            self.context.writer.write_sql(getattr(self.migration, 'enable_triggers', ''))
-            self.context.writer.flush()
+            output.comment('HABILITAR ÍNDICES DE TABELAS')
+            output.write(getattr(self.migration, 'enable_indexes', ''))
+            output.comment('HABILITAR TRIGGERS DE TABELAS')
+            output.write(getattr(self.migration, 'enable_triggers', ''))
+            output.flush()
 
             self.context.logger.print_log('----- Fim do script de importação V1 - V2 -----')
             self.context.write_manifest('success')

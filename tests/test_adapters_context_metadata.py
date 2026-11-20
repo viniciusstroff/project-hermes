@@ -192,13 +192,13 @@ class AdapterContextMetadataTest(unittest.TestCase):
                     self.enable_indexes = ''
 
                 def run_initial(self):
-                    self.context.writer.write_sql('-- prepare\n')
+                    self.context.output.write('-- prepare\n')
 
                 def run_inserts(self):
-                    self.context.writer.write_sql('-- load\n')
+                    self.context.output.write('-- load\n')
 
                 def reset_sequences(self):
-                    self.context.writer.write_sql(self.context.metadata.reset_sequence_sql('demo'))
+                    self.context.output.write(self.context.metadata.reset_sequence_sql('demo'))
 
             with patch('core.context.psycopg2.connect', side_effect=[pg_v1, pg_v2]), \
                  patch('core.context.firebirdsql.connect', return_value=fb_v1):
