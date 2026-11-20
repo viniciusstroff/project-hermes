@@ -10,7 +10,8 @@ from core.adapters import FirebirdSourceAdapter, PostgresSourceAdapter, Postgres
 from core.artifacts import ArtifactManager
 from core.metadata import PostgresMetadataProvider
 from core.migration_engine import MigrationEngine
-from core.runtime import MigrationLogger, MigrationProgress, SqlArtifactWriter
+from core.outputs import OutputAdapter, SqlFileOutput
+from core.runtime import MigrationLogger, MigrationProgress
 
 
 @dataclass
@@ -23,7 +24,7 @@ class MigrationContext:
     sources: dict[str, Any]
     target: Any
     metadata: Any
-    writer: SqlArtifactWriter
+    output: OutputAdapter
     logger: MigrationLogger
     progress: MigrationProgress
     legacy_connections: dict[str, Any] = field(default_factory=dict)
@@ -49,7 +50,7 @@ class MigrationContext:
         return MigrationEngine(
             self.sources[source_name],
             self.target,
-            self.writer.write_sql,
+            self.output.write,
             self.limit,
             progress_fn=self.progress.log_table_progress,
         )
@@ -76,7 +77,7 @@ class MigrationContext:
         if self._closed:
             return
 
-        self.writer.close()
+        self.output.close()
         seen = set()
         for connection in self.legacy_connections.values():
             if connection is None or id(connection) in seen:
@@ -95,11 +96,11 @@ class DefaultMigrationContextFactory:
     def from_clientdir(cls, clientdir: str) -> MigrationContext:
         config = dotenv_values(os.path.join(clientdir, '.env'))
         artifacts = ArtifactManager(clientdir)
-        writer = SqlArtifactWriter(artifacts)
+        output = SqlFileOutput(artifacts)
         logger = MigrationLogger(artifacts)
         progress = MigrationProgress(logger)
         logger.progress = progress
-        writer.open_sql_file('setup')
+        output.open_phase('setup')
 
         artifacts.write_manifest(status='running', config=config, debug_limit=None)
 
@@ -135,7 +136,7 @@ class DefaultMigrationContextFactory:
             for connection in (pg_v1_conn, pg_v2_conn, fb_v1_conn):
                 if connection is not None and hasattr(connection, 'close'):
                     connection.close()
-            writer.close()
+            output.close()
             logger.close()
             raise
 
@@ -149,7 +150,7 @@ class DefaultMigrationContextFactory:
             },
             target=PostgresTargetAdapter(),
             metadata=PostgresMetadataProvider(pg_v2_conn),
-            writer=writer,
+            output=output,
             logger=logger,
             progress=progress,
             legacy_connections={

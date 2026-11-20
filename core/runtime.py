@@ -4,43 +4,6 @@ import sys
 import time
 
 
-class SqlArtifactWriter:
-    """Writes generated SQL into the current migration artifact file."""
-
-    def __init__(self, artifacts, buffer_size: int = 500):
-        self.artifacts = artifacts
-        self.buffer_size = buffer_size
-        self.file = None
-        self._write_buffer = []
-
-    def open_sql_file(self, key: str):
-        self.flush()
-        if self.file:
-            self.file.close()
-        self.file = open(self.artifacts.sql_path(key), 'w+', encoding='utf-8')
-
-    def write_sql(self, sql: str):
-        self._write_buffer.append(sql)
-        if len(self._write_buffer) >= self.buffer_size:
-            self.flush()
-
-    def print_comment(self, line: str):
-        self.write_sql('\n-----' + len(line) * '-')
-        self.write_sql('\n-----' + line)
-        self.write_sql('\n-----' + (len(line) * '-') + '\n\n')
-
-    def flush(self):
-        if self._write_buffer:
-            self.file.write(''.join(self._write_buffer))
-            self._write_buffer = []
-
-    def close(self):
-        self.flush()
-        if self.file:
-            self.file.close()
-            self.file = None
-
-
 class MigrationLogger:
     """Writes timestamped migration logs to the log artifact and stdout."""
 
