@@ -40,6 +40,7 @@ dotenv.dotenv_values = dotenv_values
 sys.modules.setdefault('dotenv', dotenv)
 
 from core.base_migration import BaseMigration
+from core.outputs import MirrorOutput
 
 
 class FakeCursor:
@@ -79,6 +80,12 @@ class RecordingOutput:
 
     def flush(self):
         self.events.append(('flush',))
+
+    def finish(self, success):
+        self.events.append(('finish', success))
+
+    def describe(self):
+        return {'type': 'recording'}
 
     def close(self):
         self.events.append(('close',))
@@ -185,6 +192,7 @@ class BaseMigrationArtifactsTest(unittest.TestCase):
 
             self.assertEqual(manifest['status'], 'success')
             self.assertFalse(manifest['debug']['enabled'])
+            self.assertEqual(manifest['output'], {'type': 'sql-file'})
 
     def test_dump_tables_writes_dump_to_contextual_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -202,6 +210,24 @@ class BaseMigrationArtifactsTest(unittest.TestCase):
             command_args = subprocess_call.call_args.args[0]
             self.assertIn(migration.artifacts.sql_path('dump_compatible_tables'), command_args)
             self.assertIn('public.acme_ignore_demo', command_args)
+
+    def test_dump_tables_runs_with_output_without_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            clientdir = os.path.join(tmpdir, 'Acme')
+            os.makedirs(clientdir)
+            self._write_env(clientdir)
+
+            with patch('core.base_migration.psycopg2.connect', return_value=FakeConnection()), \
+                 patch('core.base_migration.firebirdsql.connect', return_value=FakeConnection()), \
+                 patch('core.base_migration.subprocess.call', return_value=0) as subprocess_call:
+                with redirect_stdout(StringIO()):
+                    migration = ArtifactMigration(clientdir)
+                    migration.context.output = MirrorOutput(migration.context.output, RecordingOutput())
+                    self.assertIsNone(migration.file)
+                    migration.dump_tables()
+                    migration.context.close()
+
+            subprocess_call.assert_called_once()
 
     def test_debug_mode_is_recorded_in_manifest(self):
         with tempfile.TemporaryDirectory() as tmpdir:

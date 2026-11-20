@@ -40,7 +40,15 @@ class ArtifactManager:
     def sql_paths(self) -> dict:
         return {key: self.sql_path(key) for key in self.SQL_FILES}
 
-    def write_manifest(self, *, status: str, config: dict = None, debug_limit: int = None, error: str = None):
+    def write_manifest(
+        self,
+        *,
+        status: str,
+        config: dict = None,
+        debug_limit: int = None,
+        error: str = None,
+        output: dict = None,
+    ):
         manifest = {
             'client': self.client_name,
             'timestamp': self.timestamp,
@@ -54,6 +62,7 @@ class ArtifactManager:
             'logs_dir': self.logs_dir,
             'errors_dir': self.errors_dir,
             'databases': self._database_config(config or {}),
+            'output': output,
         }
 
         if error:

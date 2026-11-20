@@ -65,7 +65,7 @@ Após a execução, os artefatos ficam em `runs/<cliente>/<YYYYmmdd-HHMMSS>/`:
 
 | Arquivo | Função |
 |---|---|
-| `manifest.json` | Metadados da execução, caminhos, modo debug e bancos sem senha |
+| `manifest.json` | Metadados da execução, caminhos, modo debug, output usado e bancos sem senha |
 | `logs/migration.log` | Log da geração feita pelo Python |
 | `sql/00_setup.sql` | Arquivo inicial da execução |
 | `sql/01_prepare_target.sql` | Preparação da V2, disable triggers/índices e limpeza |

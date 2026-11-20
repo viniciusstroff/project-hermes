@@ -9,13 +9,14 @@ class MigrationRunner:
         self.migration = migration
 
     def run(self):
+        output = self.context.output
+        finish_called = False
+
         try:
             self.context.logger.print_log('----- Início do script de importação V1 - V2 -----')
 
             self._prepare_trigger_commands()
             self._call_hook('set_indexes_commands')
-
-            output = self.context.output
 
             output.open_phase('prepare_target')
             self._call_hook('run_initial')
@@ -33,6 +34,11 @@ class MigrationRunner:
             output.write(getattr(self.migration, 'enable_triggers', ''))
             output.flush()
 
+            # finish() runs once per run: a failing finish(True) is not
+            # followed by finish(False).
+            finish_called = True
+            output.finish(True)
+
             self.context.logger.print_log('----- Fim do script de importação V1 - V2 -----')
             self.context.write_manifest('success')
 
@@ -40,7 +46,15 @@ class MigrationRunner:
             self.context.progress.finish()
             self.context.logger.print_log('[ERRO] ' + str(exc))
             self.context.logger.print_log(traceback.format_exc())
+            if not finish_called:
+                self._finish_failed_output(output)
             self.context.write_manifest('failed', str(exc))
+
+    def _finish_failed_output(self, output):
+        try:
+            output.finish(False)
+        except Exception as exc:
+            self.context.logger.print_log('[ERRO] Falha ao finalizar o output: ' + str(exc))
 
     def _prepare_trigger_commands(self):
         if hasattr(self.migration, 'set_trigger_commands'):

@@ -32,6 +32,13 @@ class SqlFileOutput:
             self.file.write(''.join(self._write_buffer))
             self._write_buffer = []
 
+    def finish(self, success: bool):
+        # SQL files are audit artifacts: a failed run keeps its partial files.
+        self.flush()
+
+    def describe(self) -> dict:
+        return {'type': 'sql-file'}
+
     def close(self):
         self.flush()
         if self.file:
