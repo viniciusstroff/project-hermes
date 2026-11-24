@@ -57,6 +57,10 @@ O item 2 de `docs/melhorias-futuras.md` recomendava um `DirectDatabaseOutput(con
 
    O separador reproduz o lexer também quando o SQL está errado. Uma string `E'...'` que termina em barra invertida engole o texto seguinte, como acontece no `psql`.
 
+   O separador acompanha os `SET standard_conforming_strings` do arquivo. Com a configuração desligada, a barra invertida escapa a aspa também em `'...'`, e o servidor lê a string assim. O `pg_dump` grava esse `SET` com o valor da origem. O valor inicial é `on`, o padrão do PostgreSQL desde a 9.1.
+
+   A separação foi comparada com o `psql` 16 em 23 entradas, incluindo um trecho no formato do `pg_dump` e INSERTs gerados pelo core. Os comandos enviados ao servidor coincidiram em todas. A diferença conhecida é a barra invertida no meio de um comando: o `psql` executa ali um metacomando e o separador manda o texto ao servidor, que recusa. Nem o core nem o `pg_dump` geram isso.
+
 5. Tratar no aplicador o que o `psql` resolvia sozinho.
 
    - Controle de transação: `BEGIN`, `START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK` e `ABORT` vindos dos arquivos são pulados e contados. O `pg_dump` em texto envolve os large objects em `BEGIN`/`COMMIT`, e esse `COMMIT` confirmaria o dry run no meio do caminho.
@@ -109,5 +113,5 @@ Rollback: remover o aplicador e voltar a usar só o `rodar2.sh`. Nada muda nos a
 
 ## Open Questions
 
-- O `psql` de hoje pula os comandos com erro. Nas cargas reais, alguns erros são tratados como normais? Se forem, `stop` como padrão do `apply` impediria qualquer carga até o SQL ser corrigido, e o padrão deveria ser `continue`.
+- Respondida em 2026-11-24: o `apply` usa `stop` como padrão. Quem precisar do comportamento do `psql` passa `--on-error continue`.
 - O servidor que recebe o zip tem Python com `psycopg2`? Se não tiver, o aplicador roda de uma máquina com acesso ao destino e o `rodar2.sh` continua para o servidor.
