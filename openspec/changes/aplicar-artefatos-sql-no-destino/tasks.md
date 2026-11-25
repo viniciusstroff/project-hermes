@@ -1,45 +1,49 @@
 ## 1. Statement Splitter
 
-- [ ] 1.1 Create `core/apply/splitter.py` with a streaming splitter that reads a file line by line and yields statements with their starting line.
-- [ ] 1.2 Handle `'...'` with doubled quotes, `E'...'` with backslash escapes, `"..."` identifiers, `$tag$...$tag$`, `--` comments and nested `/* */` comments.
-- [ ] 1.3 Yield psql meta-commands (lines starting with `\` at statement start) as a separate kind so the applier can skip them.
-- [ ] 1.4 Yield a trailing statement without semicolon at end of file and fail on an unterminated literal, naming the starting line.
+- [x] 1.1 Create `core/apply/splitter.py` with a streaming splitter that reads a file line by line and yields statements with their starting line.
+- [x] 1.2 Handle `'...'` with doubled quotes, `E'...'` with backslash escapes, `"..."` identifiers, `$tag$...$tag$`, `--` comments and nested `/* */` comments.
+- [x] 1.3 Yield psql meta-commands (lines starting with `\` at statement start) as a separate kind so the applier can skip them.
+- [x] 1.4 Yield a trailing statement without semicolon at end of file and fail on an unterminated literal, naming the starting line.
+- [x] 1.5 Follow `SET standard_conforming_strings` in the input, so `'...'` strings use backslash escapes while the setting is off.
 
 ## 2. Applier
 
-- [ ] 2.1 Create `core/apply/applier.py` with `SqlArtifactApplier(run_dir, connection, mode, on_error, batch_size=1000)`.
-- [ ] 2.2 Validate `manifest.json` status and required artifacts before connecting; require `02_dump_compatible_tables.sql` only for non-debug runs.
-- [ ] 2.3 Execute one statement per `execute()` in phase order inside one transaction, ending with `COMMIT` in `apply` and `ROLLBACK` in `dry-run`.
-- [ ] 2.4 Skip and count transaction control statements, psql meta-commands and, in `dry-run`, `setval` calls.
-- [ ] 2.5 Fail with a clear error on `COPY ... FROM stdin`.
-- [ ] 2.6 Run `RESET ALL` after each artifact.
-- [ ] 2.7 Implement the `stop` policy and the `continue` policy with per-batch savepoints and per-statement replay of a failing batch.
-- [ ] 2.8 Roll back on any exception or interruption before the final `COMMIT`.
+- [x] 2.1 Create `core/apply/applier.py` with `SqlArtifactApplier(run_dir, connect, mode, on_error, batch_size=1000)`, where `connect` is a factory called only after the run is validated.
+- [x] 2.2 Validate `manifest.json` status and required artifacts before connecting; require `02_dump_compatible_tables.sql` only for non-debug runs.
+- [x] 2.3 Execute one statement per `execute()` in phase order inside one transaction, ending with `COMMIT` in `apply` and `ROLLBACK` in `dry-run`.
+- [x] 2.4 Skip and count transaction control statements, psql meta-commands and, in `dry-run`, `setval` calls.
+- [x] 2.5 Fail with a clear error on `COPY ... FROM stdin`.
+- [x] 2.6 Run `RESET ALL` after each artifact.
+- [x] 2.7 Implement the `stop` policy and the `continue` policy with per-batch savepoints and per-statement replay of a failing batch.
+- [x] 2.8 Roll back on any exception or interruption before the final `COMMIT`.
+- [x] 2.9 Read `standard_conforming_strings` from the server and pass it to the splitter.
 
 ## 3. Report
 
-- [ ] 3.1 Create `aplicacoes/<YYYYmmdd-HHMMSS>-<mode>/` per application.
-- [ ] 3.2 Write `relatorio.json` with mode, policy, target without password, timestamps, result and per-file counters.
-- [ ] 3.3 Write `erros.txt` with file, statement number, starting line, SQLSTATE, message and truncated statement.
+- [x] 3.1 Create `aplicacoes/<YYYYmmdd-HHMMSS>-<mode>/` per application.
+- [x] 3.2 Write `relatorio.json` with mode, policy, target without password, timestamps, result and per-file counters.
+- [x] 3.3 Write `erros.txt` with file, statement number, starting line, SQLSTATE, message and truncated statement.
 
 ## 4. Entry Points
 
-- [ ] 4.1 Create `Aplicar.py <run_dir> [--dry-run] [--on-error stop|continue]` using libpq environment variables and requiring `PGHOST` and `PGDATABASE`.
-- [ ] 4.2 Print the target and mode before starting and exit with a non-zero code when the result is `failed`.
-- [ ] 4.3 Add `--apply` and `--dry-run` to `Migracao.py`, applying the generated run with the `PG_V2_*` connection only when generation succeeded.
-- [ ] 4.4 Open the target connection with `client_encoding` UTF8.
+- [x] 4.1 Create `Aplicar.py <run_dir> [--dry-run] [--on-error stop|continue]` using libpq environment variables and requiring `PGHOST` and `PGDATABASE`.
+- [x] 4.2 Print the target and mode before starting and exit with a non-zero code when the result is `failed`.
+- [x] 4.3 Add `--apply` and `--dry-run` to `Migracao.py`, applying the generated run with the `PG_V2_*` connection only when generation succeeded.
+- [x] 4.4 Open the target connection with `client_encoding` UTF8.
+- [x] 4.5 Show progress during the application: start and counters of each artifact and a line every 50000 statements.
+- [x] 4.6 Accept `--on-error` in `Migracao.py` together with `--apply` or `--dry-run`, and parse both entry points with `argparse`.
 
 ## 5. Documentation
 
-- [ ] 5.1 Document `Aplicar.py`, the modes, the error policies and the report in `docs/execucao.md`, keeping `rodar2.sh` as the alternative.
-- [ ] 5.2 Document the applier in `docs/arquitetura.md`.
-- [ ] 5.3 Update item 2 of `docs/melhorias-futuras.md`: replace the `DirectDatabaseOutput` next step with the applier, keep the streaming output as future work tied to item 7 and correct the savepoint-per-batch claim about the 64-subtransaction cache.
+- [x] 5.1 Document `Aplicar.py`, the modes, the error policies and the report in `docs/execucao.md`, keeping `rodar2.sh` as the alternative.
+- [x] 5.2 Document the applier in `docs/arquitetura.md`.
+- [x] 5.3 Update item 2 of `docs/melhorias-futuras.md`: replace the `DirectDatabaseOutput` next step with the applier, keep the streaming output as future work tied to item 7 and correct the savepoint-per-batch claim about the 64-subtransaction cache.
 
 ## 6. Verification
 
-- [ ] 6.1 Add splitter tests with pg_dump-style input (`SET`, `set_config`, `\restrict`, `BEGIN`/`COMMIT` around large objects, multi-line literals) and with SQL generated by the core.
-- [ ] 6.2 Add applier tests with a fake connection for order, commit and rollback by mode, both error policies, skipped statements, `RESET ALL` and refusal of incomplete runs.
-- [ ] 6.3 Add report tests, including absence of the password.
+- [x] 6.1 Add splitter tests with pg_dump-style input (`SET`, `set_config`, `\restrict`, `BEGIN`/`COMMIT` around large objects, multi-line literals) and with SQL generated by the core.
+- [x] 6.2 Add applier tests with a fake connection for order, commit and rollback by mode, both error policies, skipped statements, `RESET ALL` and refusal of incomplete runs.
+- [x] 6.3 Add report tests, including absence of the password.
 - [ ] 6.4 Run a dry run and an apply against the Docker `target-db` with a generated run and record the result.
-- [ ] 6.5 Run `python3 -m unittest discover -s tests` and `python3 -m compileall core Acme tests`.
-- [ ] 6.6 Run `openspec validate aplicar-artefatos-sql-no-destino` and `openspec status --change "aplicar-artefatos-sql-no-destino"`.
+- [x] 6.5 Run `python3 -m unittest discover -s tests` and `python3 -m compileall core Acme tests`.
+- [x] 6.6 Run `openspec validate aplicar-artefatos-sql-no-destino` and `openspec status --change "aplicar-artefatos-sql-no-destino"`.

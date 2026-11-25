@@ -57,11 +57,16 @@ O item 2 de `docs/melhorias-futuras.md` recomendava um `DirectDatabaseOutput(con
 
    O separador reproduz o lexer também quando o SQL está errado. Uma string `E'...'` que termina em barra invertida engole o texto seguinte, como acontece no `psql`.
 
+   O separador acompanha os `SET standard_conforming_strings` do arquivo. Com a configuração desligada, a barra invertida escapa a aspa também em `'...'`, e o servidor lê a string assim. O `pg_dump` grava esse `SET` com o valor da origem. O valor inicial é `on`, o padrão do PostgreSQL desde a 9.1.
+
+   A separação foi comparada com o `psql` 16 em 23 entradas, incluindo um trecho no formato do `pg_dump` e INSERTs gerados pelo core. Os comandos enviados ao servidor coincidiram em todas. A diferença conhecida é a barra invertida no meio de um comando: o `psql` executa ali um metacomando e o separador manda o texto ao servidor, que recusa. Nem o core nem o `pg_dump` geram isso.
+
 5. Tratar no aplicador o que o `psql` resolvia sozinho.
 
    - Controle de transação: `BEGIN`, `START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK` e `ABORT` vindos dos arquivos são pulados e contados. O `pg_dump` em texto envolve os large objects em `BEGIN`/`COMMIT`, e esse `COMMIT` confirmaria o dry run no meio do caminho.
    - Configurações de sessão: depois de cada arquivo o aplicador executa `RESET ALL`. O dump roda `SELECT pg_catalog.set_config('search_path', '', false)` e vários `SET`. No `rodar2.sh` cada arquivo era uma sessão e essas configurações morriam com ela. Numa transação única elas alcançariam o `03` e o `04`, e nomes de tabela sem schema deixariam de resolver.
    - Sequences no dry run: `setval` não é desfeito pelo `ROLLBACK`, então o dry run pula esses comandos e conta. O `nextval` dos defaults de coluna continua avançando sequences durante o dry run. Isso não atrapalha a carga real, porque o `04_finalize_target` e o dump ajustam as sequences por `setval`.
+   - Sequences num `apply` que falha: os `setval` que rodaram antes do erro continuam valendo depois do `ROLLBACK`. No teste contra o PostgreSQL 16, um `apply` com `stop` que falhou no `03` deixou as tabelas vazias e a sequence de `a` em 4, o valor gravado pelo dump. Adiar os `setval` para o fim mudaria a ordem da carga: os INSERTs do `03` que usam o default da coluna pegariam ids já usados pelo dump. O efeito fica aceito, porque a próxima carga roda os mesmos `setval` e uma sequence adiantada só deixa buraco na numeração.
    - Comandos que não rodam em transação, como `VACUUM` e `CREATE INDEX CONCURRENTLY`, falham e aparecem no relatório. O core não gera esses comandos, mas o SQL próprio de um cliente pode gerar.
 
 6. Política de erro `stop` ou `continue`.
@@ -109,5 +114,5 @@ Rollback: remover o aplicador e voltar a usar só o `rodar2.sh`. Nada muda nos a
 
 ## Open Questions
 
-- O `psql` de hoje pula os comandos com erro. Nas cargas reais, alguns erros são tratados como normais? Se forem, `stop` como padrão do `apply` impediria qualquer carga até o SQL ser corrigido, e o padrão deveria ser `continue`.
+- Respondida em 2026-11-24: o `apply` usa `stop` como padrão. Quem precisar do comportamento do `psql` passa `--on-error continue`.
 - O servidor que recebe o zip tem Python com `psycopg2`? Se não tiver, o aplicador roda de uma máquina com acesso ao destino e o `rodar2.sh` continua para o servidor.

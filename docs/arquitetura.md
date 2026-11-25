@@ -7,8 +7,8 @@ O script `Migracao.py` é uma aplicação CLI que:
 1. Lê a configuração do Acme em `Acme/.env`.
 2. Abre conexão com três bancos.
 3. Gera arquivos `.sql` com `DELETE`, `UPDATE`, `INSERT`, `ALTER TABLE` e `setval`.
-4. Não aplica os dados diretamente na V2.
-5. Delega a execução final para `psql`, usando os arquivos gerados em `runs/<cliente>/<timestamp>/sql/`.
+4. Não aplica os dados na V2 durante a geração.
+5. Deixa a aplicação para depois, sobre os arquivos gerados em `runs/<cliente>/<timestamp>/sql/`. Quem aplica é o `Aplicar.py` (ou o próprio `Migracao.py` com `--apply` ou `--dry-run`), numa única transação. O `rodar2.sh` com `psql` continua como alternativa.
 
 ## Bancos envolvidos
 
@@ -154,9 +154,93 @@ o `MirrorOutput` hoje é preciso montar o `MigrationContext` à mão ou trocar
 `context.output` antes de rodar. A escolha pelo CLI fica para quando houver
 outro output concreto.
 
-Nenhum output do core executa SQL no banco de destino. O próximo output previsto
-é o `DirectDatabaseOutput`, com modo de dry run, descrito no item 2 de
-[melhorias-futuras.md](melhorias-futuras.md).
+Nenhum output do core executa SQL no banco de destino. A aplicação acontece
+depois da geração, pelo aplicador descrito na próxima seção. O
+`DirectDatabaseOutput`, que executaria os comandos durante a geração, ficou
+adiado. O motivo está em [Aplicação no destino](#aplicação-no-destino) e no
+item 2 de [melhorias-futuras.md](melhorias-futuras.md).
+
+## Aplicação no destino
+
+O código fica em `core/apply/`:
+
+| Módulo | Papel |
+|---|---|
+| `splitter.py` | separa um arquivo SQL em comandos pelas regras léxicas do PostgreSQL |
+| `run.py` | lê o `manifest.json` e lista os arquivos de uma execução, recusando execuções incompletas |
+| `applier.py` | `SqlArtifactApplier`: aplica os arquivos em transação única, com modo e política de erro |
+| `report.py` | grava `relatorio.json` e `erros.txt` em `aplicacoes/<timestamp>-<modo>/` |
+| `cli.py` | fluxo de console comum ao `Aplicar.py` e ao `Migracao.py --apply` |
+
+### Por que depois da geração
+
+A geração lê o destino enquanto gera os inserts: `load_reference_map()` consulta
+a V2 pela conexão do `PostgresMetadataProvider`. Se os comandos fossem
+executados durante a geração, essa leitura veria o destino no meio da carga.
+Na mesma conexão, uma tabela truncada pelo `01_prepare_target` apareceria vazia.
+Numa conexão separada, a leitura esperaria o lock do `TRUNCATE`, que só sai no
+fim da transação. O processo ficaria esperando por ele mesmo. Além disso, o
+`02_dump_compatible_tables.sql` é gravado pelo `pg_dump`, fora do output.
+
+Aplicando a pasta da execução depois, o dump entra pela ordem dos arquivos e a
+aplicação pode rodar em outra máquina. O `GeneratedRun` resolve os arquivos a
+partir da pasta da execução. Os caminhos absolutos do manifesto não são usados.
+
+### Separador de comandos
+
+O `split_sql_file()` lê o arquivo linha a linha e devolve objetos `Statement`
+com o tipo (`sql` ou `meta-command`), o texto sem `;` final e a linha inicial.
+Um `;` só encerra o comando fora de strings `'...'` e `E'...'`, identificadores
+`"..."`, dollar quotes `$tag$...$tag$` e comentários, inclusive `/* */`
+aninhados. O separador acompanha os `SET standard_conforming_strings` do
+arquivo, porque com essa configuração desligada a barra invertida também escapa
+a aspa em `'...'`. O valor inicial vem do servidor.
+
+Internamente é uma máquina de estados (padrão State). O `_StatementSplitter`
+guarda o estado atual. Cada estado é uma classe com um método `scan()`:
+`_Gap` entre comandos, `_InStatement` dentro de um comando e uma subclasse de
+`_Literal` para cada tipo de literal. Para incluir um literal novo, basta criar
+a classe e registrá-la em `_LITERALS`.
+
+A separação foi comparada com a do `psql` 16 e coincidiu em todas as entradas
+testadas. A diferença conhecida é a barra invertida no meio de um comando: o
+`psql` executa um metacomando ali e o separador manda o texto ao servidor.
+
+### Aplicador
+
+O `SqlArtifactApplier(run_dir, connect, mode, on_error, batch_size=1000)`
+recebe uma função `connect` e só a chama depois de validar a execução, então
+uma execução incompleta não abre conexão. A conexão roda com `autocommit`
+desligado e cada comando vai num `execute()`.
+
+Duas escolhas definem uma aplicação, cada uma representada por um objeto:
+
+- o modo (`_ApplyMode` ou `_DryRunMode`) decide como a transação termina e
+  quais comandos pular;
+- a política de erro (`_StopPolicy` ou `_ContinuePolicy`) decide o que fazer
+  quando um comando falha.
+
+Os comandos que não vão ao servidor estão numa tabela de regras (`_SkipRule`):
+metacomandos do `psql`, controle de transação e, no dry run, `setval`. Um
+`COPY ... FROM stdin` encerra a aplicação. Depois de cada arquivo o aplicador
+executa `RESET ALL`, porque antes cada arquivo rodava numa sessão de `psql` e as
+configurações do dump morriam com ela.
+
+A `_ContinuePolicy` abre um savepoint por lote. Se um comando falha, volta ao
+savepoint, reexecuta o lote comando a comando com um savepoint para cada um e
+abre um lote novo no comando seguinte. Isso não mantém a transação abaixo de 64
+subtransações: uma subtransação que gravou dados fica na lista até o fim, mesmo
+depois do `RELEASE SAVEPOINT`. Uma carga de 1 milhão de comandos em lotes de 1000
+cria 1000 subtransações. Com o destino isolado isso é aceitável, mas precisa ser
+medido numa carga real antes de usar `continue` num banco com réplica.
+
+Falhas esperadas (comando com erro no `stop`, comando não suportado, aspas sem
+fechamento, `COMMIT` recusado) terminam em `ROLLBACK` e devolvem o relatório com
+resultado `failed`. Qualquer outra exceção, inclusive Ctrl+C, também faz
+`ROLLBACK` e grava o relatório antes de ser relançada.
+
+O uso pela linha de comando, o formato do relatório e os cuidados de operação
+estão em [execucao.md](execucao.md#aplicando-os-sqls-no-destino).
 
 ## Artefatos gerados
 
@@ -164,13 +248,14 @@ Os artefatos ficam em `runs/<cliente>/<YYYYmmdd-HHMMSS>/`:
 
 - `manifest.json`
 - `logs/migration.log`
-- `logs/*.sql.log`
-- `erros/*.txt`
+- `logs/*.sql.log`, gravados pelo `rodar2.sh`
+- `erros/*.txt`, gravados pelo `rodar2.sh`
 - `sql/00_setup.sql`
 - `sql/01_prepare_target.sql`
 - `sql/02_dump_compatible_tables.sql`
 - `sql/03_load_transformed_data.sql`
 - `sql/04_finalize_target.sql`
+- `aplicacoes/<YYYYmmdd-HHMMSS>-<apply|dry-run>/relatorio.json` e `erros.txt`, um par por aplicação
 
 Responsabilidade de cada artefato:
 
@@ -209,13 +294,17 @@ Para funcionar, o ambiente precisa ter:
 - `firebirdsql`
 - `python-dotenv`
 - `pg_dump`
+- `psql`, só para aplicar com o `rodar2.sh`
 - acesso de rede aos bancos configurados
+
+O `Aplicar.py` sozinho precisa apenas de Python 3, `psycopg2` e da pasta `core/`.
 
 O diretório `runs/` é criado automaticamente na raiz do projeto e ignorado pelo Git.
 
 ## Riscos arquiteturais atuais
 
 - O `main` chama `enable_debug(100)`, o que limita as consultas e impede migração completa se isso não for removido.
-- O script gera SQL em arquivo, mas não executa transações fim a fim dentro do Python.
+- A aplicação em transação única bloqueia o destino até o fim. Um erro perto do fim descarta a carga inteira.
+- Os `setval` executados antes de um erro continuam valendo depois do `ROLLBACK`, porque sequences não são transacionais.
 - O escaping é manual em vários `INSERT`s; isso funciona para o padrão atual, mas é frágil para casos fora da curva.
 - A lista de tabelas ignoradas e deletadas é estática e depende do histórico do Acme.
