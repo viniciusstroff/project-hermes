@@ -54,7 +54,7 @@ class ReportFileTest(unittest.TestCase):
         self.assertEqual(
             saved['files'][2],
             {
-                'file': '02_dump_compatible_tables.sql',
+                'file': '02_copy_compatible_entities.sql',
                 'executed': 2,
                 'errors': 0,
                 'skipped': {},

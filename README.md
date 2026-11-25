@@ -12,7 +12,7 @@ Cada cliente tem um diretório com o próprio script de migração e o `.env` de
 |---|---|
 | `comandos/00_setup.sql` | Abertura da execução |
 | `comandos/01_prepare_target.sql` | Limpeza das tabelas do destino e desativação de triggers |
-| `comandos/02_dump_compatible_tables.sql` | `pg_dump` das tabelas que passam da V1 para a V2 sem transformação |
+| `comandos/02_copy_compatible_entities.sql` | Cópia das tabelas que passam da V1 para a V2 sem transformação, listadas em `compatible_entities()` |
 | `comandos/03_load_transformed_data.sql` | `INSERT`s gerados em Python para as tabelas que precisam de mapeamento |
 | `comandos/04_finalize_target.sql` | Ajuste de sequences e reativação de triggers |
 
@@ -23,7 +23,7 @@ O núcleo em `core/` trabalha com contratos em vez de drivers. A origem é lida 
 ## Requisitos
 
 - Python 3.12 (a versão da imagem Docker)
-- `pg_dump` compatível com a versão do PostgreSQL da V1 (a imagem instala o cliente 9.6)
+- `pg_dump` da versão principal do PostgreSQL da V1 ou mais novo, só para quem liga a cópia nativa (`SOURCE_<NOME>_NATIVE_COPY=pg_dump`). A imagem instala o cliente 9.6
 - `psql`, só se for aplicar os arquivos pelo `rodar2.sh`
 - acesso de rede aos bancos de origem, em geral por túnel SSH
 - Docker e Docker Compose, se quiser rodar em container ou subir um destino local
@@ -73,10 +73,10 @@ ssh -L 172.17.0.1:3050:<ip-firebird>:3050 \
 ```bash
 pip install -r requirements.txt
 
-# migração completa: pg_dump e geração do SQL
+# migração completa
 python3 Migracao.py Acme
 
-# modo debug: no máximo 100 linhas por consulta e sem pg_dump
+# modo debug: no máximo 100 linhas por consulta, inclusive na cópia das entidades compatíveis
 python3 Migracao.py Acme --debug 100
 ```
 

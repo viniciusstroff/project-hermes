@@ -9,7 +9,6 @@ from core.artifacts import COMMANDS_DIR, PHASES, artifact_name
 # Phase order comes from the artifact manager, the same order of generation.
 # The applier only handles SQL artifacts for now.
 PHASE_FILES = tuple(artifact_name(phase, 'sql') for phase in PHASES)
-DUMP_FILE = artifact_name('dump_compatible_tables', 'sql')
 
 
 class IncompleteRunError(Exception):
@@ -53,8 +52,7 @@ class GeneratedRun:
             path = os.path.join(run_dir, COMMANDS_DIR, name)
             if os.path.isfile(path):
                 artifacts.append(Artifact(name, path))
-            elif not (debug and name == DUMP_FILE):
-                # A debug run does not call pg_dump, so it has no dump file.
+            else:
                 missing.append(name)
 
         if missing:

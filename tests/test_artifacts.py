@@ -36,8 +36,8 @@ class ArtifactManagerTest(unittest.TestCase):
             self.assertTrue(os.path.isdir(artifacts.logs_dir))
             self.assertTrue(os.path.isdir(artifacts.errors_dir))
             self.assertEqual(
-                artifacts.command_path('dump_compatible_tables', 'sql'),
-                os.path.join(artifacts.commands_dir, '02_dump_compatible_tables.sql'),
+                artifacts.command_path('copy_compatible_entities', 'sql'),
+                os.path.join(artifacts.commands_dir, '02_copy_compatible_entities.sql'),
             )
             self.assertEqual(
                 artifacts.command_path('load_transformed_data', 'jsonl'),

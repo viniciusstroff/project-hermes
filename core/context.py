@@ -6,7 +6,7 @@ from dotenv import dotenv_values
 
 from core.adapters.registry import connect_adapter
 from core.artifacts import ArtifactManager
-from core.connections import parse_connections
+from core.connections import ConnectionConfigError, parse_connections
 from core.migration_engine import MigrationEngine
 from core.operations import SuspendConstraints
 from core.outputs import FileOutput, OutputAdapter
@@ -172,6 +172,7 @@ class DefaultMigrationContextFactory:
             target = connect_adapter(target_config, 'target')
             opened.append(target)
             _record_server_version(connections['target'], target)
+            _check_native_copies(source_configs, sources, target)
 
             # The artifact format, and so the file extension, comes from the target adapter.
             output = FileOutput(artifacts, target)
@@ -201,6 +202,19 @@ class DefaultMigrationContextFactory:
             progress=progress,
             connections=connections,
         )
+
+
+def _check_native_copies(source_configs, sources, target):
+    """A native copy writes commands of one target adapter: refuse it for another target."""
+
+    for name, source in sources.items():
+        native = getattr(source, 'native_copy', None)
+        if native is not None and native.target_adapter != getattr(target, 'name', None):
+            prefix = source_configs[name].prefix
+            raise ConnectionConfigError(
+                f'{prefix}_NATIVE_COPY={native.name} só serve para destino {native.target_adapter}; '
+                f"o destino usa o adapter '{getattr(target, 'name', None)}'. Tire {prefix}_NATIVE_COPY."
+            )
 
 
 def _record_server_version(description: dict, adapter):

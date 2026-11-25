@@ -1,7 +1,7 @@
 class MirrorOutput:
     """Delivers the same operations to several outputs, in the given order.
 
-    Delivery calls (``open_phase``, ``write``, ``flush``) stop at
+    Delivery calls (``open_phase``, ``write``, ``include_file``, ``flush``) stop at
     the first error, which fails the run. ``finish`` and ``close`` reach every
     output even when one of them fails, so a failing database output does not
     keep the file output from finishing, and the first error is raised at the
@@ -20,6 +20,10 @@ class MirrorOutput:
     def write(self, operation):
         for output in self.outputs:
             output.write(operation)
+
+    def include_file(self, path: str):
+        for output in self.outputs:
+            output.include_file(path)
 
     def flush(self):
         for output in self.outputs:

@@ -48,7 +48,7 @@ def parse_args(argv=None):
         const=DEFAULT_DEBUG_LIMIT,
         type=int,
         metavar='QUANTIDADE',
-        help=f'no máximo QUANTIDADE linhas por consulta e sem pg_dump (padrão {DEFAULT_DEBUG_LIMIT})',
+        help=f'no máximo QUANTIDADE linhas por consulta, inclusive na cópia das entidades compatíveis (padrão {DEFAULT_DEBUG_LIMIT})',
     )
     application = parser.add_mutually_exclusive_group()
     application.add_argument(
@@ -91,8 +91,6 @@ def load_migration(client: str):
 def generate(migration, debug_limit):
     if debug_limit is not None:
         migration.enable_debug(debug_limit)
-    else:
-        migration.dump_tables()
     migration.run()
 
 

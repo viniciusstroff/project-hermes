@@ -5,14 +5,14 @@ import os
 
 SETUP = '00_setup.sql'
 PREPARE = '01_prepare_target.sql'
-DUMP = '02_dump_compatible_tables.sql'
+COPY = '02_copy_compatible_entities.sql'
 LOAD = '03_load_transformed_data.sql'
 FINALIZE = '04_finalize_target.sql'
 
 DEFAULT_FILES = {
     SETUP: '-- abertura\n',
     PREPARE: 'TRUNCATE a;\n',
-    DUMP: "SELECT pg_catalog.set_config('search_path', '', false);\nINSERT INTO public.a VALUES (1);\n",
+    COPY: "SELECT pg_catalog.set_config('search_path', '', false);\nINSERT INTO public.a VALUES (1);\n",
     LOAD: 'INSERT INTO b VALUES (1);\nINSERT INTO b VALUES (2);\n',
     FINALIZE: "SELECT pg_catalog.setval('a_f_id_seq', 1);\n",
 }

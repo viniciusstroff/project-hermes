@@ -6,6 +6,7 @@ _clientdir = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.dirname(_clientdir))
 
 from core.base_migration import BaseMigration
+from core.compatible import CopyEntity
 from core.queries import SourceQuery
 from core.references import ReferenceMap
 from core.table_migration import TableMigration
@@ -41,20 +42,11 @@ class Migracao(BaseMigration):
             ),
         ]
 
-    def dump_ignoring_tables(self):
+    def compatible_entities(self):
+        # Tabelas que passam como estão. Só o que está na lista é copiado.
         return [
-            'public.acme_legacy_audit_log',
-            'public.acme_legacy_tmp_import',
-            'public.acme_legacy_tmp_import_f_id_seq',
-            'public.acme_demo_notes',
-        ]
-
-    def dump_non_existing_tables(self):
-        return [
-            'public.acme_optional_module',
-            'public.acme_optional_module_f_id_seq',
-            'extranet.acme_portal_messages',
-            'extranet.acme_portal_messages_f_id_seq',
+            CopyEntity('public.acme_holidays_demo', source='v1'),
+            CopyEntity('public.acme_v1_cities', source='v1', target='public.acme_cities_demo'),
         ]
 
     def run_initial(self):

@@ -6,21 +6,12 @@ This class keeps the old inheritance API available while delegating runtime
 responsibilities to smaller context components.
 """
 
-import os
-import shlex
-import subprocess
-
-from core.connections import parse_connections
 from core.context import DefaultMigrationContextFactory
 from core.operations import Clear, Comment, ResetIdentity, SuspendConstraints
 from core.runner import MigrationRunner
 
 
 class BaseMigration:
-    # Named source read by pg_dump for the compatible tables. Until the
-    # generic copy replaces pg_dump, it must be a PostgreSQL connection.
-    dump_source = 'v1'
-
     def __init__(self, clientdir: str, context=None):
         self.context = context or DefaultMigrationContextFactory.from_clientdir(clientdir)
         self._clientdir = clientdir
@@ -86,12 +77,8 @@ class BaseMigration:
         """Return a reference map declared in declare_reference_maps()."""
         return self.context.reference_map(name)
 
-    def dump_ignoring_tables(self) -> list:
-        """Return tables to exclude from pg_dump because they should be ignored."""
-        return []
-
-    def dump_non_existing_tables(self) -> list:
-        """Return tables to exclude from pg_dump because they do not exist."""
+    def compatible_entities(self) -> list:
+        """Override with the CopyEntity list copied as it is in the copy_compatible_entities phase."""
         return []
 
     def reset_sequences(self):
@@ -105,43 +92,6 @@ class BaseMigration:
     def run_inserts(self):
         """Override with the migrations of the load_transformed_data phase."""
         pass
-
-    def dump_tables(self):
-        exclude_tables = [*self.dump_ignoring_tables(), *self.dump_non_existing_tables()]
-        source = self._dump_connection()
-
-        command = (
-            'pg_dump -h {host} -p {port} -U {user} -a -b --column-inserts -f {file} {name} '
-            '-E utf-8 --disable-triggers {excludes}'
-        ).format(
-            host=source.get('host'),
-            port=source.get('port', '5432'),
-            user=source.get('user'),
-            file=self.artifacts.command_path('dump_compatible_tables', 'sql'),
-            name=source.get('name'),
-            excludes=''.join([f"-T '{t}' " for t in exclude_tables]),
-        )
-
-        os.environ['PGPASSWORD'] = source.get('pass', '')
-        self.print_log('Executando pg_dump de tabelas diferentes e com dados')
-
-        if subprocess.call(shlex.split(command), shell=False) != 0:
-            self._write_manifest('failed', 'Comando de dump falhou')
-            raise Exception('Comando de dump falhou')
-
-        self.print_log('Tabelas ignoradas: ' + ', '.join(exclude_tables))
-        self.print_log('Dump finalizado')
-
-    def _dump_connection(self):
-        sources, _ = parse_connections(self.config)
-        source = sources.get(self.dump_source)
-        if source is None or source.adapter != 'postgres':
-            raise ValueError(
-                f"O pg_dump lê a origem '{self.dump_source}', que precisa ser declarada com "
-                f"SOURCE_{self.dump_source.upper()}_ADAPTER=postgres"
-            )
-        source.require('host', 'name', 'user')
-        return source
 
     def run(self):
         MigrationRunner(self.context, self).run()

@@ -13,7 +13,7 @@ A carga termina com sucesso e ninguém fica sabendo que 300 alunos ficaram sem s
 ## What Changes
 
 - Métricas por unidade de migração (`TableMigration`, `ExpandMigration`, `MultiTargetMigration`): linhas lidas da origem, comandos gerados por tabela de destino, duração e situação final.
-- Resumo por fase, com duração e totais das unidades que rodaram nela. O `pg_dump` entra como a fase `dump_compatible_tables`, com duração e tamanho do arquivo.
+- Resumo por fase, com duração e totais das unidades que rodaram nela. A cópia das entidades compatíveis entra como a fase `copy_compatible_entities`. Quando ela usa o `pg_dump`, o resumo traz também o código de saída e o tamanho do arquivo.
 - Contagem de perda de dado por unidade, tabela de destino, coluna, strategy e motivo, com uma amostra limitada de valores originais. As strategies informam a perda pelo valor que devolvem, sem acesso a log ou engine.
 - Relatório da geração em `relatorio-geracao.json`, na raiz da pasta da execução, gravado no sucesso e na falha.
 - Log estruturado `logs/migration.jsonl` ao lado do `migration.log`, com o identificador da execução, nível, fase e unidade em cada linha.
@@ -34,7 +34,7 @@ A carga termina com sucesso e ninguém fica sabendo que 300 alunos ficaram sem s
 ## Impact
 
 - Novo módulo `core/metrics.py`.
-- Código afetado: `core/runtime.py`, `core/context.py`, `core/runner.py`, `core/migration_engine.py`, `core/table_migration.py`, `core/expand_migration.py`, `core/multi_target_migration.py`, `core/strategies.py` e `core/base_migration.py` (`dump_tables`).
+- Código afetado: `core/runtime.py`, `core/context.py`, `core/runner.py`, `core/migration_engine.py`, `core/table_migration.py`, `core/expand_migration.py`, `core/multi_target_migration.py`, `core/strategies.py` e `core/compatible.py`.
 - Depende de `revisar-estrategias-dependentes-de-dialeto`, que faz as migrations obterem o valor Python de cada strategy e serializarem pelo destino. Esta change acrescenta a perda a esse caminho.
 - Usa o nome do mapa exposto pelo `LoadedReferenceMap` de `padronizar-lookups-de-referencia` quando ele existir. Sem ele, a perda do `Lookup` sai sem o nome do mapa.
 - As amostras de perda contêm valores da origem, como datas de nascimento e trechos de texto livre. O relatório tem a mesma sensibilidade dos arquivos SQL da mesma pasta.

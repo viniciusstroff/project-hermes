@@ -73,6 +73,13 @@ The `FileOutput` SHALL render each operation through the target adapter and writ
 - **THEN** `write()` raises an error naming the entity, the column and the Python type
 - **AND** the run fails with that error
 
+### Requirement: Outputs include files of a native copy
+The `OutputAdapter` contract SHALL include `include_file(path)`, which appends to the current phase a file of commands written outside the output in the target format, and the `MirrorOutput` SHALL forward it to every output.
+
+#### Scenario: Native copy in the file output
+- **WHEN** the `FileOutput` receives `include_file(path)` after operations of the same phase
+- **THEN** the artifact of that phase holds the commands of the operations followed by the content of the file
+
 ### Requirement: File output keeps artifacts on finish
 The `FileOutput` SHALL flush pending commands on `finish()` for both results and SHALL NOT remove or truncate artifacts when the run fails.
 

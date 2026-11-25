@@ -30,9 +30,9 @@
 
 ## 5. Compatible Entities
 
-- [ ] 5.1 Add `compatible_entities()` with optional renaming and the generic copy in the `copy_compatible_entities` phase.
-- [ ] 5.2 Add the optional `pg_dump` native copy to the PostgreSQL source adapter, with the major version check against the source server.
-- [ ] 5.3 Remove `dump_tables()`, `dump_ignoring_tables()` and `dump_non_existing_tables()`.
+- [x] 5.1 Add `compatible_entities()` with optional renaming and the generic copy in the `copy_compatible_entities` phase. (`CopyEntity` names its source; debug mode always copies row by row.)
+- [x] 5.2 Add the optional `pg_dump` native copy to the PostgreSQL source adapter, with the major version check against the source server.
+- [x] 5.3 Remove `dump_tables()`, `dump_ignoring_tables()` and `dump_non_existing_tables()`.
 
 ## 6. Application by Capabilities
 

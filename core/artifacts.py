@@ -8,7 +8,7 @@ from dataclasses import dataclass
 PHASES = (
     'setup',
     'prepare_target',
-    'dump_compatible_tables',
+    'copy_compatible_entities',
     'load_transformed_data',
     'finalize_target',
 )

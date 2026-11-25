@@ -6,9 +6,8 @@ No `main()` do `Migracao.py`, o script faz:
 
 1. instancia `Migracao()`;
 2. aplica `enable_debug(<quantidade>)` apenas quando `--debug` é informado;
-3. em modo completo, executa `dump_tables()`;
-4. executa `run()`;
-5. com `--apply` ou `--dry-run`, fecha os arquivos gerados e aplica a execução no destino das chaves `TARGET_*`.
+3. executa `run()`, que gera todas as fases, inclusive a cópia das entidades compatíveis;
+4. com `--apply` ou `--dry-run`, fecha os arquivos gerados e aplica a execução no destino das chaves `TARGET_*`.
 
 Isso significa que o fluxo padrão já gera:
 
@@ -30,22 +29,22 @@ Durante `__init__()` o script:
 
 O mapa `areas_map` é um exemplo de regra de negócio embutida para compatibilizar áreas entre V1 e V2.
 
-## Etapa 2: dump das tabelas compatíveis
+## Etapa 2: cópia das entidades compatíveis
 
-`dump_tables()` monta um `pg_dump` com:
+Depois da preparação, o runner abre a fase `copy_compatible_entities` e copia
+cada `CopyEntity` devolvido por `compatible_entities()`. Só entra o que está na
+lista. Cada entidade é lida pela origem que ela nomeia e cada linha vira um
+`Insert`, com o mesmo nome ou com o nome de `target`.
 
-- `-a -b --column-inserts`
-- `--disable-triggers`
-- exclusão (`-T`) de tabelas problemáticas;
-- exclusão de tabelas inexistentes no Acme.
-
-Objetivo:
-
-- aproveitar o `pg_dump` para partes da base que não precisam de transformação linha a linha.
+Quando a origem tem `SOURCE_<NOME>_NATIVE_COPY=pg_dump` e o destino é
+PostgreSQL, as entidades que não mudam de nome vão pelo `pg_dump`
+(`-a -b --column-inserts --disable-triggers`, um `-t` por tabela). A saída
+dele entra no fim do artefato da fase. No modo debug a cópia é sempre linha a
+linha, para respeitar o limite.
 
 Saída:
 
-- `runs/<cliente>/<timestamp>/comandos/02_dump_compatible_tables.sql`
+- `runs/<cliente>/<timestamp>/comandos/02_copy_compatible_entities.sql`
 
 ## Etapa 3: preparação da base V2
 

@@ -404,6 +404,7 @@ class OutputAdapterIntegrationTest(unittest.TestCase):
                 ('open_phase', 'prepare_target'),
                 ('write', SuspendConstraints(('public.demo',))),
                 ('write', n('-- prepare\n')),
+                ('open_phase', 'copy_compatible_entities'),
                 ('open_phase', 'load_transformed_data'),
                 ('write', n('-- load\n')),
                 ('open_phase', 'finalize_target'),
