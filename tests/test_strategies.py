@@ -12,7 +12,7 @@ class SqlValueTest(unittest.TestCase):
         self.assertEqual(sql_value(12), '12')
         self.assertEqual(sql_value(1.5), '1.5')
         self.assertEqual(sql_value("O'Brien"), "'O''Brien'")
-        self.assertEqual(sql_value(r'a\b'), r"E'a\b'")
+        self.assertEqual(sql_value(r'a\b'), r"E'a\\b'")
 
     def test_strategy_render_uses_target_adapter_without_breaking_value_compatibility(self):
         strategy = Rename('legacy', 'modern')

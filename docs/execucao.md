@@ -23,6 +23,8 @@ ssh -L 172.17.0.1:3050:10.0.2.XXX:3050 \
 - Porta `3050` → Firebird V1
 - `3396` (ou a configurada no `.env`) → PostgreSQL V1
 
+O Firebird é opcional. Se o cliente não usa, deixe `FB_V1_HOST` fora do `.env` ou vazio. O Hermes não tenta conectar e o túnel da porta 3050 deixa de ser necessário. Pedir `context.engine('fb_v1')` sem Firebird configurado gera um erro dizendo que a origem não está configurada.
+
 ---
 
 ## Rodando a migração

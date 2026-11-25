@@ -1,0 +1,61 @@
+# Bases fictícias da AcmeEdu: a V1 legada (origem) e a V2 (destino).
+#
+#   docker compose -f AcmeEdu/docker-compose.yml up -d
+#
+# As duas entram na rede hermes-net, a mesma do container project-hermes.
+# Dentro dela respondem em acmeedu-v1:5432 e acmeedu-v2:5432. No host, nas
+# portas ACMEEDU_V1_PORT (padrão 5441) e ACMEEDU_V2_PORT (padrão 5442).
+#
+# Os scripts de banco/ só rodam na primeira subida, com o volume vazio. Para
+# recriar do zero: docker compose -f AcmeEdu/docker-compose.yml down -v
+
+services:
+  acmeedu-v1:
+    # 9.6 para combinar com o pg_dump da imagem do Hermes e com a V1 real.
+    image: postgres:9.6-alpine
+    container_name: acmeedu-v1
+    environment:
+      POSTGRES_DB: acmeedu_v1
+      POSTGRES_USER: acmeedu
+      POSTGRES_PASSWORD: acmeedu
+    ports:
+      - "${ACMEEDU_V1_PORT:-5441}:5432"
+    volumes:
+      - ./banco/v1_esquema.sql:/docker-entrypoint-initdb.d/01_esquema.sql:ro
+      - ./banco/v1_dados.sql:/docker-entrypoint-initdb.d/02_dados.sql:ro
+      - acmeedu-v1-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U acmeedu -d acmeedu_v1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - hermes-net
+
+  acmeedu-v2:
+    image: postgres:16-alpine
+    container_name: acmeedu-v2
+    environment:
+      POSTGRES_DB: acmeedu_v2
+      POSTGRES_USER: acmeedu
+      POSTGRES_PASSWORD: acmeedu
+    ports:
+      - "${ACMEEDU_V2_PORT:-5442}:5432"
+    volumes:
+      - ./banco/v2_esquema.sql:/docker-entrypoint-initdb.d/01_esquema.sql:ro
+      - acmeedu-v2-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U acmeedu -d acmeedu_v2"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - hermes-net
+
+volumes:
+  acmeedu-v1-data:
+  acmeedu-v2-data:
+
+networks:
+  hermes-net:
+    name: hermes-net

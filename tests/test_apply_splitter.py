@@ -363,6 +363,24 @@ class CoreGeneratedSqlTest(unittest.TestCase):
         self.assertEqual([statement.text for statement in statements], expected)
         self.assertEqual(statements[0].line, 6)
 
+    def test_value_ending_in_backslash_does_not_absorb_next_statement(self):
+        adapter = PostgresTargetAdapter()
+        sql = (
+            adapter.insert_statement('public.arquivos', ['id', 'caminho'], [1, 'C:\\pasta\\'])
+            + adapter.insert_statement('public.arquivos', ['id', 'caminho'], [2, 'D:\\'])
+        )
+
+        statements = split(sql)
+
+        self.assertEqual(
+            [statement.text for statement in statements],
+            [
+                "INSERT INTO public.arquivos (id, caminho) VALUES (1, E'C:\\\\pasta\\\\')",
+                "INSERT INTO public.arquivos (id, caminho) VALUES (2, E'D:\\\\')",
+            ],
+        )
+        self.assertEqual([statement.line for statement in statements], [1, 2])
+
 
 if __name__ == '__main__':
     unittest.main()

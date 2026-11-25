@@ -2,6 +2,8 @@
 
 Este documento descreve o que é necessário para adicionar um novo escritório ao sistema. O objetivo é ter um checklist que pode ser seguido do zero até a primeira execução.
 
+O [AcmeEdu](../AcmeEdu/README.md) segue este checklist e roda de ponta a ponta com bases fictícias em Docker. Serve de exemplo completo de `TableMigration`, `MultiTargetMigration`, mapa de referência lido da V2, agrupamento e separação de dados.
+
 ---
 
 ## Estrutura esperada
@@ -62,7 +64,7 @@ PG_V2_NAME=tenant
 PG_V2_USER=tenant
 PG_V2_PASS=tenant
 
-# Firebird V1 (se não usar, manter preenchido com valores fictícios — a conexão é sempre tentada)
+# Firebird V1. Opcional: sem FB_V1_HOST, o Hermes não tenta conectar e a origem fb_v1 não existe.
 FB_V1_HOST=
 FB_V1_PORT=3050
 FB_V1_NAME=
