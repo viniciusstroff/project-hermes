@@ -120,6 +120,38 @@ The core SHALL offer `Clear`, `SuspendConstraints`, `ResumeConstraints` and `Res
 - **WHEN** `SuspendConstraints()` is rendered by the PostgreSQL adapter
 - **THEN** it produces one `ALTER TABLE ... DISABLE TRIGGER ALL` per user table read from the target catalog
 
+### Requirement: Calculated source fields are bound to an adapter
+A field computed at the source SHALL be declared as `NativeField(adapter, expression, alias)`, which is also a field strategy, and the source adapter SHALL refuse a `NativeField` of another adapter before sending any query, including the progress count.
+
+#### Scenario: Matching adapter
+- **WHEN** a `TableMigration` with `NativeField('postgres', "NULLIF(f_cpf, '')", 'f_cpf')` runs on a `postgres` source
+- **THEN** the source query selects `NULLIF(f_cpf, '') AS f_cpf`
+- **AND** the value read under `f_cpf` goes to the target column `f_cpf`
+
+#### Scenario: Other adapter
+- **WHEN** the same migration runs on a `firebird` source
+- **THEN** the migration raises a `ValueError` naming the field and both adapters
+- **AND** no query is sent to the source
+
+#### Scenario: Adapter is required
+- **WHEN** code creates a `NativeField` without the adapter
+- **THEN** the construction raises a `TypeError`
+
+#### Scenario: Dialect-bound expression removed
+- **WHEN** migration code imports `SourceSqlExpression` or `check_source_dialect` from `core.strategies`
+- **THEN** the import fails
+
+### Requirement: Source identifiers are quoted by the adapter
+A relational source adapter SHALL quote the entity and field names of a `SourceQuery` when its database would change or misread them unquoted, reserved words included.
+
+#### Scenario: Reserved word as column name
+- **WHEN** a `SourceQuery` asks a `postgres` source for the field `user`
+- **THEN** the rendered SQL selects `"user"` and not the session user
+
+#### Scenario: Reserved word on Firebird
+- **WHEN** a `SourceQuery` asks a `firebird` source for the field `user`
+- **THEN** the rendered SQL selects `"USER"`, the name Firebird stores for an unquoted column
+
 ## REMOVED Requirements
 
 ### Requirement: Metadata operations are provider-backed
@@ -133,3 +165,7 @@ The core SHALL offer `Clear`, `SuspendConstraints`, `ResumeConstraints` and `Res
 ### Requirement: Firebird source is optional
 **Reason**: With named connections a source exists only when the `.env` declares it, whatever the database. The rule that turned Firebird on by `FB_V1_HOST` has no reason to exist, and the case without Firebird is covered by the scenario "Client without Firebird" of "Base migration exposes adapter-based context".
 **Migration**: Declare `SOURCE_<NAME>_ADAPTER=firebird` with its `SOURCE_<NAME>_*` parameters to use a Firebird source, and request it with `context.source('<name>')`.
+
+### Requirement: Source SQL expressions declare their dialect
+**Reason**: Field strategies no longer inject SQL into a query the client writes. The source adapter builds the query from a `SourceQuery`, and a computed field is a `NativeField` bound to an adapter, which covers non-SQL sources too.
+**Migration**: Replace `SourceSqlExpression(expression, col, dialect='postgres')` with `NativeField('postgres', expression, col)`.

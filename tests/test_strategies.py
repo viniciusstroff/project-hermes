@@ -3,10 +3,10 @@ import unittest
 
 import core.strategies as strategies
 from core.adapters.postgres import PostgresTargetAdapter
-from core.dialects import FirebirdDialect, PostgresDialect
 from core.expand_migration import ExpandMigration
 from core.migration_engine import MigrationEngine
 from core.multi_target_migration import MultiTargetMigration, TargetMigration
+from core.queries import NativeAdapterMismatchError, NativeField, SourceQuery
 from core.sql import SqlLiteral
 from core.strategies import (
     Copy,
@@ -21,12 +21,12 @@ from core.strategies import (
     PhoneClean,
     RegexClean,
     Rename,
-    SourceSqlExpression,
     Transform,
     Truncate,
     Upper,
 )
 from core.table_migration import TableMigration
+from tests.source_fakes import FakeSqlSource
 
 TARGET = PostgresTargetAdapter()
 
@@ -35,38 +35,10 @@ def render(strategy, row):
     return TARGET.serialize_value(strategy.raw_value(row))
 
 
-class FakeSource:
-    """Origem com dialeto, que registra cada consulta e devolve linhas fixas."""
-
-    def __init__(self, dialect, rows=()):
-        self.dialect = dialect
-        self.rows = list(rows)
-        self.queries = []
-
-    def limit_clause(self, limit):
-        return self.dialect.limit_clause(limit)
-
-    def scalar(self, sql):
-        self.queries.append(sql)
-        return len(self.rows)
-
-    def cursor(self):
-        source = self
-
-        class Cursor:
-            def execute(self, sql):
-                source.queries.append(sql)
-
-            def __iter__(self):
-                return iter(source.rows)
-
-        return Cursor()
-
-
 def run_table(fields, source):
     writes = []
     TableMigration(
-        source_sql='SELECT {fields} FROM t {limit}',
+        source=SourceQuery('t'),
         target='public.t',
         fields=fields,
     ).run(MigrationEngine(source, TARGET, writes.append))
@@ -78,26 +50,28 @@ class StrategiesWithoutSqlTest(unittest.TestCase):
         self.assertFalse(hasattr(strategies, 'sql_value'))
         self.assertFalse(hasattr(strategies, '_POSTGRES_DIALECT'))
         self.assertFalse(hasattr(strategies, 'SqlExpression'))
+        self.assertFalse(hasattr(strategies, 'SourceSqlExpression'))
+        self.assertFalse(hasattr(strategies, 'check_source_dialect'))
 
     def test_core_strategies_have_no_value_or_render(self):
         examples = [Copy('a'), Rename('a', 'b'), Fixed('a', 1), Lookup('a', {}), Transform('a', lambda v, r: v),
                     RegexClean('a', 'x'), CpfClean('a'), PhoneClean('a'), DateConvert('a'), EmailExtract('a'),
                     NullIfBlank('a'), Truncate('a', 1), Upper('a'), Lower('a'), Default('a', 1),
-                    SourceSqlExpression('a', 'a', dialect='postgres')]
+                    NativeField('postgres', 'a', 'a')]
         for strategy in examples:
             with self.subTest(strategy=type(strategy).__name__):
                 self.assertFalse(hasattr(strategy, 'value'))
                 self.assertFalse(hasattr(strategy, 'render'))
 
     def test_cleaned_value_is_serialized_by_the_target_adapter(self):
-        writes = run_table([CpfClean('f_cpf')], FakeSource(PostgresDialect(), [{'f_cpf': '123.456.789-00'}]))
+        writes = run_table([CpfClean('f_cpf')], FakeSqlSource('postgres', [{'f_cpf': '123.456.789-00'}]))
 
         self.assertEqual(writes, ["INSERT INTO public.t (f_cpf) VALUES ('12345678900');\n"])
 
     def test_explicit_target_sql(self):
         writes = run_table(
             [Copy('f_id'), Fixed('f_created_at', SqlLiteral('CURRENT_TIMESTAMP'))],
-            FakeSource(PostgresDialect(), [{'f_id': 1}]),
+            FakeSqlSource('postgres', [{'f_id': 1}]),
         )
 
         self.assertEqual(writes, ['INSERT INTO public.t (f_id, f_created_at) VALUES (1, CURRENT_TIMESTAMP);\n'])
@@ -114,9 +88,9 @@ class StrategiesWithoutSqlTest(unittest.TestCase):
                 return '1'
 
         builders = [
-            lambda field: TableMigration('SELECT {fields} FROM t', 'public.t', [field]),
-            lambda field: MultiTargetMigration('SELECT {fields} FROM t', [TargetMigration('public.t', [field])]),
-            lambda field: ExpandMigration('SELECT {fields} FROM t', 'public.t', [Copy('f_id')], 'f_kind', [1],
+            lambda field: TableMigration(SourceQuery('t'), 'public.t', [field]),
+            lambda field: MultiTargetMigration(SourceQuery('t'), [TargetMigration('public.t', [field])]),
+            lambda field: ExpandMigration(SourceQuery('t'), 'public.t', [Copy('f_id')], 'f_kind', [1],
                                           first_fields=[field]),
         ]
         for build in builders:
@@ -243,14 +217,14 @@ class PortableStrategiesTest(unittest.TestCase):
     def test_same_migration_on_postgres_and_firebird_sources(self):
         fields = [Copy('f_id'), NullIfBlank('f_cpf'), Truncate('f_name', 4), Upper('f_uf'), Default('f_type', 1)]
         row = {'f_id': 1, 'f_cpf': ' ', 'f_name': 'Mariana', 'f_uf': 'sp', 'f_type': None}
-        postgres = FakeSource(PostgresDialect(), [row])
-        firebird = FakeSource(FirebirdDialect(), [row])
+        postgres = FakeSqlSource('postgres', [row])
+        firebird = FakeSqlSource('firebird', [row])
 
         postgres_writes = run_table(fields, postgres)
         firebird_writes = run_table(fields, firebird)
 
-        self.assertEqual(postgres.queries[-1], 'SELECT f_id, f_cpf, f_name, f_uf, f_type FROM t ')
-        self.assertEqual(firebird.queries[-1], 'SELECT f_id, f_cpf, f_name, f_uf, f_type FROM t ')
+        self.assertEqual(postgres.queries[-1], 'SELECT f_id, f_cpf, f_name, f_uf, f_type FROM t')
+        self.assertEqual(firebird.queries[-1], 'SELECT f_id, f_cpf, f_name, f_uf, f_type FROM t')
         self.assertEqual(postgres_writes, firebird_writes)
         self.assertEqual(
             postgres_writes,
@@ -258,42 +232,41 @@ class PortableStrategiesTest(unittest.TestCase):
         )
 
 
-class SourceSqlExpressionTest(unittest.TestCase):
-    def test_matching_dialect_projects_the_expression(self):
-        expression = SourceSqlExpression("NULLIF(f_cpf, '')", 'f_cpf', dialect='postgres')
-        source = FakeSource(PostgresDialect(), [{'f_cpf': None}])
+class NativeFieldTest(unittest.TestCase):
+    def test_matching_adapter_projects_the_expression(self):
+        field = NativeField('postgres', "NULLIF(f_cpf, '')", 'f_cpf')
+        source = FakeSqlSource('postgres', [{'f_cpf': None}])
 
-        writes = run_table([expression], source)
+        writes = run_table([field], source)
 
-        self.assertEqual(expression.source_dialect, 'postgres')
-        self.assertEqual(source.queries[-1], "SELECT NULLIF(f_cpf, '') AS f_cpf FROM t ")
+        self.assertEqual(source.queries[-1], "SELECT NULLIF(f_cpf, '') AS f_cpf FROM t")
         self.assertEqual(writes, ['INSERT INTO public.t (f_cpf) VALUES (NULL);\n'])
 
-    def test_different_dialect_fails_before_any_query(self):
+    def test_other_adapter_fails_before_any_query(self):
         builders = {
-            'table': lambda field: TableMigration('SELECT {fields} FROM t', 'public.t', [field]),
-            'expand': lambda field: ExpandMigration('SELECT {fields} FROM t', 'public.t', [Copy('f_id')], 'f_kind',
+            'table': lambda field: TableMigration(SourceQuery('t'), 'public.t', [field]),
+            'expand': lambda field: ExpandMigration(SourceQuery('t'), 'public.t', [Copy('f_id')], 'f_kind',
                                                     [1], first_fields=[field]),
-            'multi': lambda field: MultiTargetMigration('SELECT {fields} FROM t',
-                                                        [TargetMigration('public.t', [field])]),
+            'multi': lambda field: MultiTargetMigration(SourceQuery('t'), [TargetMigration('public.t', [field])]),
         }
         for name, build in builders.items():
             with self.subTest(migration=name):
-                source = FakeSource(FirebirdDialect(), [{'f_cpf': '1'}])
-                migration = build(SourceSqlExpression("NULLIF(f_cpf, '')", 'f_cpf', dialect='postgres'))
+                source = FakeSqlSource('firebird', [{'f_cpf': '1'}])
+                migration = build(NativeField('postgres', "NULLIF(f_cpf, '')", 'f_cpf'))
 
-                with self.assertRaises(ValueError) as raised:
+                with self.assertRaises(NativeAdapterMismatchError) as raised:
                     migration.run(MigrationEngine(source, TARGET, lambda sql: None))
 
                 message = str(raised.exception)
                 self.assertIn("'f_cpf'", message)
                 self.assertIn("'postgres'", message)
                 self.assertIn("'firebird'", message)
+                self.assertIsInstance(raised.exception, ValueError)
                 self.assertEqual(source.queries, [])
 
-    def test_dialect_is_required(self):
+    def test_adapter_is_required(self):
         with self.assertRaises(TypeError):
-            SourceSqlExpression("NULLIF(f_cpf, '')", 'f_cpf')
+            NativeField("NULLIF(f_cpf, '')", 'f_cpf')
 
 
 if __name__ == '__main__':

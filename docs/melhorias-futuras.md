@@ -406,7 +406,7 @@ Ficou de fora: chave composta, que hoje se resolve concatenando no `query`. A ga
 Feito pela change `revisar-estrategias-dependentes-de-dialeto`:
 
 - as strategies devolvem só valores Python pelo `raw_value()`. Saíram `value()`, `render()` e a função `sql_value()` de `core/strategies.py`. O adapter de destino passou a ser o único ponto de serialização;
-- o `SqlExpression` virou `SourceSqlExpression`, com o dialeto da origem obrigatório e conferido antes de qualquer consulta. Os dialetos ganharam nome (`postgres`, `firebird`);
+- o `SqlExpression` virou `SourceSqlExpression`, com o dialeto da origem obrigatório e conferido antes de qualquer consulta (depois trocado pelo `NativeField`, na `desacoplar-migracao-de-banco-e-versao`). Os dialetos ganharam nome (`postgres`, `firebird`);
 - o `RegexClean` deixou de montar `E'...'` à mão e de remover a barra invertida. Ganhou também `v2_name`;
 - o `DateConvert` devolve `datetime.date` ou `datetime.datetime` e perdeu o `to_fmt`;
 - entraram as strategies portáveis `NullIfBlank`, `Truncate`, `Upper`, `Lower` e `Default`. O `regexp_replace` é coberto pelo `RegexClean`;

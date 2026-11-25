@@ -1,29 +1,13 @@
 from typing import Any
 
+from core.adapters.sql_source import SqlSourceAdapter
 from core.dialects import FirebirdDialect
 
 
-class FirebirdCursorAdapter:
-    """Adapt a Firebird cursor so rows are yielded as lower-case-key dictionaries."""
+class FirebirdSourceAdapter(SqlSourceAdapter):
+    """Firebird source. Rows come as dictionaries with lower-case column names."""
 
-    def __init__(self, cursor):
-        self.cursor = cursor
-        self.columns = []
-
-    def execute(self, sql: str) -> None:
-        self.cursor.execute(sql)
-        self.columns = [col[0].lower() for col in self.cursor.description]
-
-    def __iter__(self):
-        for row in self.cursor:
-            if isinstance(row, dict):
-                yield row
-            else:
-                yield dict(zip(self.columns, row))
-
-
-class FirebirdSourceAdapter:
-    """Firebird source adapter preserving existing row adaptation behavior."""
+    name = 'firebird'
 
     def __init__(self, connection, *, dialect=None):
         self.connection = connection
@@ -47,26 +31,29 @@ class FirebirdSourceAdapter:
             options['charset'] = config.get('charset')
         return cls(firebirdsql.connect(**options))
 
-    def cursor(self):
-        return FirebirdCursorAdapter(self.connection.cursor())
-
-    def scalar(self, sql: str) -> Any:
-        cur = self.connection.cursor()
-        try:
-            cur.execute(sql)
-            row = cur.fetchone()
-        finally:
-            if hasattr(cur, 'close'):
-                cur.close()
-
-        if row is None:
-            return None
-        if isinstance(row, dict):
-            return next(iter(row.values()))
-        return row[0]
-
-    def limit_clause(self, limit: str) -> str:
-        return self.dialect.limit_clause(limit)
+    def limit_suffix(self, limit: int) -> str:
+        # ROWS exists since Firebird 2.0; LIMIT does not exist.
+        return f'ROWS {limit}'
 
     def close(self) -> None:
         self.connection.close()
+
+    def _rows(self, sql: str):
+        cursor = self.connection.cursor()
+        try:
+            cursor.execute(sql)
+            # Firebird returns unquoted names in upper case.
+            columns = [description[0].lower() for description in cursor.description]
+            for row in cursor:
+                yield row if isinstance(row, dict) else dict(zip(columns, row))
+        finally:
+            cursor.close()
+
+    def _scalar(self, sql: str) -> Any:
+        cursor = self.connection.cursor()
+        try:
+            cursor.execute(sql)
+            row = cursor.fetchone()
+        finally:
+            cursor.close()
+        return None if row is None else row[0]

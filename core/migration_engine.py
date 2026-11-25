@@ -1,4 +1,5 @@
 from core.dialects.base import UnsupportedValueError
+from core.queries import UnsupportedQueryError, with_limit
 from core.sql import SqlLiteral
 
 DEFAULT_PROGRESS_EVERY = 1000
@@ -28,7 +29,7 @@ class MigrationEngine:
         source_adapter,
         target_adapter,
         writer,
-        limit: str = '',
+        limit: int | None = None,
         progress_fn=None,
         progress_every: int = DEFAULT_PROGRESS_EVERY,
         warn_fn=None,
@@ -36,24 +37,36 @@ class MigrationEngine:
         self.source_adapter = source_adapter
         self.target_adapter = target_adapter
         self.writer = writer
+        # Debug mode: the context applies this row limit to every query.
         self.limit = limit
         self.progress_fn = progress_fn
         self.progress_every = progress_every if progress_every and progress_every > 0 else DEFAULT_PROGRESS_EVERY
         # warn_fn(key, message) logs a message once per key.
         self.warn_fn = warn_fn
 
-    @property
-    def limit_clause(self) -> str:
-        return self.source_adapter.limit_clause(self.limit)
+    def read(self, query):
+        """Rows of a SourceQuery or NativeQuery, with the debug limit applied."""
+        return self.source_adapter.read(with_limit(query, self.limit))
 
-    def v1_cursor(self):
-        return self.source_adapter.cursor()
+    def count(self, query):
+        return self.source_adapter.count(with_limit(query, self.limit))
+
+    def total_rows(self, query):
+        """Row count for the progress, or None when the source cannot count.
+
+        A query the adapter refuses is not a counting problem: the error goes up
+        before anything is read.
+        """
+        try:
+            total = self.count(query)
+        except UnsupportedQueryError:
+            raise
+        except Exception:
+            return None
+        return None if total is None else int(total)
 
     def write_sql(self, sql: str):
         self.writer(sql)
-
-    def scalar(self, sql: str):
-        return self.source_adapter.scalar(sql)
 
     def insert_statement(self, table: str, columns, values) -> str:
         return self.target_adapter.insert_statement(table, columns, values)

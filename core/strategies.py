@@ -6,12 +6,13 @@ da V1 e qual valor Python inserir na V2. Nenhuma estratégia gera SQL: quem
 serializa o valor é o adapter de destino, chamado pela migração.
 
 Interface comum:
-  - select_columns   → list[str]  colunas a incluir no SELECT (Fixed retorna [])
+  - select_columns   → list       campos a ler da origem (Fixed retorna [])
   - insert_col       → str        nome da coluna no INSERT
   - raw_value(row)   → any        valor Python que vai para o destino
 
-SQL explícito continua possível em dois pontos, sempre preso a um banco:
-  - SourceSqlExpression, que roda na origem e declara o dialeto;
+Código de um banco específico continua possível em dois pontos, sempre preso
+a um adapter:
+  - NativeField (core.queries), campo calculado na origem na linguagem dela;
   - um raw_value que devolve SqlLiteral, que o adapter de destino copia sem mexer.
 """
 from abc import ABC, abstractmethod
@@ -48,20 +49,6 @@ def validate_field_strategies(fields):
         missing = [attr for attr in REQUIRED_FIELD_ATTRIBUTES if not hasattr(field, attr)]
         if missing:
             raise TypeError(f'Invalid field strategy {field!r}: missing {", ".join(missing)}')
-
-
-def check_source_dialect(fields, source_adapter):
-    """Confere o dialeto declarado pelas expressões de origem antes de consultar a origem."""
-
-    dialect = getattr(source_adapter, 'dialect', None)
-    found = getattr(dialect, 'name', None)
-    for field in fields:
-        expected = getattr(field, 'source_dialect', None)
-        if expected is not None and expected != found:
-            raise ValueError(
-                f"Field '{field.insert_col}' uses a source SQL expression written for the "
-                f"'{expected}' dialect, but the source adapter dialect is '{found}'"
-            )
 
 
 class Copy(FieldStrategy):
@@ -120,28 +107,6 @@ class Fixed(FieldStrategy):
 
     def raw_value(self, row):
         return self._value
-
-
-class SourceSqlExpression(FieldStrategy):
-    """Expressão SQL no SELECT da origem, escrita para um dialeto declarado.
-    Ex: SourceSqlExpression("regexp_replace(f_doc, '[^0-9]', '', 'g')", 'f_doc', dialect='postgres')
-    A migração confere o dialeto com o adapter de origem antes de consultar."""
-
-    def __init__(self, expression: str, col: str, *, dialect: str):
-        self.expression = expression
-        self.col = col
-        self.source_dialect = dialect
-
-    @property
-    def select_columns(self):
-        return [f'{self.expression} AS {self.col}']
-
-    @property
-    def insert_col(self):
-        return self.col
-
-    def raw_value(self, row):
-        return row[self.col]
 
 
 class Lookup(FieldStrategy):

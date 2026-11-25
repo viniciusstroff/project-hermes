@@ -15,6 +15,7 @@ from core.migration_engine import MigrationEngine
 from core.expand_migration import ExpandMigration
 from core.table_migration import TableMigration
 from core.multi_target_migration import MultiTargetMigration, TargetMigration
+from core.queries import SourceQuery
 from core.strategies import Copy, Transform
 
 
@@ -48,6 +49,9 @@ class FakeCursor:
     def __iter__(self):
         return iter(self.rows)
 
+    def close(self):
+        pass
+
 
 class FakeConnection:
     def __init__(self, rows):
@@ -79,7 +83,7 @@ class TableMigrationProgressTest(unittest.TestCase):
     def test_rejects_invalid_field_strategy(self):
         with self.assertRaises(TypeError):
             TableMigration(
-                source_sql='SELECT {fields} FROM public.source {limit}',
+                source=SourceQuery('public.source'),
                 target='public.target',
                 fields=[object()],
             )
@@ -98,7 +102,7 @@ class TableMigrationProgressTest(unittest.TestCase):
         )
 
         TableMigration(
-            source_sql='SELECT {fields} FROM public.source {limit}',
+            source=SourceQuery('public.source'),
             target='public.target',
             fields=[FakeField('f_id')],
         ).run(engine)
@@ -115,11 +119,11 @@ class TableMigrationProgressTest(unittest.TestCase):
         self.assertEqual(len(writes), 5)
         self.assertEqual(
             conn.cursor_calls[0].executed_sql,
-            'SELECT COUNT(*) FROM (SELECT f_id FROM public.source ) progress_src',
+            'SELECT COUNT(*) FROM (SELECT f_id FROM public.source) progress_src',
         )
         self.assertEqual(
             conn.cursor_calls[1].executed_sql,
-            'SELECT f_id FROM public.source ',
+            'SELECT f_id FROM public.source',
         )
 
 
@@ -139,7 +143,7 @@ class ExpandMigrationTest(unittest.TestCase):
         progress = []
 
         ExpandMigration(
-            source_sql='SELECT {fields} FROM public.acme_schedule_rules_demo {limit}',
+            source=SourceQuery('public.acme_schedule_rules_demo'),
             target='public.acme_schedule_rules_demo',
             fields=[
                 Copy('f_plan_type'),
@@ -169,11 +173,11 @@ class ExpandMigrationTest(unittest.TestCase):
 
         self.assertEqual(
             conn.cursor_calls[0].executed_sql,
-            'SELECT COUNT(*) FROM (SELECT f_id, f_plan_type, f_days, f_requires_approval, f_maximum_items, f_status FROM public.acme_schedule_rules_demo ) progress_src',
+            'SELECT COUNT(*) FROM (SELECT f_id, f_plan_type, f_days, f_requires_approval, f_maximum_items, f_status FROM public.acme_schedule_rules_demo) progress_src',
         )
         self.assertEqual(
             conn.cursor_calls[1].executed_sql,
-            'SELECT f_id, f_plan_type, f_days, f_requires_approval, f_maximum_items, f_status FROM public.acme_schedule_rules_demo ',
+            'SELECT f_id, f_plan_type, f_days, f_requires_approval, f_maximum_items, f_status FROM public.acme_schedule_rules_demo',
         )
         self.assertEqual(
             writes,
@@ -204,7 +208,7 @@ class ExpandMigrationTest(unittest.TestCase):
         )
 
         TableMigration(
-            source_sql='SELECT {fields} FROM public.source {limit}',
+            source=SourceQuery('public.source'),
             target='public.target',
             fields=[FakeField('f_id')],
         ).run(engine)
@@ -215,18 +219,18 @@ class ExpandMigrationTest(unittest.TestCase):
         conn = FakeConnection([{'f_id': 1}])
 
         TableMigration(
-            source_sql='SELECT {fields} FROM public.source {limit}',
+            source=SourceQuery('public.source'),
             target='public.target',
             fields=[FakeField('f_id'), FakeField('f_id')],
         ).run(make_engine(conn, lambda sql: None))
 
         self.assertEqual(
             conn.cursor_calls[0].executed_sql,
-            'SELECT COUNT(*) FROM (SELECT f_id FROM public.source ) progress_src',
+            'SELECT COUNT(*) FROM (SELECT f_id FROM public.source) progress_src',
         )
         self.assertEqual(
             conn.cursor_calls[1].executed_sql,
-            'SELECT f_id FROM public.source ',
+            'SELECT f_id FROM public.source',
         )
 
 
@@ -244,7 +248,7 @@ class MultiTargetMigrationTest(unittest.TestCase):
         progress = []
 
         MultiTargetMigration(
-            source_sql='SELECT {fields} FROM public.acme_messages_demo {limit}',
+            source=SourceQuery('public.acme_messages_demo'),
             label='public.acme_messages_demo',
             targets=[
                 TargetMigration(
@@ -278,11 +282,11 @@ class MultiTargetMigrationTest(unittest.TestCase):
 
         self.assertEqual(
             conn.cursor_calls[0].executed_sql,
-            'SELECT COUNT(*) FROM (SELECT f_id, f_description, f_status, f_order_id FROM public.acme_messages_demo ) progress_src',
+            'SELECT COUNT(*) FROM (SELECT f_id, f_description, f_status, f_order_id FROM public.acme_messages_demo) progress_src',
         )
         self.assertEqual(
             conn.cursor_calls[1].executed_sql,
-            'SELECT f_id, f_description, f_status, f_order_id FROM public.acme_messages_demo ',
+            'SELECT f_id, f_description, f_status, f_order_id FROM public.acme_messages_demo',
         )
         self.assertEqual(
             writes,

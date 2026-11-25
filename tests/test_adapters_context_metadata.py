@@ -40,6 +40,7 @@ sys.modules.setdefault('dotenv', dotenv)
 from core.adapters import PostgresSourceAdapter, PostgresTargetAdapter
 from core.context import DefaultMigrationContextFactory, SourceNotConfiguredError
 from core.metadata import PostgresMetadataProvider
+from core.queries import SourceQuery
 from core.references import ReferenceMap, TargetReadClosedError
 from core.runner import MigrationRunner
 from core.sql import SqlLiteral
@@ -146,19 +147,27 @@ class AdapterContextMetadataTest(unittest.TestCase):
             self.assertFalse(hasattr(context, 'engine'))
             context.close()
 
-    def test_postgres_source_adapter_owns_cursor_and_scalar_behavior(self):
+    def test_postgres_source_adapter_streams_with_named_cursor_and_counts(self):
         conn = FakeConnection(rows=[{'count': 7}])
         adapter = PostgresSourceAdapter(conn, cursor_factory=object, cursor_prefix='test', itersize=123)
+        query = SourceQuery('public.source', fields=['f_id'], where={'f_active': True, 'f_deleted': None},
+                            order_by='f_id', limit=5)
+        select = 'SELECT f_id FROM public.source WHERE f_active = true AND f_deleted IS NULL ORDER BY f_id LIMIT 5'
 
-        cursor = adapter.cursor()
-        scalar = adapter.scalar('SELECT COUNT(*) FROM source')
+        total = adapter.count(query)
+        rows = list(adapter.read(query))
 
-        self.assertTrue(conn.cursor_calls[0][0][0].startswith('test_'))
-        self.assertIs(conn.cursor_calls[0][1]['cursor_factory'], object)
-        self.assertEqual(cursor.itersize, 123)
-        self.assertEqual(conn.cursor_calls[1][2].executed_sql, 'SELECT COUNT(*) FROM source')
-        self.assertTrue(conn.cursor_calls[1][2].closed)
-        self.assertEqual(scalar, 7)
+        count_cursor = conn.cursor_calls[0][2]
+        read_args, read_kwargs, read_cursor = conn.cursor_calls[1]
+        self.assertEqual(total, 7)
+        self.assertEqual(count_cursor.executed_sql, f'SELECT COUNT(*) FROM ({select}) progress_src')
+        self.assertTrue(count_cursor.closed)
+        self.assertTrue(read_args[0].startswith('test_'))
+        self.assertIs(read_kwargs['cursor_factory'], object)
+        self.assertEqual(read_cursor.itersize, 123)
+        self.assertEqual(read_cursor.executed_sql, select)
+        self.assertTrue(read_cursor.closed)
+        self.assertEqual(rows, [{'count': 7}])
 
     def test_target_adapter_preserves_rendered_sql_literals(self):
         adapter = PostgresTargetAdapter()

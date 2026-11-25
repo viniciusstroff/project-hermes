@@ -1,12 +1,17 @@
 from core.migration_engine import MigrationEngine
-from core.strategies import check_source_dialect, validate_field_strategies
+from core.queries import check_source, with_default_fields
+from core.strategies import validate_field_strategies
 
 
 class TableMigration:
-    """Declaração de uma migração de tabela — descreve O QUÊ, não O COMO."""
+    """Declaração de uma migração de tabela — descreve O QUÊ, não O COMO.
 
-    def __init__(self, source_sql: str, target: str, fields: list):
-        self.source_sql = source_sql
+    ``source`` é um ``SourceQuery`` ou um ``NativeQuery``. Um ``SourceQuery``
+    sem campos lê os campos que as estratégias pedem.
+    """
+
+    def __init__(self, source, target: str, fields: list):
+        self.source = check_source(source)
         self.target = target
         self.fields = fields
         self._validate_fields(fields)
@@ -21,29 +26,14 @@ class TableMigration:
 
     def source_select_columns(self):
         select_cols = []
-        for field in self.fields:
+        for field in self.source_fields():
             for col in field.select_columns:
                 if col not in select_cols:
                     select_cols.append(col)
         return select_cols
 
-    def build_source_sql(self, engine: MigrationEngine):
-        check_source_dialect(self.source_fields(), engine.source_adapter)
-        select_cols = self.source_select_columns()
-        return self.source_sql.format(
-            fields=', '.join(select_cols) if select_cols else '*',
-            limit=engine.limit_clause,
-        )
-
-    def count_sql(self, engine: MigrationEngine):
-        return f'SELECT COUNT(*) FROM ({self.build_source_sql(engine)}) progress_src'
-
-    def total_rows(self, engine: MigrationEngine):
-        try:
-            total = engine.scalar(self.count_sql(engine))
-        except Exception:
-            return None
-        return int(total) if total is not None else 0
+    def source_query(self):
+        return with_default_fields(self.source, self.source_select_columns())
 
     def insert_sql(self, row: dict, engine: MigrationEngine, fields: list = None):
         active_fields = fields or self.fields
@@ -63,15 +53,12 @@ class TableMigration:
         engine.write_sql(self.insert_sql(row, engine, fields))
 
     def run(self, engine: MigrationEngine):
-        sql = self.build_source_sql(engine)
-        total = self.total_rows(engine)
+        query = self.source_query()
+        total = engine.total_rows(query)
         engine.report_progress(self.target, 0, total)
 
-        cur = engine.v1_cursor()
-        cur.execute(sql)
-
         processed = 0
-        for row in cur:
+        for row in engine.read(query):
             self.run_row(row, engine)
             processed += 1
             if processed % engine.progress_every == 0:

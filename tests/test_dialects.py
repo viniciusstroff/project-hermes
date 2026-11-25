@@ -3,7 +3,7 @@ import unittest
 import uuid
 from decimal import Decimal
 
-from core.dialects import PostgresDialect, UnsupportedValueError
+from core.dialects import FirebirdDialect, PostgresDialect, UnsupportedValueError
 
 
 class PostgresStringSerializationTest(unittest.TestCase):
@@ -110,6 +110,25 @@ class PostgresIdentifierTest(unittest.TestCase):
         self.assertEqual(quote('Tipo'), '"Tipo"')
         self.assertEqual(quote('public.Estados'), 'public."Estados"')
         self.assertEqual(quote('nome com espaço'), '"nome com espaço"')
+        self.assertEqual(quote('a"b'), '"a""b"')
+
+    def test_quotes_reserved_words(self):
+        quote = PostgresDialect().quote_identifier
+        self.assertEqual(quote('user'), '"user"')
+        self.assertEqual(quote('public.order'), 'public."order"')
+        self.assertEqual(quote('current_date'), '"current_date"')
+        self.assertEqual(quote('username'), 'username')
+
+
+class FirebirdIdentifierTest(unittest.TestCase):
+    def test_keeps_simple_names_and_quotes_reserved_words_in_upper_case(self):
+        quote = FirebirdDialect().quote_identifier
+        self.assertEqual(quote('f_id'), 'f_id')
+        self.assertEqual(quote('CLIENTES'), 'CLIENTES')
+        self.assertEqual(quote('rdb$relation_name'), 'rdb$relation_name')
+        self.assertEqual(quote('user'), '"USER"')
+        self.assertEqual(quote('Date'), '"DATE"')
+        self.assertEqual(quote('nome completo'), '"nome completo"')
         self.assertEqual(quote('a"b'), '"a""b"')
 
 

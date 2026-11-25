@@ -85,6 +85,7 @@ _clientdir = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.dirname(_clientdir))
 
 from core.base_migration import BaseMigration
+from core.queries import NativeQuery, SourceQuery
 from core.references import ReferenceMap
 from core.table_migration import TableMigration
 from core.strategies import Copy, Rename, Fixed, Lookup, RegexClean, DateConvert, EmailExtract, NullIfBlank, Truncate, Default
@@ -159,8 +160,19 @@ class Migracao(BaseMigration):
 
     def insert_tabela_a(self):
         TableMigration(
-            source_sql='SELECT {fields} FROM public.tabela_a {limit}',
+            source=SourceQuery('public.tabela_a', order_by='f_id'),
             target='public.tabela_a',
+            fields=[
+                Copy('f_id'),
+                Copy('f_name'),
+            ],
+        ).run(self.context.source('v1'))
+
+    def insert_tabela_b(self):
+        # Junção não cabe num SourceQuery: a consulta vai inteira, presa ao adapter.
+        TableMigration(
+            source=NativeQuery('postgres', 'SELECT b.f_id, a.f_name FROM public.tabela_b b JOIN public.tabela_a a ON a.f_id = b.f_a'),
+            target='public.tabela_b',
             fields=[
                 Copy('f_id'),
                 Copy('f_name'),
@@ -212,7 +224,7 @@ Consulte [estrategias.md](estrategias.md) para o catálogo completo de estratég
 python3 Migracao.py NomeAcme --debug 100
 ```
 
-Isso limita cada `SELECT` a 100 linhas. Verifique:
+Isso limita cada consulta da origem a 100 linhas, inclusive as `NativeQuery`. Verifique:
 
 - Nenhum erro de Python na saída do terminal.
 - Os arquivos em `runs/NomeAcme/<timestamp>/sql/` foram gerados.

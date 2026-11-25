@@ -1,34 +1,29 @@
 from typing import Any, Iterator, Mapping, Protocol
 
-from core.dialects import Dialect
-
-
-class SourceCursor(Protocol):
-    """Cursor shape consumed by migration classes."""
-
-    def execute(self, sql: str) -> None:
-        ...
-
-    def __iter__(self) -> Iterator[Mapping[str, Any]]:
-        ...
-
 
 class SourceAdapter(Protocol):
-    """Contract for reading rows from a migration source."""
+    """Contract for reading rows from a migration source.
 
-    dialect: Dialect
-    """SQL dialect of the source, checked against source SQL expressions."""
+    ``query`` is a ``SourceQuery`` or a ``NativeQuery`` from ``core.queries``.
+    The adapter refuses a native query or field written for another adapter,
+    and a query it cannot express, with ``UnsupportedQueryError`` before
+    reading anything.
+    """
 
-    def cursor(self) -> SourceCursor:
-        """Return a cursor that yields mapping-like rows."""
+    name: str
+    """Adapter name, compared with the adapter declared by native queries and fields."""
+
+    @classmethod
+    def connect(cls, config) -> 'SourceAdapter':
+        """Open the source from a ``ConnectionConfig``, importing the driver only here."""
         ...
 
-    def scalar(self, sql: str) -> Any:
-        """Execute a query and return the first column from the first row."""
+    def read(self, query) -> Iterator[Mapping[str, Any]]:
+        """Yield one mapping per row, keyed by field name."""
         ...
 
-    def limit_clause(self, limit: str) -> str:
-        """Render the debug limit syntax expected by this source."""
+    def count(self, query) -> int | None:
+        """Number of rows the query returns, for the progress, or None if unknown."""
         ...
 
     def close(self) -> None:

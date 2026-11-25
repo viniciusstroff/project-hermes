@@ -6,6 +6,7 @@ _clientdir = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.dirname(_clientdir))
 
 from core.base_migration import BaseMigration
+from core.queries import SourceQuery
 from core.references import ReferenceMap
 from core.table_migration import TableMigration
 from core.strategies import Copy, EmailExtract, Fixed, Lookup, Rename
@@ -83,7 +84,7 @@ class Migracao(BaseMigration):
         self.print_comment('INSERTS NA TABELA ACME_CUSTOMERS_DEMO')
 
         TableMigration(
-            source_sql='SELECT {fields} FROM public.acme_v1_customers {limit}',
+            source=SourceQuery('public.acme_v1_customers'),
             target='public.acme_customers_demo',
             fields=[
                 Copy('f_id'),
@@ -99,7 +100,7 @@ class Migracao(BaseMigration):
         self.print_comment('INSERTS NA TABELA ACME_ORDERS_DEMO')
 
         TableMigration(
-            source_sql='SELECT {fields} FROM public.acme_v1_orders {limit}',
+            source=SourceQuery('public.acme_v1_orders'),
             target='public.acme_orders_demo',
             fields=[
                 Copy('f_id'),

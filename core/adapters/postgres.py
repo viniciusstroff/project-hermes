@@ -1,6 +1,7 @@
 import itertools
 from typing import Any, Sequence
 
+from core.adapters.sql_source import SqlSourceAdapter
 from core.dialects import PostgresDialect
 from core.sql import SqlLiteral
 
@@ -22,8 +23,10 @@ def _connect(config):
     )
 
 
-class PostgresSourceAdapter:
-    """PostgreSQL source adapter preserving named cursor streaming behavior."""
+class PostgresSourceAdapter(SqlSourceAdapter):
+    """PostgreSQL source. Rows stream through a named (server-side) cursor."""
+
+    name = 'postgres'
 
     def __init__(
         self,
@@ -49,34 +52,40 @@ class PostgresSourceAdapter:
     def connect(cls, config):
         return cls(_connect(config))
 
-    def cursor(self):
-        cur = self.connection.cursor(
-            f'{self.cursor_prefix}_{next(_cursor_counter)}',
-            cursor_factory=self.cursor_factory,
-        )
-        cur.itersize = self.itersize
-        return cur
-
-    def scalar(self, sql: str) -> Any:
-        cur = self.connection.cursor()
-        try:
-            cur.execute(sql)
-            row = cur.fetchone()
-        finally:
-            if hasattr(cur, 'close'):
-                cur.close()
-
-        if row is None:
-            return None
-        if isinstance(row, dict):
-            return next(iter(row.values()))
-        return row[0]
-
-    def limit_clause(self, limit: str) -> str:
-        return self.dialect.limit_clause(limit)
+    def limit_suffix(self, limit: int) -> str:
+        return f'LIMIT {limit}'
 
     def close(self) -> None:
         self.connection.close()
+
+    def _rows(self, sql: str):
+        cursor = self.connection.cursor(
+            f'{self.cursor_prefix}_{next(_cursor_counter)}',
+            cursor_factory=self.cursor_factory,
+        )
+        cursor.itersize = self.itersize
+        try:
+            cursor.execute(sql)
+            yield from cursor
+        finally:
+            cursor.close()
+
+    def _scalar(self, sql: str) -> Any:
+        return _first_column(self.connection, sql)
+
+
+def _first_column(connection, sql: str) -> Any:
+    cursor = connection.cursor()
+    try:
+        cursor.execute(sql)
+        row = cursor.fetchone()
+    finally:
+        cursor.close()
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        return next(iter(row.values()))
+    return row[0]
 
 
 class PostgresTargetAdapter:

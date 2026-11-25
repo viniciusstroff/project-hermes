@@ -11,8 +11,9 @@ sys.modules.setdefault('psycopg2.extras', psycopg2_extras)
 
 from core.adapters import FirebirdSourceAdapter, PostgresTargetAdapter
 from core.migration_engine import MigrationEngine
+from core.queries import SourceQuery
 from core.table_migration import TableMigration
-from core.strategies import Copy, CpfClean, PhoneClean, SourceSqlExpression
+from core.strategies import Copy, CpfClean, PhoneClean
 
 
 class FakeFirebirdCursor:
@@ -20,6 +21,7 @@ class FakeFirebirdCursor:
         self.rows = rows
         self.description = description
         self.executed_sql = None
+        self.closed = False
 
     def execute(self, sql):
         self.executed_sql = sql
@@ -29,6 +31,9 @@ class FakeFirebirdCursor:
 
     def __iter__(self):
         return iter(self.rows)
+
+    def close(self):
+        self.closed = True
 
 
 class FakeFirebirdConnection:
@@ -44,7 +49,7 @@ class FakeFirebirdConnection:
 
 
 class FirebirdEngineTest(unittest.TestCase):
-    def test_translates_limit_and_maps_rows_to_dict(self):
+    def test_renders_rows_limit_and_maps_rows_to_dict(self):
         conn = FakeFirebirdConnection(
             rows=[(1, '(00) 90000-0000', '000.000.000-00')],
             description=[('F_ID',), ('F_PHONE',), ('F_CPF',)],
@@ -55,11 +60,11 @@ class FirebirdEngineTest(unittest.TestCase):
             FirebirdSourceAdapter(conn),
             PostgresTargetAdapter(),
             writes.append,
-            limit='LIMIT 10',
+            limit=10,
         )
 
         TableMigration(
-            source_sql='SELECT {fields} FROM acme_v1_users_demo {limit}',
+            source=SourceQuery('acme_v1_users_demo'),
             target='public.acme_users_demo',
             fields=[Copy('f_id'), PhoneClean('f_phone'), CpfClean('f_cpf')],
         ).run(engine)
@@ -76,15 +81,17 @@ class FirebirdEngineTest(unittest.TestCase):
             writes,
             ["INSERT INTO public.acme_users_demo (f_id, f_phone, f_cpf) VALUES (1, '00900000000', '00000000000');\n"],
         )
+        self.assertTrue(all(cursor.closed for cursor in conn.cursor_calls))
+
+    def test_reserved_words_are_quoted_in_upper_case(self):
+        conn = FakeFirebirdConnection(rows=[], description=[('USER',)])
+
+        list(FirebirdSourceAdapter(conn).read(SourceQuery('pedidos', fields=('user', 'f_id'), order_by='date')))
+
+        self.assertEqual(conn.cursor_calls[0].executed_sql, 'SELECT "USER", f_id FROM pedidos ORDER BY "DATE"')
 
 
 class DomainStrategiesTest(unittest.TestCase):
-    def test_source_sql_expression_projects_alias(self):
-        strategy = SourceSqlExpression("COALESCE(f_type, 1)", 'f_type', dialect='firebird')
-        self.assertEqual(strategy.select_columns, ["COALESCE(f_type, 1) AS f_type"])
-        self.assertEqual(strategy.insert_col, 'f_type')
-        self.assertEqual(strategy.raw_value({'f_type': 1}), 1)
-
     def test_phone_clean_supports_rename(self):
         strategy = PhoneClean('f_mobile2', 'f_number1')
         self.assertEqual(strategy.insert_col, 'f_number1')

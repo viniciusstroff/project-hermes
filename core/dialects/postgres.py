@@ -9,6 +9,21 @@ from core.dialects.base import UnsupportedValueError
 
 BINARY_TYPES = (bytes, bytearray, memoryview)
 
+# Key words that PostgreSQL does not accept as a column name without quotes:
+# the "reserved" ones and the "reserved (can be function or type)" ones of the
+# SQL Key Words appendix. Quoting a lower-case name that is not in the list
+# changes nothing, so the list errs on the side of more words.
+RESERVED_WORDS = frozenset('''
+    all analyse analyze and any array as asc asymmetric authorization binary both case cast check
+    collate collation column concurrently constraint create cross current_catalog current_date
+    current_role current_schema current_time current_timestamp current_user default deferrable desc
+    distinct do else end except false fetch for foreign freeze from full grant group having ilike in
+    initially inner intersect into is isnull join lateral leading left like limit localtime
+    localtimestamp natural not notnull null offset on only or order outer overlaps placing primary
+    references returning right select session_user similar some symmetric system_user table
+    tablesample then to trailing true union unique user using variadic verbose when where window with
+'''.split())
+
 
 class PostgresDialect:
     """PostgreSQL SQL rendering rules used by the migration target."""
@@ -82,12 +97,10 @@ class PostgresDialect:
         parts = identifier.split('.')
         return '.'.join(self._quote_part(part) for part in parts)
 
-    def limit_clause(self, limit: str) -> str:
-        return limit or ''
-
     def _quote_part(self, identifier: str) -> str:
         # PostgreSQL folds unquoted names to lower case, so any upper-case
-        # letter needs quotes to keep pointing at the same column.
-        if re.fullmatch(r'[a-z_][a-z0-9_]*', identifier):
+        # letter needs quotes to keep pointing at the same column. A reserved
+        # word needs them too: unquoted, "user" is the session user.
+        if re.fullmatch(r'[a-z_][a-z0-9_]*', identifier) and identifier not in RESERVED_WORDS:
             return identifier
         return '"' + identifier.replace('"', '""') + '"'
