@@ -306,5 +306,5 @@ O diretório `runs/` é criado automaticamente na raiz do projeto e ignorado pel
 - O `main` chama `enable_debug(100)`, o que limita as consultas e impede migração completa se isso não for removido.
 - A aplicação em transação única bloqueia o destino até o fim. Um erro perto do fim descarta a carga inteira.
 - Os `setval` executados antes de um erro continuam valendo depois do `ROLLBACK`, porque sequences não são transacionais.
-- O escaping é manual em vários `INSERT`s; isso funciona para o padrão atual, mas é frágil para casos fora da curva.
+- Os valores dos `INSERT`s passam pelo `PostgresDialect.serialize_value`. Strings com barra invertida saem como `E'...'` com a barra dobrada e chegam ao destino sem alteração, com qualquer `standard_conforming_strings`. Ainda saem errados `bytes` e `memoryview` (colunas `bytea`), `nan`, `inf` e textos com o caractere NUL (item 8 de [melhorias-futuras.md](melhorias-futuras.md)).
 - A lista de tabelas ignoradas e deletadas é estática e depende do histórico do Acme.

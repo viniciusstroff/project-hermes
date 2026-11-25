@@ -15,7 +15,10 @@ class PostgresDialect:
 
         escaped = str(value).replace("'", "''")
         if '\\' in escaped:
-            return "E'" + escaped + "'"
+            # PostgreSQL always reads a backslash inside E'...' as an escape,
+            # whatever standard_conforming_strings says. Doubling it keeps the
+            # text unchanged in the target.
+            return "E'" + escaped.replace('\\', '\\\\') + "'"
         return "'" + escaped + "'"
 
     def quote_identifier(self, identifier: str) -> str:

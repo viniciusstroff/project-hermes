@@ -488,6 +488,16 @@ Preparar a arquitetura para que:
   - `RegexReplace`
   - `Coalesce`
 
+### Tipos que a serialização ainda não trata
+
+A change `preservar-barra-invertida-nos-literais` corrigiu as strings com barra invertida no `PostgresDialect.serialize_value`. A mesma análise achou tipos que ainda saem errados no SQL gerado:
+
+- `bytes` e `memoryview`, que o `firebirdsql` e o `psycopg2` devolvem para BLOB e `bytea`, viram o texto da representação Python, como `<memory at 0x...>`. O valor gravado no destino não tem relação com o original e nenhum erro aparece.
+- `float('nan')`, `inf` e `-inf` saem sem aspas. O PostgreSQL lê `nan` como nome de coluna e o comando falha.
+- O caractere NUL (`\x00`) não pode ser gravado em `text` no PostgreSQL, então a linha não entra no destino como está.
+
+Os dois primeiros têm correção direta no dialeto. Para binários, `decode('<hex>', 'hex')`, que não depende do `standard_conforming_strings`. Para os valores especiais, `'NaN'::float8`. O NUL pede uma decisão de dados, como remover o caractere ou recusar a linha. Talvez caiba melhor numa strategy do que no dialeto.
+
 ---
 
 ## 9 — Limpar código legado e utilitários obsoletos
