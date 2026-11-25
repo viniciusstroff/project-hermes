@@ -1,6 +1,10 @@
 from typing import Any, Protocol
 
 
+class UnsupportedValueError(TypeError):
+    """Raised by a dialect for a value it cannot represent in the target."""
+
+
 class Dialect(Protocol):
     """Contract for database-specific SQL rendering rules."""
 

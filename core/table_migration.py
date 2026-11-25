@@ -48,12 +48,15 @@ class TableMigration:
     def insert_sql(self, row: dict, engine: MigrationEngine, fields: list = None):
         active_fields = fields or self.fields
         insert_cols = [field.insert_col for field in active_fields]
-        insert_vals = [self._field_value(field, row, engine) for field in active_fields]
+        insert_vals = [
+            engine.render_value(self.target, field.insert_col, self._field_value(field, row, engine))
+            for field in active_fields
+        ]
         return engine.insert_statement(self.target, insert_cols, insert_vals)
 
     @staticmethod
     def _field_value(field, row: dict, engine: MigrationEngine):
-        # The target adapter serializes the value inside insert_statement().
+        # The engine serializes it through the target adapter, with the column in any error.
         return field.raw_value(row)
 
     def run_row(self, row: dict, engine: MigrationEngine, fields: list = None):

@@ -41,6 +41,7 @@ class MigrationContext:
     limit: str = ''
     debug_limit: int | None = None
     _reference_maps: dict[str, dict] = field(default_factory=dict)
+    _warnings_logged: set = field(default_factory=set)
     _closed: bool = False
 
     def enable_debug(self, quantidade: int = 100):
@@ -66,7 +67,16 @@ class MigrationContext:
             self.output.write,
             self.limit,
             progress_fn=self.progress.log_table_progress,
+            warn_fn=self.warn_once,
         )
+
+    def warn_once(self, key: str, message: str):
+        """Log a warning the first time a key is seen in this run."""
+
+        if key in self._warnings_logged:
+            return
+        self._warnings_logged.add(key)
+        self.logger.print_log('[AVISO] ' + message)
 
     def load_reference_map(
         self,
