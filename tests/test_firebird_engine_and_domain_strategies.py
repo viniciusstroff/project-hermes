@@ -12,7 +12,7 @@ sys.modules.setdefault('psycopg2.extras', psycopg2_extras)
 from core.adapters import FirebirdSourceAdapter, PostgresTargetAdapter
 from core.migration_engine import MigrationEngine
 from core.table_migration import TableMigration
-from core.strategies import Copy, CpfClean, PhoneClean, SqlExpression
+from core.strategies import Copy, CpfClean, PhoneClean, SourceSqlExpression
 
 
 class FakeFirebirdCursor:
@@ -74,26 +74,26 @@ class FirebirdEngineTest(unittest.TestCase):
         )
         self.assertEqual(
             writes,
-            ["INSERT INTO public.acme_users_demo (f_id, f_phone, f_cpf) VALUES (1, E'00900000000', E'00000000000');\n"],
+            ["INSERT INTO public.acme_users_demo (f_id, f_phone, f_cpf) VALUES (1, '00900000000', '00000000000');\n"],
         )
 
 
 class DomainStrategiesTest(unittest.TestCase):
-    def test_sql_expression_projects_alias(self):
-        strategy = SqlExpression("COALESCE(f_type, 1)", 'f_type')
+    def test_source_sql_expression_projects_alias(self):
+        strategy = SourceSqlExpression("COALESCE(f_type, 1)", 'f_type', dialect='firebird')
         self.assertEqual(strategy.select_columns, ["COALESCE(f_type, 1) AS f_type"])
         self.assertEqual(strategy.insert_col, 'f_type')
-        self.assertEqual(strategy.value({'f_type': 1}), '1')
+        self.assertEqual(strategy.raw_value({'f_type': 1}), 1)
 
     def test_phone_clean_supports_rename(self):
         strategy = PhoneClean('f_mobile2', 'f_number1')
         self.assertEqual(strategy.insert_col, 'f_number1')
-        self.assertEqual(strategy.value({'f_mobile2': '(00) 9 0000-0000'}), "E'00900000000'")
+        self.assertEqual(strategy.raw_value({'f_mobile2': '(00) 9 0000-0000'}), '00900000000')
 
     def test_cpf_clean_removes_formatting(self):
         strategy = CpfClean('f_cpf')
         self.assertEqual(strategy.insert_col, 'f_cpf')
-        self.assertEqual(strategy.value({'f_cpf': '000.000.000-00'}), "E'00000000000'")
+        self.assertEqual(strategy.raw_value({'f_cpf': '000.000.000-00'}), '00000000000')
 
 
 if __name__ == '__main__':

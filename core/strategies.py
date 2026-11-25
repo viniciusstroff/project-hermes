@@ -2,29 +2,23 @@
 Estratégias de campo para migrações.
 
 Cada estratégia representa a transformação de UM campo: como selecioná-lo
-da V1 e qual valor bruto inserir na V2.
+da V1 e qual valor Python inserir na V2. Nenhuma estratégia gera SQL: quem
+serializa o valor é o adapter de destino, chamado pela migração.
 
 Interface comum:
   - select_columns   → list[str]  colunas a incluir no SELECT (Fixed retorna [])
   - insert_col       → str        nome da coluna no INSERT
-  - raw_value(row)   → any        valor Python bruto preferido para APIs novas
-  - render(row, target_adapter) → SqlLiteral já serializado pelo destino
-  - value(row)       → str        compatibilidade: valor PostgreSQL pronto para VALUES(...)
+  - raw_value(row)   → any        valor Python que vai para o destino
+
+SQL explícito continua possível em dois pontos, sempre preso a um banco:
+  - SourceSqlExpression, que roda na origem e declara o dialeto;
+  - um raw_value que devolve SqlLiteral, que o adapter de destino copia sem mexer.
 """
 from abc import ABC, abstractmethod
-import re
 import datetime
+import re
 
-from core.dialects import PostgresDialect
-from core.sql import SqlLiteral
-
-
-_POSTGRES_DIALECT = PostgresDialect()
-
-
-def sql_value(value) -> str:
-    """Compatibility helper that renders a value with the default PostgreSQL dialect."""
-    return _POSTGRES_DIALECT.serialize_value(value)
+REQUIRED_FIELD_ATTRIBUTES = ('select_columns', 'insert_col', 'raw_value')
 
 
 class FieldStrategy(ABC):
@@ -40,14 +34,32 @@ class FieldStrategy(ABC):
     def insert_col(self):
         raise NotImplementedError
 
+    @abstractmethod
     def raw_value(self, row):
-        return row[self.insert_col]
+        raise NotImplementedError
 
-    def render(self, row, target_adapter):
-        return SqlLiteral(target_adapter.serialize_value(self.raw_value(row)))
 
-    def value(self, row):
-        return sql_value(self.raw_value(row))
+def validate_field_strategies(fields):
+    """Recusa objetos de campo que não seguem o contrato de estratégia."""
+
+    for field in fields:
+        missing = [attr for attr in REQUIRED_FIELD_ATTRIBUTES if not hasattr(field, attr)]
+        if missing:
+            raise TypeError(f'Invalid field strategy {field!r}: missing {", ".join(missing)}')
+
+
+def check_source_dialect(fields, source_adapter):
+    """Confere o dialeto declarado pelas expressões de origem antes de consultar a origem."""
+
+    dialect = getattr(source_adapter, 'dialect', None)
+    found = getattr(dialect, 'name', None)
+    for field in fields:
+        expected = getattr(field, 'source_dialect', None)
+        if expected is not None and expected != found:
+            raise ValueError(
+                f"Field '{field.insert_col}' uses a source SQL expression written for the "
+                f"'{expected}' dialect, but the source adapter dialect is '{found}'"
+            )
 
 
 class Copy(FieldStrategy):
@@ -88,8 +100,9 @@ class Rename(FieldStrategy):
 
 
 class Fixed(FieldStrategy):
-    """Valor literal fixo — não vem do SELECT.
-    Ex: Fixed('f_create_user', 814) injeta 814 em todas as linhas."""
+    """Valor fixo, que não vem do SELECT.
+    Ex: Fixed('f_create_user', 814) injeta 814 em todas as linhas.
+    Ex: Fixed('f_created_at', SqlLiteral('CURRENT_TIMESTAMP')) injeta SQL do destino."""
 
     def __init__(self, col: str, value):
         self.col = col
@@ -107,12 +120,15 @@ class Fixed(FieldStrategy):
         return self._value
 
 
-class SqlExpression(FieldStrategy):
-    """Expressão SQL arbitrária no SELECT."""
+class SourceSqlExpression(FieldStrategy):
+    """Expressão SQL no SELECT da origem, escrita para um dialeto declarado.
+    Ex: SourceSqlExpression("regexp_replace(f_doc, '[^0-9]', '', 'g')", 'f_doc', dialect='postgres')
+    A migração confere o dialeto com o adapter de origem antes de consultar."""
 
-    def __init__(self, expression: str, col: str):
+    def __init__(self, expression: str, col: str, *, dialect: str):
         self.expression = expression
         self.col = col
+        self.source_dialect = dialect
 
     @property
     def select_columns(self):
@@ -162,7 +178,7 @@ class Lookup(FieldStrategy):
 
 
 class Transform(FieldStrategy):
-    """Transforma um valor Python via callback antes de serializar para SQL."""
+    """Transforma um valor Python via callback antes de ir para o destino."""
 
     def __init__(self, name: str, transform_fn, v2_name: str = None):
         self.name = name
@@ -181,14 +197,12 @@ class Transform(FieldStrategy):
         return self.transform_fn(row[self.name], row)
 
 
-class RegexClean(FieldStrategy):
-    """Remove ou substitui padrões no valor via re.sub.
-    Ex: RegexClean('f_text', r'[^\\w\\s]') strip caracteres inválidos."""
+class ColumnStrategy(FieldStrategy):
+    """Base das estratégias que leem uma coluna e aplicam uma regra ao valor."""
 
-    def __init__(self, name: str, pattern: str, replacement: str = ''):
+    def __init__(self, name: str, v2_name: str = None):
         self.name = name
-        self.pattern = pattern
-        self.replacement = replacement
+        self.v2_name = v2_name or name
 
     @property
     def select_columns(self):
@@ -196,82 +210,119 @@ class RegexClean(FieldStrategy):
 
     @property
     def insert_col(self):
-        return self.name
+        return self.v2_name
 
     def raw_value(self, row):
-        raw = row[self.name]
-        if raw is None:
+        return self.convert(row[self.name])
+
+    @abstractmethod
+    def convert(self, value):
+        """Aplica a regra da estratégia ao valor lido da origem."""
+
+
+class RegexClean(ColumnStrategy):
+    """Remove ou substitui padrões no valor via re.sub.
+    Ex: RegexClean('f_text', r'[^\\w\\s]') remove caracteres que não são letra, número ou espaço."""
+
+    def __init__(self, name: str, pattern: str, replacement: str = '', v2_name: str = None):
+        super().__init__(name, v2_name)
+        self.pattern = pattern
+        self.replacement = replacement
+
+    def convert(self, value):
+        if value is None:
             return None
-        cleaned = re.sub(self.pattern, self.replacement, str(raw))
-        return cleaned.replace('\\', '')
-
-    def render(self, row, target_adapter):
-        return SqlLiteral(self.value(row))
-
-    def value(self, row):
-        raw = self.raw_value(row)
-        if raw is None:
-            return 'NULL'
-        escaped = str(raw).replace("'", "''")
-        return "E'" + escaped + "'"
+        return re.sub(self.pattern, self.replacement, str(value))
 
 
 class CpfClean(RegexClean):
     """Remove formatação de CPF — pontos, traços e barras."""
 
     def __init__(self, name: str, v2_name: str = None):
-        super().__init__(name, r'[^\d]', '')
-        self._v2_name = v2_name
-
-    @property
-    def insert_col(self):
-        return self._v2_name or self.name
+        super().__init__(name, r'[^\d]', '', v2_name=v2_name)
 
 
 class PhoneClean(RegexClean):
     """Remove formatação de telefone — parênteses, traços, espaços."""
 
     def __init__(self, name: str, v2_name: str = None):
-        super().__init__(name, r'[^\d+]', '')
-        self._v2_name = v2_name
-
-    @property
-    def insert_col(self):
-        return self._v2_name or self.name
+        super().__init__(name, r'[^\d+]', '', v2_name=v2_name)
 
 
-class DateConvert(FieldStrategy):
-    """Converte formato de data.
-    Ex: DateConvert('f_nascimento') converte DD/MM/YYYY → YYYY-MM-DD
-    Ex: DateConvert('f_nascimento', v2_name='f_birthday') converte e renomeia o campo."""
+class NullIfBlank(ColumnStrategy):
+    """Troca texto vazio ou só com espaços por None. Substitui NULLIF(col, '')."""
 
-    def __init__(self, name: str, from_fmt: str = '%d/%m/%Y', to_fmt: str = '%Y-%m-%d', v2_name: str = None):
-        self.name = name
+    def convert(self, value):
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        return value
+
+
+class Truncate(ColumnStrategy):
+    """Corta texto em `length` caracteres. Substitui substring(col FROM 1 FOR n)."""
+
+    def __init__(self, name: str, length: int, v2_name: str = None):
+        if length < 0:
+            raise ValueError('length must not be negative')
+        super().__init__(name, v2_name)
+        self.length = length
+
+    def convert(self, value):
+        if isinstance(value, str):
+            return value[:self.length]
+        return value
+
+
+class Upper(ColumnStrategy):
+    """Texto em maiúsculas pela regra do Python. Substitui upper(col)."""
+
+    def convert(self, value):
+        return value.upper() if isinstance(value, str) else value
+
+
+class Lower(ColumnStrategy):
+    """Texto em minúsculas pela regra do Python. Substitui lower(col)."""
+
+    def convert(self, value):
+        return value.lower() if isinstance(value, str) else value
+
+
+class Default(ColumnStrategy):
+    """Troca None por um valor padrão. Substitui COALESCE(col, valor)."""
+
+    def __init__(self, name: str, value, v2_name: str = None):
+        super().__init__(name, v2_name)
+        self.default = value
+
+    def convert(self, value):
+        return self.default if value is None else value
+
+
+class DateConvert(ColumnStrategy):
+    """Converte texto em data.
+    Ex: DateConvert('f_nascimento') lê DD/MM/YYYY e devolve datetime.date.
+    Ex: DateConvert('f_criado', '%d/%m/%Y %H:%M', as_datetime=True) devolve datetime.datetime.
+    Valor vazio ou inválido vira None. O formato gravado no destino é do adapter."""
+
+    # v2_name só nomeado: a assinatura antiga tinha to_fmt na terceira posição,
+    # e um terceiro argumento posicional não pode virar nome de coluna em silêncio.
+    def __init__(self, name: str, from_fmt: str = '%d/%m/%Y', *, v2_name: str = None, as_datetime: bool = False):
+        super().__init__(name, v2_name)
         self.from_fmt = from_fmt
-        self.to_fmt = to_fmt
-        self._v2_name = v2_name
+        self.as_datetime = as_datetime
 
-    @property
-    def select_columns(self):
-        return [self.name]
-
-    @property
-    def insert_col(self):
-        return self._v2_name or self.name
-
-    def raw_value(self, row):
-        raw = row[self.name]
-        if raw is None or str(raw).strip() == '':
+    def convert(self, value):
+        if value is None or str(value).strip() == '':
             return None
         try:
-            parsed = datetime.datetime.strptime(str(raw).strip(), self.from_fmt)
-            return parsed.strftime(self.to_fmt)
+            parsed = datetime.datetime.strptime(str(value).strip(), self.from_fmt)
         except ValueError:
             return None
+        return parsed if self.as_datetime else parsed.date()
 
 
 class EmailExtract(FieldStrategy):
-    """Extrai o primeiro e-mail válido do valor ou retorna NULL."""
+    """Extrai o primeiro e-mail válido do valor ou retorna None."""
 
     def __init__(self, name: str):
         self.name = name

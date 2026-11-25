@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from core.sql import SqlLiteral
+from core.strategies import validate_field_strategies, check_source_dialect
 
 
 @dataclass
@@ -26,17 +26,11 @@ class MultiTargetMigration:
         for target in self.targets:
             if not target.target:
                 raise TypeError(f'Invalid target migration {target!r}: target is required')
-            for field in target.fields:
-                missing = [
-                    attr for attr in ('select_columns', 'insert_col')
-                    if not hasattr(field, attr)
-                ]
-                if not hasattr(field, 'render') and not hasattr(field, 'value'):
-                    missing.append('render/value')
-                if missing:
-                    raise TypeError(
-                        f'Invalid field strategy {field!r}: missing {", ".join(missing)}'
-                    )
+            validate_field_strategies(target.fields)
+
+    def source_fields(self):
+        """Strategies of every target that contribute to the source query."""
+        return [field for target in self.targets for field in target.fields]
 
     def source_select_columns(self):
         select_cols = []
@@ -48,6 +42,7 @@ class MultiTargetMigration:
         return select_cols
 
     def build_source_sql(self, engine):
+        check_source_dialect(self.source_fields(), engine.source_adapter)
         select_cols = self.source_select_columns()
         return self.source_sql.format(
             fields=', '.join(select_cols) if select_cols else '*',
@@ -71,9 +66,8 @@ class MultiTargetMigration:
 
     @staticmethod
     def _field_value(field, row: dict, engine):
-        if hasattr(field, 'render'):
-            return field.render(row, engine.target_adapter)
-        return SqlLiteral(field.value(row))
+        # The target adapter serializes the value inside insert_statement().
+        return field.raw_value(row)
 
     def run_row(self, row: dict, engine):
         for target in self.targets:

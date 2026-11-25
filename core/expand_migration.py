@@ -15,14 +15,19 @@ class ExpandMigration(TableMigration):
         first_fields: list = None,
     ):
         super().__init__(source_sql, target, fields)
+        self._validate_fields(first_fields or [])
         self.expand_col = expand_col
         self.expand_values = list(expand_values)
         self.first_fields = first_fields
 
+    def source_fields(self):
+        if self.first_fields is None:
+            return list(self.fields)
+        return [*self.first_fields, *self.fields]
+
     def source_select_columns(self):
         select_cols = []
-        active_fields = self.fields if self.first_fields is None else [*self.first_fields, *self.fields]
-        for field in active_fields:
+        for field in self.source_fields():
             for col in field.select_columns:
                 if col not in select_cols:
                     select_cols.append(col)

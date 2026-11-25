@@ -1,5 +1,7 @@
 from typing import Any, Iterator, Mapping, Protocol
 
+from core.dialects import Dialect
+
 
 class SourceCursor(Protocol):
     """Cursor shape consumed by migration classes."""
@@ -13,6 +15,9 @@ class SourceCursor(Protocol):
 
 class SourceAdapter(Protocol):
     """Contract for reading rows from a migration source."""
+
+    dialect: Dialect
+    """SQL dialect of the source, checked against source SQL expressions."""
 
     def cursor(self) -> SourceCursor:
         """Return a cursor that yields mapping-like rows."""

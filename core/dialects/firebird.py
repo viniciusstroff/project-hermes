@@ -4,6 +4,8 @@ import re
 class FirebirdDialect:
     """Firebird SQL rendering rules used by source queries."""
 
+    name = 'firebird'
+
     def serialize_value(self, value) -> str:
         if value is None:
             return 'NULL'

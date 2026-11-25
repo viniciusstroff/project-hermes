@@ -1,6 +1,6 @@
 # Catálogo de Estratégias de Campo
 
-Estratégias ficam em [core/strategies.py](../core/strategies.py). Cada uma representa a transformação de **um campo**: como selecioná-lo da V1 e qual valor produzir no `INSERT` da V2.
+Estratégias ficam em [core/strategies.py](../core/strategies.py). Cada uma representa a transformação de **um campo**: como selecioná-lo da V1 e qual valor Python inserir na V2.
 
 ## Interface comum
 
@@ -10,13 +10,20 @@ Toda estratégia expõe três membros:
 |---|---|---|
 | `select_columns` | `list[str]` | Colunas a incluir no `SELECT` da V1. `Fixed` retorna `[]`. |
 | `insert_col` | `str` | Nome da coluna no `INSERT` da V2. |
-| `value(row)` | `str` | Valor SQL-escaped pronto para o `VALUES(...)`. |
+| `raw_value(row)` | qualquer valor Python | Valor que vai para a coluna de destino. |
 
-O `TableMigration` itera sobre a lista de estratégias, monta o `SELECT` e o `INSERT` automaticamente.
+Nenhuma estratégia gera SQL. O `TableMigration`, o `ExpandMigration` e o `MultiTargetMigration` montam o `SELECT`, pedem o `raw_value()` de cada estratégia e entregam os valores ao adapter de destino, que serializa no formato do banco. Um objeto de campo sem `select_columns`, `insert_col` ou `raw_value` é recusado com `TypeError` quando a migração é criada.
+
+As estratégias se dividem em dois grupos:
+
+- **portáveis**: a regra roda em Python e a mesma migração funciona com qualquer origem;
+- **dependentes de dialeto**: carregam SQL de um banco específico e só funcionam com ele.
 
 ---
 
-## `Copy` — cópia direta
+## Estratégias portáveis
+
+### `Copy`: cópia direta
 
 Copia um campo com o mesmo nome na V1 e na V2.
 
@@ -27,9 +34,7 @@ Copy('f_name')
 
 **Use quando:** o nome e o tipo do campo são iguais nas duas versões.
 
----
-
-## `Rename` — renomeação de campo
+### `Rename`: renomeação de campo
 
 Lê `v1_name` da V1 e insere em `v2_name` na V2.
 
@@ -40,9 +45,7 @@ Rename('numeroprocesso', 'numero_processo')
 
 **Use quando:** o campo mudou de nome entre V1 e V2, mas o valor não precisa de transformação.
 
----
-
-## `Fixed` — valor literal fixo
+### `Fixed`: valor fixo
 
 Insere o mesmo valor em todas as linhas. Não aparece no `SELECT`.
 
@@ -52,25 +55,9 @@ Fixed('f_source', 'migration')
 Fixed('f_active', True)
 ```
 
-**Use quando:** a V2 exige uma coluna que não existe na V1 ou precisa de um valor padrão para todas as linhas migradas.
+**Use quando:** a V2 exige uma coluna que não existe na V1 ou precisa de um valor padrão para todas as linhas migradas. Com um `SqlLiteral`, o `Fixed` vira dependente de dialeto (ver abaixo).
 
----
-
-## `SqlExpression` — expressão SQL no `SELECT`
-
-Injeta uma expressão SQL arbitrária no `SELECT` preservando o fluxo `{fields}`.
-
-```python
-SqlExpression("substring(CAST(f_name AS text) FROM 1 FOR 80)", 'f_name')
-SqlExpression("COALESCE(f_type, 1)", 'f_type')
-SqlExpression("NULLIF(f_cpf, '')", 'f_cpf')
-```
-
-**Use quando:** o valor precisa ser tratado no próprio SQL de origem, mas você quer continuar usando `TableMigration` sem escrever o `SELECT` inteiro manualmente.
-
----
-
-## `Lookup` — resolução por dicionário
+### `Lookup`: resolução por dicionário
 
 Converte um valor da V1 usando um dicionário. Útil para `varchar` V1 → FK inteira V2.
 
@@ -94,44 +81,42 @@ Lookup('f_state', states_map, fallback=None, key_normalizer=lambda v: str(v).str
 
 **Use quando:** um campo da V1 tem valores discretos que precisam ser convertidos para IDs ou valores diferentes na V2.
 
----
+### `Transform`: transformação por callback
 
-## `Transform` — transformação por callback
-
-Aplica uma função Python ao valor lido da V1 antes de serializar para SQL.
+Aplica uma função Python ao valor lido da V1. A função recebe o valor e a linha inteira.
 
 ```python
 Transform('f_process_id', lambda value, row: None if value == 0 else value, v2_name='f_process')
 Transform('f_name', lambda value, row: value.strip())
 ```
 
-**Use quando:** a regra é simples, depende de um único campo, e não vale a pena escrever um método manual inteiro só para ajustar o valor.
+**Use quando:** a regra é simples, depende de um campo e não tem estratégia pronta. Também serve para combinar regras, por exemplo limpar e depois truncar.
 
----
+### `RegexClean`: limpeza por expressão regular
 
-## `RegexClean` — limpeza por expressão regular
-
-Aplica `re.sub(pattern, replacement, value)` no valor antes de escapar.
+Aplica `re.sub(pattern, replacement, value)` e devolve o resultado como está. `None` continua `None`.
 
 ```python
-RegexClean('f_cpf', r'[^\d]')            # remove tudo que não é dígito
-RegexClean('f_phone', r'[\s\-\(\)]', '')  # remove formatação de telefone
-RegexClean('f_text', r'[\x00-\x08\x0b-\x1f]')  # remove caracteres de controle
+RegexClean('f_cpf', r'[^\d]')                        # remove tudo que não é dígito
+RegexClean('f_phone', r'[\s\-\(\)]', '')             # remove formatação de telefone
+RegexClean('f_text', r'[\x00-\x08\x0b-\x1f]')        # remove caracteres de controle
+RegexClean('f_doc_v1', r'[^\d]', v2_name='f_doc')    # limpa e renomeia
 ```
 
 | Parâmetro | Padrão | Descrição |
 |---|---|---|
-| `name` | — | Campo na V1 e na V2 |
-| `pattern` | — | Padrão regex para `re.sub` |
+| `name` | obrigatório | Campo na V1 |
+| `pattern` | obrigatório | Padrão regex para `re.sub` |
 | `replacement` | `''` | Substituto (padrão: remoção) |
+| `v2_name` | igual a `name` | Campo na V2 |
+
+A estratégia só remove o que o padrão manda. Uma barra invertida que o padrão mantém chega ao destino.
 
 **Use quando:** o valor da V1 contém caracteres inválidos, formatação ou ruído que precisa ser removido antes da carga.
 
----
+### `CpfClean`: limpeza de CPF
 
-## `CpfClean` — limpeza de CPF
-
-Remove formatação de CPF com uma estratégia nomeada.
+Remove formatação de CPF, mantendo só os dígitos. Texto vazio continua vazio.
 
 ```python
 CpfClean('f_cpf')
@@ -140,11 +125,9 @@ CpfClean('f_documento', 'f_cpf')
 
 **Use quando:** o campo contém CPF com pontos, traços ou barras e a V2 espera apenas dígitos.
 
----
+### `PhoneClean`: limpeza de telefone
 
-## `PhoneClean` — limpeza de telefone
-
-Remove formatação de telefone mantendo apenas dígitos e `+`.
+Remove formatação de telefone, mantendo apenas dígitos e `+`.
 
 ```python
 PhoneClean('f_phone')
@@ -153,30 +136,31 @@ PhoneClean('f_mobile2', 'f_number1')
 
 **Use quando:** telefone, celular ou fax chegam com parênteses, traços ou espaços e a V2 espera valor limpo.
 
----
+### `DateConvert`: texto para data
 
-## `DateConvert` — conversão de formato de data
-
-Faz parse com `from_fmt` e formata com `to_fmt`. Retorna `NULL` em caso de valor vazio ou inválido.
+Faz o parse com `from_fmt` e devolve `datetime.date`, ou `datetime.datetime` com `as_datetime=True`. Valor vazio ou inválido vira `None`. O formato gravado no destino é decidido pelo adapter: no PostgreSQL, `'2026-06-06'` e `'2026-06-06 10:30:00'`.
 
 ```python
-DateConvert('f_nascimento')                                # DD/MM/YYYY → YYYY-MM-DD
-DateConvert('f_created_at', '%Y%m%d', '%Y-%m-%d')         # YYYYMMDD → YYYY-MM-DD
+DateConvert('f_nascimento')                                              # DD/MM/YYYY
+DateConvert('f_created_at', '%Y%m%d')                                    # YYYYMMDD
+DateConvert('f_criado', '%d/%m/%Y %H:%M', as_datetime=True)              # com hora
+DateConvert('dt_nasc', v2_name='birth_date')                             # com renomeação
 ```
 
 | Parâmetro | Padrão | Descrição |
 |---|---|---|
-| `name` | — | Nome do campo (mesmo na V1 e V2) |
+| `name` | obrigatório | Campo na V1 |
 | `from_fmt` | `'%d/%m/%Y'` | Formato da V1 |
-| `to_fmt` | `'%Y-%m-%d'` | Formato da V2 |
+| `v2_name` | igual a `name` | Campo na V2, só por nome |
+| `as_datetime` | `False` | Devolve data e hora em vez de só a data |
 
-**Use quando:** a V1 armazena datas em formato diferente do esperado pela V2.
+O antigo `to_fmt` saiu. Para gravar a data como texto num formato próprio, use `Transform`.
 
----
+**Use quando:** a V1 armazena datas em texto.
 
-## `EmailExtract` — extração de e-mail
+### `EmailExtract`: extração de e-mail
 
-Extrai o primeiro endereço de e-mail válido do valor via regex. Retorna `NULL` se não encontrar nenhum.
+Extrai o primeiro endereço de e-mail do valor. Devolve `None` se não encontrar nenhum.
 
 ```python
 EmailExtract('f_email')
@@ -184,6 +168,61 @@ EmailExtract('f_contact')  # campo pode conter texto + email misturado
 ```
 
 **Use quando:** o campo da V1 armazena texto livre que às vezes contém um e-mail, e a V2 espera apenas o endereço limpo.
+
+### `NullIfBlank`, `Truncate`, `Upper`, `Lower` e `Default`
+
+Cobrem as expressões SQL mais comuns no `SELECT` da origem, com a regra em Python. Todas aceitam `v2_name`.
+
+| Estratégia | Substitui | Regra |
+|---|---|---|
+| `NullIfBlank('f_cpf')` | `NULLIF(f_cpf, '')` | `None` para `None`, texto vazio ou só com espaços |
+| `Truncate('f_name', 80)` | `substring(f_name FROM 1 FOR 80)` | corta texto em 80 caracteres; outros tipos passam sem mudança |
+| `Upper('f_uf')` | `upper(f_uf)` | `str.upper()` em texto; `None` continua `None` |
+| `Lower('f_email')` | `lower(f_email)` | `str.lower()` em texto; `None` continua `None` |
+| `Default('f_type', 1)` | `COALESCE(f_type, 1)` | troca `None` pelo valor |
+
+A regra em Python não é idêntica à função SQL em alguns casos:
+
+- o `NullIfBlank` trata texto só com espaços como vazio, o `NULLIF(col, '')` não;
+- o `str.upper()` troca `ß` por `SS`; o `upper()` do PostgreSQL depende da collation;
+- o `Truncate` conta caracteres, como o `substring` do PostgreSQL em UTF-8.
+
+Quando o comportamento exato do banco importa, use `SourceSqlExpression`.
+
+---
+
+## Estratégias dependentes de dialeto
+
+### `SourceSqlExpression`: expressão SQL no `SELECT` da origem
+
+Injeta uma expressão no `SELECT`, escrita para um banco declarado em `dialect`, que é obrigatório.
+
+```python
+SourceSqlExpression("regexp_replace(f_doc, '[^0-9]', '', 'g')", 'f_doc', dialect='postgres')
+SourceSqlExpression("COALESCE(f_type, 1)", 'f_type', dialect='firebird')
+```
+
+Antes de qualquer consulta, inclusive a contagem de progresso, a migração compara o `dialect` com o dialeto do adapter de origem (`postgres` ou `firebird`). Se não bater, ela levanta `ValueError` com a coluna, o dialeto esperado e o encontrado. Nada chega à origem.
+
+O antigo `SqlExpression` saiu. Os usos documentados dele (`COALESCE`, `NULLIF`, `substring`) têm equivalentes portáveis acima.
+
+**Use quando:** a regra só existe no banco de origem ou precisa do comportamento exato dele.
+
+### `Fixed` com `SqlLiteral`: SQL no destino
+
+Um `SqlLiteral` vai para o destino sem ser serializado.
+
+```python
+from core.sql import SqlLiteral
+
+Fixed('f_created_at', SqlLiteral('CURRENT_TIMESTAMP'))
+```
+
+Vale o mesmo para uma estratégia própria cujo `raw_value()` devolve um `SqlLiteral`. O texto é SQL do destino e só funciona nele.
+
+### Mapas de referência com consulta própria
+
+A declaração de mapa de referência com `query=`, prevista na change `padronizar-lookups-de-referencia`, também é dependente de dialeto: a consulta é SQL do destino.
 
 ---
 
@@ -197,12 +236,13 @@ TableMigration(
     target='public.acme_customers_demo',
     fields=[
         Copy('f_id'),
-        Copy('f_name'),
+        Truncate('f_name', 80),
         Rename('f_active', 'f_status'),
         Lookup('f_area', areas_map, fallback=1),
         DateConvert('f_birthday'),
         EmailExtract('f_email'),
         CpfClean('f_cpf'),
+        Default('f_type', 1),
         Fixed('f_create_user', 814),
     ],
 ).run(self.context.engine('pg_v1'))
@@ -220,18 +260,22 @@ Nem tudo cabe em `TableMigration`. Use SQL direto em `write_sql()` quando:
 - A migração envolve lógica condicional por linha (ex: `if row['tipo'] == 'X': ...`).
 - Há `UPDATE`s na V2 após a carga (não `INSERT`s).
 
-Nesses casos, crie um método `insert_*` ou `update_*` na classe do Acme com a lógica manual, por exemplo `insert_acme_orders` ou `update_acme_customer_status`.
+Nesses casos, crie um método `insert_*` ou `update_*` na classe do Acme com a lógica manual, por exemplo `insert_acme_orders` ou `update_acme_customer_status`. Para montar valores nesse SQL, use `self.sql_value(valor)`, que serializa pelo adapter de destino configurado.
 
 ---
 
-## Escaping
+## Serialização
 
-A função `sql_value()` (em `core/strategies.py`) é usada por todas as estratégias:
+Quem transforma o valor Python em SQL é o adapter de destino. No PostgreSQL:
 
 | Tipo Python | Saída SQL |
 |---|---|
 | `None` | `NULL` |
 | `bool` | `true` / `false` |
 | `int`, `float` | número literal |
-| string com `\` | `E'...'` com escape |
-| string simples | `'...'` com `'` duplicado |
+| `str` com `\` | `E'...'` com a barra dobrada e `'` duplicado |
+| `str` sem `\` | `'...'` com `'` duplicado |
+| `date`, `datetime` | `'2026-06-06'`, `'2026-06-06 10:30:00'` |
+| `SqlLiteral` | o texto, sem mudança |
+
+Os tipos que o dialeto ainda não trata (`bytes`, `NaN`, caractere NUL) estão na change `serializar-tipos-especiais-no-dialeto`.

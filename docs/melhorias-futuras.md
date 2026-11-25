@@ -25,7 +25,7 @@ Também inclui um plano para desacoplar a forma de saída da migração. Hoje o 
 | 5 | Eliminar SQL manual residual dos Acmes | Médio | Alto |
 | 6 | Expandir o uso de `MultiTargetMigration` | Médio | Médio |
 | 7 | Padronizar lookups de referência | Médio | Médio |
-| 8 | Revisar estratégias e expressões dependentes de dialeto | Médio | Médio |
+| 8 | Revisar estratégias e expressões dependentes de dialeto (feito) | Médio | Médio |
 | 9 | Limpar código legado e utilitários obsoletos (feito) | Baixo | Baixo |
 | 10 | Criar interface gráfica para leigos/configuração assistida de migrações | Alto | Alto |
 | 11 | Criar camada de execução performática para migrações pesadas, com opção de executor Go | Alto | Muito alto |
@@ -425,26 +425,14 @@ Hoje os mapas são carregados sob demanda, no meio da geração, pela conexão c
 
 ## 8 — Revisar estratégias e expressões dependentes de dialeto
 
-Algumas strategies ainda pressupõem detalhes do banco:
-- `SqlExpression`
-- expressões como `regexp_replace(...)`
-- casts e funções do PostgreSQL
+Feito pela change `revisar-estrategias-dependentes-de-dialeto`:
 
-### Objetivo
-
-Preparar a arquitetura para que:
-- o caminho principal seja Python e agnóstico
-- expressões SQL específicas fiquem explícitas como recurso avançado
-
-### Alternativas possíveis
-
-- manter `SqlExpression`, mas renomear conceitualmente para algo como “dialect-specific”
-- criar strategies portáveis equivalentes:
-  - `NullIfBlank`
-  - `Substring`
-  - `Upper`
-  - `RegexReplace`
-  - `Coalesce`
+- as strategies devolvem só valores Python pelo `raw_value()`. Saíram `value()`, `render()` e a função `sql_value()` de `core/strategies.py`. O adapter de destino passou a ser o único ponto de serialização;
+- o `SqlExpression` virou `SourceSqlExpression`, com o dialeto da origem obrigatório e conferido antes de qualquer consulta. Os dialetos ganharam nome (`postgres`, `firebird`);
+- o `RegexClean` deixou de montar `E'...'` à mão e de remover a barra invertida. Ganhou também `v2_name`;
+- o `DateConvert` devolve `datetime.date` ou `datetime.datetime` e perdeu o `to_fmt`;
+- entraram as strategies portáveis `NullIfBlank`, `Truncate`, `Upper`, `Lower` e `Default`. O `regexp_replace` é coberto pelo `RegexClean`;
+- o `docs/estrategias.md` separa as strategies portáveis das dependentes de dialeto.
 
 ### Tipos que a serialização ainda não trata
 
@@ -455,6 +443,8 @@ A change `preservar-barra-invertida-nos-literais` corrigiu as strings com barra 
 - O caractere NUL (`\x00`) não pode ser gravado em `text` no PostgreSQL, então a linha não entra no destino como está.
 
 Os dois primeiros têm correção direta no dialeto. Para binários, `decode('<hex>', 'hex')`, que não depende do `standard_conforming_strings`. Para os valores especiais, `'NaN'::float8`. O NUL pede uma decisão de dados, como remover o caractere ou recusar a linha. Talvez caiba melhor numa strategy do que no dialeto.
+
+A change `serializar-tipos-especiais-no-dialeto` cuida desses três casos.
 
 ---
 

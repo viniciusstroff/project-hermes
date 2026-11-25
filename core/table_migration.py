@@ -1,5 +1,6 @@
 from core.migration_engine import MigrationEngine
-from core.sql import SqlLiteral
+from core.strategies import check_source_dialect, validate_field_strategies
+
 
 class TableMigration:
     """Declaração de uma migração de tabela — descreve O QUÊ, não O COMO."""
@@ -12,17 +13,11 @@ class TableMigration:
 
     @staticmethod
     def _validate_fields(fields: list):
-        for field in fields:
-            missing = [
-                attr for attr in ('select_columns', 'insert_col')
-                if not hasattr(field, attr)
-            ]
-            if not hasattr(field, 'render') and not hasattr(field, 'value'):
-                missing.append('render/value')
-            if missing:
-                raise TypeError(
-                    f'Invalid field strategy {field!r}: missing {", ".join(missing)}'
-                )
+        validate_field_strategies(fields)
+
+    def source_fields(self):
+        """Strategies that contribute to the source query."""
+        return list(self.fields)
 
     def source_select_columns(self):
         select_cols = []
@@ -33,6 +28,7 @@ class TableMigration:
         return select_cols
 
     def build_source_sql(self, engine: MigrationEngine):
+        check_source_dialect(self.source_fields(), engine.source_adapter)
         select_cols = self.source_select_columns()
         return self.source_sql.format(
             fields=', '.join(select_cols) if select_cols else '*',
@@ -57,9 +53,8 @@ class TableMigration:
 
     @staticmethod
     def _field_value(field, row: dict, engine: MigrationEngine):
-        if hasattr(field, 'render'):
-            return field.render(row, engine.target_adapter)
-        return SqlLiteral(field.value(row))
+        # The target adapter serializes the value inside insert_statement().
+        return field.raw_value(row)
 
     def run_row(self, row: dict, engine: MigrationEngine, fields: list = None):
         engine.write_sql(self.insert_sql(row, engine, fields))
