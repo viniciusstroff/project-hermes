@@ -46,6 +46,10 @@ Componentes principais:
 - `SourceAdapter`: lê linhas e escalares da origem, incluindo diferenças como
   `LIMIT` no PostgreSQL e `ROWS` no Firebird.
 - `TargetAdapter` e `Dialect`: renderizam `INSERT`s e valores SQL para o destino.
+- Estratégias de campo (`core/strategies.py`): devolvem valores Python pelo `raw_value()` e não geram SQL.
+  O adapter de destino é o único ponto de serialização. SQL de um banco específico entra só por
+  `SourceSqlExpression`, com o dialeto da origem declarado e conferido antes da consulta, ou por
+  `SqlLiteral`, copiado sem mudança para o destino. O catálogo está em [estrategias.md](estrategias.md).
 - `MetadataProvider`: concentra operações auxiliares do destino, como triggers,
   índices, mapas de referência e sequences.
 - `OutputAdapter`: recebe o SQL gerado, fase por fase. A implementação padrão é

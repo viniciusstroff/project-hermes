@@ -89,7 +89,7 @@ sys.path.insert(0, os.path.dirname(_clientdir))
 
 from core.base_migration import BaseMigration
 from core.table_migration import TableMigration
-from core.strategies import Copy, Rename, Fixed, Lookup, RegexClean, DateConvert, EmailExtract, SqlExpression
+from core.strategies import Copy, Rename, Fixed, Lookup, RegexClean, DateConvert, EmailExtract, NullIfBlank, Truncate, Default
 
 
 class Migracao(BaseMigration):

@@ -5,6 +5,8 @@ from typing import Any
 class PostgresDialect:
     """PostgreSQL SQL rendering rules used by the migration target."""
 
+    name = 'postgres'
+
     def serialize_value(self, value: Any) -> str:
         if value is None:
             return 'NULL'

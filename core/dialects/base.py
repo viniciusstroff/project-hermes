@@ -4,6 +4,9 @@ from typing import Any, Protocol
 class Dialect(Protocol):
     """Contract for database-specific SQL rendering rules."""
 
+    name: str
+    """Dialect identifier, such as ``postgres``, checked against source SQL expressions."""
+
     def serialize_value(self, value: Any) -> str:
         """Render a Python value as a SQL literal for this dialect."""
         ...

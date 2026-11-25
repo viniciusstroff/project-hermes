@@ -30,8 +30,8 @@ class FakeField:
     def insert_col(self):
         return self.name
 
-    def value(self, row):
-        return str(row[self.name])
+    def raw_value(self, row):
+        return row[self.name]
 
 
 class FakeCursor:
