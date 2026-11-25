@@ -82,10 +82,20 @@ class CompatibilityLeftoversTest(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertFalse(hasattr(BaseMigration, name))
 
-    def test_facade_keeps_its_writing_helpers(self):
-        for name in ('write_sql', 'print_comment', '_open_sql_file', '_flush_writes'):
+    def test_facade_writes_only_operations(self):
+        for name in ('emit', 'comment', 'clear', 'suspend_constraints', 'reset_identity'):
             with self.subTest(name=name):
                 self.assertTrue(callable(getattr(BaseMigration, name)))
+        for name in ('write_sql', 'print_comment', 'sql_value', '_open_sql_file', '_flush_writes',
+                     'set_index_commands_for', 'write_reset_sequences', 'set_trigger_commands'):
+            with self.subTest(removed=name):
+                self.assertFalse(hasattr(BaseMigration, name))
+
+    def test_metadata_provider_is_gone(self):
+        with self.assertRaises(ModuleNotFoundError):
+            importlib.import_module('core.metadata')
+        self.assertNotIn('MetadataProvider', core.__all__)
+        self.assertNotIn('SqlFileOutput', core.__all__)
 
     def test_base_migration_does_not_import_drivers(self):
         module_globals = vars(core.base_migration)

@@ -15,7 +15,7 @@ Isso significa que o fluxo padrão já gera:
 1. um dump parcial vindo da V1;
 2. os SQLs auxiliares para preparar a V2;
 3. o SQL principal com inserts e updates;
-4. o SQL final com ajuste de sequence e reativação de índices/triggers.
+4. o SQL final com ajuste de sequence e reativação de triggers.
 
 ## Etapa 1: inicialização
 
@@ -23,10 +23,9 @@ Durante `__init__()` o script:
 
 - carrega `Acme/.env`;
 - cria `runs/Acme/<timestamp>/`;
-- inicializa `manifest.json`, `logs/migration.log` e `sql/00_setup.sql`;
-- abre conexão com PostgreSQL V1;
-- abre conexão com PostgreSQL V2;
-- abre conexão com Firebird V1;
+- inicializa `manifest.json` e `logs/migration.log`;
+- abre cada origem declarada no `.env` (`SOURCE_<NOME>_*`) e o destino (`TARGET_*`), pelo adapter de cada uma;
+- abre `comandos/00_setup.sql`, com a extensão do adapter de destino;
 - inicializa mapas e buffers de comandos.
 
 O mapa `areas_map` é um exemplo de regra de negócio embutida para compatibilizar áreas entre V1 e V2.
@@ -46,23 +45,17 @@ Objetivo:
 
 Saída:
 
-- `runs/<cliente>/<timestamp>/sql/02_dump_compatible_tables.sql`
+- `runs/<cliente>/<timestamp>/comandos/02_dump_compatible_tables.sql`
 
 ## Etapa 3: preparação da base V2
 
-`run()` começa gerando:
+`run()` começa carregando os mapas de referência declarados e fecha a leitura do destino. Nesse momento o adapter PostgreSQL guarda a lista de tabelas que a suspensão de triggers vai usar.
 
-- comandos para desabilitar triggers;
-- comandos para desabilitar índices específicos.
+Depois `run_initial()` emite as operações de `comandos/01_prepare_target.sql`:
 
-Depois escreve `sql/01_prepare_target.sql` com:
-
-- `ALTER TABLE ... DISABLE TRIGGER ALL`;
-- updates diretos em `pg_index` para certos índices;
-- `DELETE`s em tabelas de destino;
-- `DELETE`s em tabelas do schema `extranet`;
-- `DELETE`s em tabelas sem sequence;
-- ajuste de índices únicos em tabelas fictícias `acme_*`.
+- `clear([...])`, que vira um `TRUNCATE ... RESTART IDENTITY`;
+- `suspend_constraints()`, que vira um `ALTER TABLE ... DISABLE TRIGGER ALL` por tabela;
+- comandos próprios do cliente, como `Native('postgres', sql)`.
 
 Objetivo:
 
@@ -70,7 +63,7 @@ Objetivo:
 
 ## Etapa 4: carga principal
 
-Depois o script troca o arquivo ativo para `sql/03_load_transformed_data.sql` e executa as rotinas `insert_*()` e `update_*()`.
+Depois o script troca o arquivo ativo para `comandos/03_load_transformed_data.sql` e executa as rotinas `insert_*()` e `update_*()`.
 
 A ordem importa. Em alto nível:
 
@@ -115,11 +108,10 @@ Esse helper reduz duplicação, mas não faz validação semântica do dado.
 
 ## Etapa 5: finalização
 
-No final do `run()`, o script abre `sql/04_finalize_target.sql` e gera:
+No final do `run()`, o script abre `comandos/04_finalize_target.sql` e gera:
 
-- `setval` para sequences;
-- reativação de índices;
-- reativação de triggers.
+- o ajuste das sequences, pelas operações `reset_identity()` do cliente;
+- a reativação das triggers de cada `suspend_constraints()` emitido antes, feita pelo runner.
 
 Objetivo:
 

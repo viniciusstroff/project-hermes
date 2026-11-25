@@ -35,22 +35,9 @@ class TableMigration:
     def source_query(self):
         return with_default_fields(self.source, self.source_select_columns())
 
-    def insert_sql(self, row: dict, engine: MigrationEngine, fields: list = None):
-        active_fields = fields or self.fields
-        insert_cols = [field.insert_col for field in active_fields]
-        insert_vals = [
-            engine.render_value(self.target, field.insert_col, self._field_value(field, row, engine))
-            for field in active_fields
-        ]
-        return engine.insert_statement(self.target, insert_cols, insert_vals)
-
-    @staticmethod
-    def _field_value(field, row: dict, engine: MigrationEngine):
-        # The engine serializes it through the target adapter, with the column in any error.
-        return field.raw_value(row)
-
     def run_row(self, row: dict, engine: MigrationEngine, fields: list = None):
-        engine.write_sql(self.insert_sql(row, engine, fields))
+        # Python values: the target adapter serializes them when it renders the Insert.
+        engine.insert(self.target, [(field.insert_col, field.raw_value(row)) for field in fields or self.fields])
 
     def run(self, engine: MigrationEngine):
         query = self.source_query()

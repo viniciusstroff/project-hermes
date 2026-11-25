@@ -40,9 +40,8 @@ dotenv.dotenv_values = dotenv_values
 sys.modules.setdefault('dotenv', dotenv)
 
 from core.base_migration import BaseMigration
+from core.operations import Clear, Comment, Insert, Native, ResetIdentity, SuspendConstraints
 from core.outputs import MirrorOutput
-
-
 class FakeCursor:
     def __init__(self, rows=None):
         self.rows = rows or []
@@ -52,6 +51,9 @@ class FakeCursor:
 
     def __iter__(self):
         return iter(self.rows)
+
+    def close(self):
+        pass
 
 
 class FakeConnection:
@@ -72,11 +74,8 @@ class RecordingOutput:
     def open_phase(self, phase):
         self.events.append(('open_phase', phase))
 
-    def write(self, sql):
-        self.events.append(('write', sql))
-
-    def comment(self, text):
-        self.events.append(('comment', text))
+    def write(self, operation):
+        self.events.append(('write', operation))
 
     def flush(self):
         self.events.append(('flush',))
@@ -102,37 +101,53 @@ def read_file(path):
 
 
 INSERT_COUNT = 501
+ENV_LINES = [
+    'SOURCE_V1_ADAPTER=postgres',
+    'SOURCE_V1_HOST=source-db',
+    'SOURCE_V1_PORT=5432',
+    'SOURCE_V1_NAME=source',
+    'SOURCE_V1_USER=source-user',
+    'SOURCE_V1_PASS=source-pass',
+    'TARGET_ADAPTER=postgres',
+    'TARGET_HOST=target-db',
+    'TARGET_PORT=5432',
+    'TARGET_NAME=target',
+    'TARGET_USER=target-user',
+    'TARGET_PASS=target-pass',
+    'SOURCE_FB_ADAPTER=firebird',
+    'SOURCE_FB_HOST=firebird-db',
+    'SOURCE_FB_PORT=3050',
+    'SOURCE_FB_NAME=firebird',
+    'SOURCE_FB_USER=firebird-user',
+    'SOURCE_FB_PASS=firebird-pass',
+    'SOURCE_FB_CHARSET=ISO8859_1',
+]
 
 
 class FullArtifactMigration(BaseMigration):
-    def set_indexes_commands(self):
-        self.set_index_commands_for(['idx_demo'])
-
     def run_initial(self):
-        self.print_comment('PREPARACAO')
-        self.write_sql(self.disable_triggers)
-        self.write_sql(self.disable_indexes)
+        self.comment('PREPARACAO')
+        self.suspend_constraints()
 
     def run_inserts(self):
-        self.print_comment('INSERTS')
+        self.comment('INSERTS')
         for index in range(INSERT_COUNT):
-            self.write_sql(f'INSERT INTO public.demo (f_id) VALUES ({index});\n')
-        self._flush_writes()
-        self.write_sql('-- after flush\n')
+            self.emit(Insert('public.demo', {'f_id': index}))
+        self.emit(Native('postgres', '-- after inserts'))
 
     def reset_sequences(self):
-        self.write_reset_sequences(['demo'])
+        self.reset_identity('public.demo', column='f_id')
 
 
 class ArtifactMigration(BaseMigration):
     def run_initial(self):
-        self.write_sql('-- prepare\n')
+        self.emit(Native('postgres', '-- prepare\n'))
 
     def run_inserts(self):
-        self.write_sql('-- load\n')
+        self.emit(Native('postgres', '-- load\n'))
 
     def reset_sequences(self):
-        self.write_sql('-- finalize\n')
+        self.emit(Native('postgres', '-- finalize\n'))
 
     def dump_ignoring_tables(self):
         return ['public.acme_ignore_demo']
@@ -141,53 +156,34 @@ class ArtifactMigration(BaseMigration):
 class BaseMigrationArtifactsTest(unittest.TestCase):
     def _write_env(self, clientdir):
         with open(os.path.join(clientdir, '.env'), 'w', encoding='utf-8') as env_file:
-            env_file.write(
-                '\n'.join([
-                    'SOURCE_V1_ADAPTER=postgres',
-                    'SOURCE_V1_HOST=source-db',
-                    'SOURCE_V1_PORT=5432',
-                    'SOURCE_V1_NAME=source',
-                    'SOURCE_V1_USER=source-user',
-                    'SOURCE_V1_PASS=source-pass',
-                    'TARGET_ADAPTER=postgres',
-                    'TARGET_HOST=target-db',
-                    'TARGET_PORT=5432',
-                    'TARGET_NAME=target',
-                    'TARGET_USER=target-user',
-                    'TARGET_PASS=target-pass',
-                    'SOURCE_FB_ADAPTER=firebird',
-                    'SOURCE_FB_HOST=firebird-db',
-                    'SOURCE_FB_PORT=3050',
-                    'SOURCE_FB_NAME=firebird',
-                    'SOURCE_FB_USER=firebird-user',
-                    'SOURCE_FB_PASS=firebird-pass',
-                    'SOURCE_FB_CHARSET=ISO8859_1',
-                ])
-            )
+            env_file.write('\n'.join(ENV_LINES))
 
-    def test_uses_centralized_artifact_paths_for_sql_files(self):
+    def _clientdir(self, tmpdir):
+        clientdir = os.path.join(tmpdir, 'Acme')
+        os.makedirs(clientdir)
+        self._write_env(clientdir)
+        return clientdir
+
+    def test_writes_phase_artifacts_in_comandos(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            clientdir = os.path.join(tmpdir, 'Acme')
-            os.makedirs(clientdir)
-            self._write_env(clientdir)
+            clientdir = self._clientdir(tmpdir)
 
             with patch('psycopg2.connect', return_value=FakeConnection()), \
                  patch('firebirdsql.connect', return_value=FakeConnection()):
                 with redirect_stdout(StringIO()):
                     migration = ArtifactMigration(clientdir)
-                self.assertEqual(migration.file.name, migration.artifacts.sql_path('setup'))
+                self.assertEqual(migration.file.name, migration.artifacts.command_path('setup', 'sql'))
 
                 with redirect_stdout(StringIO()):
                     migration.run()
 
-            self.assertTrue(os.path.exists(migration.artifacts.sql_path('setup')))
-            self.assertTrue(os.path.exists(migration.artifacts.sql_path('prepare_target')))
-            self.assertTrue(os.path.exists(migration.artifacts.sql_path('load_transformed_data')))
-            self.assertTrue(os.path.exists(migration.artifacts.sql_path('finalize_target')))
-            self.assertFalse(os.path.exists(os.path.join(clientdir, 'sql')))
-
-            with open(migration.artifacts.sql_path('prepare_target'), encoding='utf-8') as sql_file:
-                self.assertEqual(sql_file.read(), '-- prepare\n')
+            commands = os.path.join(migration.artifacts.run_dir, 'comandos')
+            self.assertEqual(
+                sorted(os.listdir(commands)),
+                ['00_setup.sql', '01_prepare_target.sql', '03_load_transformed_data.sql', '04_finalize_target.sql'],
+            )
+            self.assertFalse(os.path.exists(os.path.join(migration.artifacts.run_dir, 'sql')))
+            self.assertEqual(read_file(os.path.join(commands, '01_prepare_target.sql')), '-- prepare\n')
             with open(migration.artifacts.log_path('migration.log'), encoding='utf-8') as log_file:
                 self.assertIn('Artefatos da execução:', log_file.read())
             with open(migration.artifacts.manifest_path, encoding='utf-8') as manifest_file:
@@ -195,13 +191,16 @@ class BaseMigrationArtifactsTest(unittest.TestCase):
 
             self.assertEqual(manifest['status'], 'success')
             self.assertFalse(manifest['debug']['enabled'])
-            self.assertEqual(manifest['output'], {'type': 'sql-file'})
+            self.assertEqual(manifest['output'], {'type': 'file', 'format': 'sql'})
+            self.assertEqual(
+                [artifact['path'] for artifact in manifest['artifacts']],
+                ['comandos/00_setup.sql', 'comandos/01_prepare_target.sql',
+                 'comandos/03_load_transformed_data.sql', 'comandos/04_finalize_target.sql'],
+            )
 
     def test_dump_tables_writes_dump_to_contextual_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            clientdir = os.path.join(tmpdir, 'Acme')
-            os.makedirs(clientdir)
-            self._write_env(clientdir)
+            clientdir = self._clientdir(tmpdir)
 
             with patch('psycopg2.connect', return_value=FakeConnection()), \
                  patch('firebirdsql.connect', return_value=FakeConnection()), \
@@ -211,14 +210,13 @@ class BaseMigrationArtifactsTest(unittest.TestCase):
                     migration.dump_tables()
 
             command_args = subprocess_call.call_args.args[0]
-            self.assertIn(migration.artifacts.sql_path('dump_compatible_tables'), command_args)
+            self.assertIn(migration.artifacts.command_path('dump_compatible_tables', 'sql'), command_args)
             self.assertIn('public.acme_ignore_demo', command_args)
+            self.assertIn('dump_compatible_tables', [artifact['phase'] for artifact in migration.artifacts.artifacts()])
 
     def test_dump_tables_runs_with_output_without_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            clientdir = os.path.join(tmpdir, 'Acme')
-            os.makedirs(clientdir)
-            self._write_env(clientdir)
+            clientdir = self._clientdir(tmpdir)
 
             with patch('psycopg2.connect', return_value=FakeConnection()), \
                  patch('firebirdsql.connect', return_value=FakeConnection()), \
@@ -234,9 +232,7 @@ class BaseMigrationArtifactsTest(unittest.TestCase):
 
     def test_debug_mode_is_recorded_in_manifest(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            clientdir = os.path.join(tmpdir, 'Acme')
-            os.makedirs(clientdir)
-            self._write_env(clientdir)
+            clientdir = self._clientdir(tmpdir)
 
             with patch('psycopg2.connect', return_value=FakeConnection()), \
                  patch('firebirdsql.connect', return_value=FakeConnection()):
@@ -250,77 +246,59 @@ class BaseMigrationArtifactsTest(unittest.TestCase):
             self.assertEqual(manifest['status'], 'running')
             self.assertEqual(manifest['debug'], {'enabled': True, 'limit': 25})
 
-    def test_inherited_migration_artifacts_keep_names_order_and_content(self):
-        trigger_rows = [
-            ('ALTER TABLE public.demo DISABLE TRIGGER ALL;', 'ALTER TABLE public.demo ENABLE TRIGGER ALL;'),
-        ]
+    def test_inherited_migration_renders_operations_into_phase_files(self):
+        catalog = [('public', 'demo')]
         with tempfile.TemporaryDirectory() as tmpdir:
-            clientdir = os.path.join(tmpdir, 'Acme')
-            os.makedirs(clientdir)
-            self._write_env(clientdir)
+            clientdir = self._clientdir(tmpdir)
 
-            with patch('psycopg2.connect',
-                       side_effect=[FakeConnection(), FakeConnection(trigger_rows)]), \
+            with patch('psycopg2.connect', side_effect=[FakeConnection(), FakeConnection(catalog)]), \
                  patch('firebirdsql.connect', return_value=FakeConnection()):
                 with redirect_stdout(StringIO()):
                     migration = FullArtifactMigration(clientdir)
-                    migration.write_sql('-- setup\n')
+                    migration.emit(Native('postgres', '-- setup\n'))
                     migration.run()
             migration.context.close()
 
+            commands = os.path.join(migration.artifacts.run_dir, 'comandos')
+            path = lambda name: os.path.join(commands, name)
+            self.assertEqual(read_file(path('00_setup.sql')), '-- setup\n')
             self.assertEqual(
-                sorted(os.listdir(migration.artifacts.sql_dir)),
-                ['00_setup.sql', '01_prepare_target.sql', '03_load_transformed_data.sql', '04_finalize_target.sql'],
-            )
-
-            index_where = "WHERE indrelid = (SELECT oid FROM pg_class WHERE relname='idx_demo');\n"
-            self.assertEqual(read_file(migration.artifacts.sql_path('setup')), '-- setup\n')
-            self.assertEqual(
-                read_file(migration.artifacts.sql_path('prepare_target')),
-                comment_block('PREPARACAO')
-                + 'ALTER TABLE public.demo DISABLE TRIGGER ALL;\n'
-                + 'UPDATE pg_index SET indisready=false ' + index_where,
+                read_file(path('01_prepare_target.sql')),
+                comment_block('PREPARACAO') + 'ALTER TABLE public.demo DISABLE TRIGGER ALL;\n',
             )
             self.assertEqual(
-                read_file(migration.artifacts.sql_path('load_transformed_data')),
+                read_file(path('03_load_transformed_data.sql')),
                 comment_block('INSERTS')
                 + ''.join(f'INSERT INTO public.demo (f_id) VALUES ({index});\n' for index in range(INSERT_COUNT))
-                + '-- after flush\n',
+                + '-- after inserts\n',
             )
             self.assertEqual(
-                read_file(migration.artifacts.sql_path('finalize_target')),
-                "SELECT pg_catalog.setval('demo_f_id_seq', COALESCE((SELECT MAX(f_id) FROM public.demo), 1));\n"
-                + comment_block('HABILITAR ÍNDICES DE TABELAS')
-                + 'UPDATE pg_index SET indisready=true ' + index_where
+                read_file(path('04_finalize_target.sql')),
+                "SELECT pg_catalog.setval(pg_catalog.pg_get_serial_sequence('public.demo', 'f_id'), "
+                'COALESCE((SELECT MAX(f_id) FROM public.demo), 1));\n'
                 + comment_block('HABILITAR TRIGGERS DE TABELAS')
                 + 'ALTER TABLE public.demo ENABLE TRIGGER ALL;\n',
             )
 
-    def test_compatibility_helpers_delegate_to_configured_output(self):
-        output = RecordingOutput()
-        context = types.SimpleNamespace(
-            config={},
-            artifacts=None,
-            output=output,
-            close=lambda: None,
-        )
+    def test_facade_shortcuts_emit_operations_through_the_context(self):
+        emitted = []
+        context = types.SimpleNamespace(config={}, artifacts=None, emit=emitted.append, close=lambda: None)
 
         migration = ArtifactMigration('Acme', context=context)
-        migration._open_sql_file('prepare_target')
-        migration.print_comment('SECAO')
-        migration.write_sql('-- base\n')
-        migration._flush_writes()
+        migration.comment('SECAO')
+        migration.clear('public.a')
+        migration.suspend_constraints()
+        migration.reset_identity(['public.a', 'public.b'], column='f_id')
+        migration.emit(Native('postgres', 'VACUUM;'))
 
-        self.assertEqual(
-            output.events,
-            [
-                ('open_phase', 'prepare_target'),
-                ('comment', 'SECAO'),
-                ('write', '-- base\n'),
-                ('flush',),
-            ],
-        )
-        self.assertIsNone(migration.file)
+        self.assertEqual(emitted, [
+            Comment('SECAO'),
+            Clear(('public.a',)),
+            SuspendConstraints(),
+            ResetIdentity('public.a', 'f_id'),
+            ResetIdentity('public.b', 'f_id'),
+            Native('postgres', 'VACUUM;'),
+        ])
 
 
 if __name__ == '__main__':

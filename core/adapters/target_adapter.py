@@ -1,24 +1,39 @@
-from typing import Any, Protocol, Sequence
-
-from core.dialects import Dialect
+from typing import Any, Iterator, Mapping, Protocol
 
 
 class TargetAdapter(Protocol):
-    """Contract for rendering operations against a migration target."""
+    """Contract for a migration target.
 
-    @property
-    def dialect(self) -> Dialect:
+    The adapter renders the operations of ``core.operations`` into the
+    commands of its artifact format and reads reference data with the queries
+    of ``core.queries``. Applying the artifacts (session and capabilities)
+    belongs to the application phase of the change and is not part of this
+    contract yet.
+    """
+
+    name: str
+    """Adapter name, compared with the adapter declared by ``Native`` operations."""
+
+    artifact_format: Any
+    """``ArtifactFormat`` of the files written for this target."""
+
+    @classmethod
+    def connect(cls, config) -> 'TargetAdapter':
+        """Open the target from a ``ConnectionConfig``, importing the driver only here."""
         ...
 
-    def serialize_value(self, value: Any) -> str:
-        """Render a Python value as a target-compatible SQL literal."""
+    def render(self, operation) -> list[str]:
+        """Commands of one operation, each ending in a line break. Empty when it means nothing here."""
         ...
 
-    def insert_statement(
-        self,
-        table: str,
-        columns: Sequence[str],
-        values: Sequence[Any],
-    ) -> str:
-        """Render an insert statement for the target."""
+    def read(self, query) -> Iterator[Mapping[str, Any]]:
+        """Rows of a ``SourceQuery`` or ``NativeQuery`` read from the target."""
+        ...
+
+    def close_reads(self) -> None:
+        """Read what rendering still needs, then refuse any later read of the target."""
+        ...
+
+    def close(self) -> None:
+        """Close any resources owned by this adapter."""
         ...

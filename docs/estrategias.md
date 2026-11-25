@@ -257,12 +257,15 @@ Vale o mesmo para uma estratégia própria cujo `raw_value()` devolve um `SqlLit
 
 ### Mapas de referência com consulta própria
 
-Um `ReferenceMap` com `query=` também é dependente de dialeto: a consulta é SQL do destino. A primeira coluna é a chave e a segunda é o valor.
+Um `ReferenceMap` com `query=` também fica preso a um banco: a consulta é uma `NativeQuery` do adapter de destino. Um texto solto é recusado. A primeira coluna é a chave e a segunda é o valor.
 
 ```python
 ReferenceMap(
     'states_by_country',
-    query="SELECT s.f_code || '-' || c.f_code, s.f_id FROM public.states s JOIN public.countries c ON c.f_id = s.f_country",
+    query=NativeQuery(
+        'postgres',
+        "SELECT s.f_code || '-' || c.f_code, s.f_id FROM public.states s JOIN public.countries c ON c.f_id = s.f_country",
+    ),
 )
 ```
 
@@ -308,13 +311,24 @@ O modo debug (`--debug 100`) é um limite inteiro que o contexto aplica a toda c
 
 ## Quando escrever um método manual
 
-Nem tudo cabe em `TableMigration`. Use SQL direto em `write_sql()` quando:
+Nem tudo cabe em `TableMigration`. Escreva um método `insert_*` ou `update_*` na classe do Acme quando:
 
 - O valor de destino depende de múltiplas colunas de formas não-triviais.
 - A migração envolve lógica condicional por linha (ex: `if row['tipo'] == 'X': ...`).
 - Há `UPDATE`s na V2 após a carga (não `INSERT`s).
 
-Nesses casos, crie um método `insert_*` ou `update_*` na classe do Acme com a lógica manual, por exemplo `insert_acme_orders` ou `update_acme_customer_status`. Para montar valores nesse SQL, use `self.sql_value(valor)`, que serializa pelo adapter de destino configurado.
+O método lê a origem pelo engine e emite operações, sem montar SQL:
+
+```python
+from core.operations import Insert, Native
+
+engine = self.context.source('v1')
+for row in engine.read(SourceQuery('public.pedidos', order_by='f_id')):
+    if row['f_tipo'] == 'X':
+        self.emit(Insert('public.pedidos', {'f_id': row['f_id'], 'f_valor': row['f_total']}))
+```
+
+O adapter de destino serializa os valores do `Insert`. Um comando que só existe num banco, como um `UPDATE` com junção, vai em `Native('postgres', sql)`. Ele é recusado por qualquer outro destino.
 
 ---
 

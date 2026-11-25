@@ -42,8 +42,8 @@ O projeto já separa o runtime de migração por adapters e providers, mas essa
 camada ainda pode evoluir para novos bancos e novos tipos de saída:
 
 - o `.env` já declara as conexões por nome e adapter, mas só existem adapters de PostgreSQL e Firebird
-- a saída padrão ainda é SQL PostgreSQL em arquivos
-- novos bancos ainda exigem adapters, dialects e providers concretos
+- a saída padrão grava arquivos no formato do adapter de destino, mas só existe o formato SQL
+- novos bancos ainda exigem adapters concretos
 
 ### Contrato de infraestrutura local
 
@@ -78,22 +78,21 @@ Criar quatro camadas explícitas:
    Responsável por diferenças de sintaxe e serialização.
    Ex.: `LIMIT`, escape de string, quoting de identificadores, sequences, funções SQL específicas.
 
-4. `MetadataProvider`
-   Responsável por operações auxiliares do banco:
-   - listar tabelas
-   - gerar comandos de trigger/index
-   - resolver referências
-   - sequences/reset
+4. Operações de escrita
+   O `MetadataProvider` saiu na fase 4 da `desacoplar-migracao-de-banco-e-versao`.
+   Limpar tabelas, suspender triggers e ajustar sequences viraram operações
+   (`Clear`, `SuspendConstraints`, `ResetIdentity`) traduzidas pelo adapter de
+   destino. Os mapas de referência são lidos pelo `read()` dele.
 
 ### Estrutura atual
 
-A estrutura e os contratos que já existem estão em [arquitetura.md](arquitetura.md). Os adapters ficam em `core/adapters/`, os dialetos em `core/dialects/`, os providers de metadados em `core/metadata/` e os outputs em `core/outputs/`. As migrações (`TableMigration`, `ExpandMigration` e `MultiTargetMigration`) ficam na raiz de `core/`. Os contratos ainda trafegam SQL. A change `desacoplar-migracao-de-banco-e-versao` propõe contratos sem SQL, para qualquer banco.
+A estrutura e os contratos que já existem estão em [arquitetura.md](arquitetura.md). Os adapters ficam em `core/adapters/`, os dialetos em `core/dialects/`, as consultas neutras em `core/queries.py`, as operações de escrita em `core/operations.py` e os outputs em `core/outputs/`. As migrações (`TableMigration`, `ExpandMigration` e `MultiTargetMigration`) ficam na raiz de `core/`. A leitura e a escrita já não trafegam SQL. A aplicação dos artefatos ainda é só PostgreSQL. As próximas fases da `desacoplar-migracao-de-banco-e-versao` cuidam disso.
 
 ### O que precisa mudar
 
 - adicionar adapters concretos para outros bancos quando houver demanda real
 - evoluir a saída para outros targets além de SQL PostgreSQL em arquivo
-- manter novos Acmes usando adapters, providers e helpers do core em vez de cursores diretos
+- manter novos Acmes usando adapters, operações e helpers do core em vez de cursores diretos
 
 ### Benefício real
 
@@ -148,11 +147,12 @@ class OutputAdapter(Protocol):
 
 ### Implementações possíveis
 
-#### `SqlFileOutput` (implementado)
+#### `FileOutput` (implementado)
 
-Comportamento atual, em `core/outputs/sql_file.py`:
-- abre um arquivo por fase usando `ArtifactManager.sql_path()`
-- acumula até 500 trechos em buffer
+Sucessor do `SqlFileOutput`, em `core/outputs/file.py`:
+- recebe operações e pede ao adapter de destino os comandos de cada uma
+- abre um arquivo por fase em `comandos/`, com a extensão do formato do adapter, pelo `ArtifactManager.command_path()`
+- acumula até 500 comandos em buffer
 - grava o buffer ao trocar de fase, em `flush()` e em `close()`
 
 #### `MirrorOutput` (implementado)

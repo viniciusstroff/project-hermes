@@ -47,6 +47,19 @@ With the `continue` policy the applier SHALL roll back only the failing commands
 - **THEN** `apply` uses `stop`
 - **AND** `dry-run` uses `continue` on PostgreSQL and `stop` on MongoDB
 
+### Requirement: Each application writes its own report
+Each application SHALL write `aplicacoes/<YYYYmmdd-HHMMSS>-<apply|dry-run>/relatorio.json` and `erros.txt` inside the run directory, without changing `manifest.json` or the artifacts in `comandos/`.
+
+#### Scenario: Dry run followed by apply
+- **WHEN** a run directory receives a dry run and later an apply
+- **THEN** each application has its own folder named with its timestamp and mode
+- **AND** `manifest.json` and the files in `comandos/` are unchanged
+
+#### Scenario: Report omits password
+- **WHEN** the report records the target connection
+- **THEN** it includes host, port, database and user
+- **AND** it does not include the password
+
 ## ADDED Requirements
 
 ### Requirement: Applier refuses modes the target cannot honor

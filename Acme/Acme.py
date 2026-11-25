@@ -57,23 +57,9 @@ class Migracao(BaseMigration):
             'extranet.acme_portal_messages_f_id_seq',
         ]
 
-    def set_indexes_commands(self):
-        self.print_log('Gerando comandos de indices para tabelas ficticias')
-
-        indexes = [
-            'acme_customers_demo_idx',
-            'acme_orders_demo_idx',
-        ]
-
-        self.set_index_commands_for(indexes)
-
-        self.print_log('Indices ficticios habilitados/desabilitados:')
-        self.print_log(', '.join(indexes))
-
     def run_initial(self):
-        self.print_comment('PREPARACAO DAS TABELAS FICTICIAS')
-        self.write_sql('TRUNCATE public.acme_customers_demo CASCADE;\n')
-        self.write_sql('TRUNCATE public.acme_orders_demo CASCADE;\n')
+        self.comment('PREPARACAO DAS TABELAS FICTICIAS')
+        self.clear(['public.acme_orders_demo', 'public.acme_customers_demo'])
 
     def run_inserts(self):
         self.insert_acme_customers()
@@ -81,7 +67,7 @@ class Migracao(BaseMigration):
 
     def insert_acme_customers(self):
         self.print_log('Inserindo clientes ficticios da Acme')
-        self.print_comment('INSERTS NA TABELA ACME_CUSTOMERS_DEMO')
+        self.comment('INSERTS NA TABELA ACME_CUSTOMERS_DEMO')
 
         TableMigration(
             source=SourceQuery('public.acme_v1_customers'),
@@ -97,7 +83,7 @@ class Migracao(BaseMigration):
 
     def insert_acme_orders(self):
         self.print_log('Inserindo pedidos ficticios da Acme')
-        self.print_comment('INSERTS NA TABELA ACME_ORDERS_DEMO')
+        self.comment('INSERTS NA TABELA ACME_ORDERS_DEMO')
 
         TableMigration(
             source=SourceQuery('public.acme_v1_orders'),
@@ -112,13 +98,13 @@ class Migracao(BaseMigration):
         ).run(self.context.source('v1'))
 
     def reset_sequences(self):
-        self.print_log('Gerando setval para sequences ficticias')
+        self.print_log('Ajustando sequences ficticias')
 
         tables = [
-            'acme_customers_demo',
-            'acme_orders_demo',
+            'public.acme_customers_demo',
+            'public.acme_orders_demo',
         ]
 
-        self.write_reset_sequences(tables)
+        self.reset_identity(tables, column='f_id')
 
         self.print_log(', '.join(tables))

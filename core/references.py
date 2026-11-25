@@ -10,6 +10,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
+from core.queries import NativeQuery, SourceQuery
+
 
 class ReferenceMapError(Exception):
     """A reference map declaration, load or lookup is invalid."""
@@ -32,8 +34,8 @@ class ReferenceMap:
     """Declaration of a key to value map read from the target.
 
     Declare either ``table`` with ``key`` and ``value`` (and optional equality
-    ``filters``), or ``query``: a target SQL statement whose first column is the
-    key and second column is the value. ``query`` is dialect-dependent.
+    ``filters``), or ``query``: a ``NativeQuery`` of the target adapter whose
+    first field is the key and second field is the value.
     """
 
     name: str
@@ -41,7 +43,7 @@ class ReferenceMap:
     key: str = None
     value: str = None
     filters: Mapping[str, Any] = field(default_factory=dict)
-    query: str = None
+    query: NativeQuery = None
     key_normalizer: Callable[[Any], Any] = None
     value_normalizer: Callable[[Any], Any] = None
     skip_null_keys: bool = True
@@ -53,6 +55,11 @@ class ReferenceMap:
             raise ReferenceMapError(f"Reference map '{self.name}': declare exactly one of table or query")
         if self.table is not None and not (self.key and self.value):
             raise ReferenceMapError(f"Reference map '{self.name}': a table declaration needs key and value")
+        if self.query is not None and not isinstance(self.query, NativeQuery):
+            raise ReferenceMapError(
+                f"Reference map '{self.name}': query must be a NativeQuery naming the target adapter, "
+                f"such as NativeQuery('postgres', sql)"
+            )
         if self.query is not None and (self.key or self.value or self.filters):
             raise ReferenceMapError(
                 f"Reference map '{self.name}': key, value and filters only apply to table declarations"
@@ -63,6 +70,26 @@ class ReferenceMap:
 
     def normalize_value(self, raw):
         return (self.value_normalizer or _same_value)(raw)
+
+
+def reference_query(declaration: ReferenceMap):
+    """Query that reads the pairs of a declaration from the target adapter."""
+
+    if declaration.query is not None:
+        return declaration.query
+    return SourceQuery(declaration.table, fields=(declaration.key, declaration.value), where=declaration.filters)
+
+
+def reference_pairs(declaration: ReferenceMap, rows) -> list:
+    """Key and value of each row: the declared columns, or the first two fields of a native query."""
+
+    if declaration.query is not None:
+        pairs = []
+        for row in rows:
+            values = list(row.values())
+            pairs.append((values[0], values[1]))
+        return pairs
+    return [(row[declaration.key], row[declaration.value]) for row in rows]
 
 
 class LoadedReferenceMap(Mapping):

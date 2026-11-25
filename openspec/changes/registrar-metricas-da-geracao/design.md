@@ -28,7 +28,7 @@ A change `revisar-estrategias-dependentes-de-dialeto` faz cada strategy devolver
 - Não medir memória.
 - Não comparar origem e destino. No cliente fictício isso é papel do `AcmeEdu/conferir.py`.
 - Não mudar o relatório do aplicador.
-- Não contar o SQL que o cliente escreve à mão por `write_sql()`, como `TRUNCATE` e `UPDATE` avulsos. Esses comandos não pertencem a uma unidade.
+- Não contar as operações que o cliente emite fora de uma migração, como `Clear` e `Native` avulsos. Esses comandos não pertencem a uma unidade.
 - Não exportar em Markdown ou HTML. O JSON e o resumo no log cobrem o uso atual.
 
 ## Decisions
@@ -89,7 +89,7 @@ A change `revisar-estrategias-dependentes-de-dialeto` faz cada strategy devolver
    - `run_id` (`<cliente>/<timestamp>`), status, limite de debug, início, fim e duração;
    - fases, na ordem em que abriram, com duração e totais;
    - unidades, com origem, linhas lidas, comandos por destino, duração, situação e perdas;
-   - tamanho de cada arquivo em `sql/`, quando o output grava arquivo.
+   - tamanho de cada arquivo em `comandos/`, quando o output grava arquivo.
 
    O runner grava o relatório nos dois caminhos: no sucesso, depois de `finish(True)` e antes do manifesto `success`. Na falha, grava no tratamento de erro, antes do manifesto `failed`. Na falha, a unidade em andamento sai como `interrupted`, com os contadores parciais.
 

@@ -8,8 +8,9 @@ from core.adapters.registry import connect_adapter
 from core.artifacts import ArtifactManager
 from core.connections import parse_connections
 from core.migration_engine import MigrationEngine
-from core.outputs import OutputAdapter, SqlFileOutput
-from core.references import ReferenceMap, ReferenceMapError, build_reference_map
+from core.operations import SuspendConstraints
+from core.outputs import FileOutput, OutputAdapter
+from core.references import ReferenceMap, ReferenceMapError, build_reference_map, reference_pairs, reference_query
 from core.runtime import MigrationLogger, MigrationProgress
 
 
@@ -32,13 +33,14 @@ class MigrationContext:
     artifacts: ArtifactManager
     sources: dict[str, Any]
     target: Any
-    metadata: Any
     output: OutputAdapter
     logger: MigrationLogger
     progress: MigrationProgress
     connections: dict = field(default_factory=dict)
     # Debug mode: row limit applied to every source query.
     debug_limit: int | None = None
+    # Entities of each SuspendConstraints emitted; the runner resumes them at the end.
+    suspended_constraints: list = field(default_factory=list)
     _loaded_reference_maps: dict = field(default_factory=dict)
     _warnings_logged: set = field(default_factory=set)
     _closed: bool = False
@@ -64,11 +66,18 @@ class MigrationContext:
         return MigrationEngine(
             self.sources[source_name],
             self.target,
-            self.output.write,
+            self.emit,
             self.debug_limit,
             progress_fn=self.progress.log_table_progress,
             warn_fn=self.warn_once,
         )
+
+    def emit(self, operation):
+        """Deliver one write operation to the output, the only write path of the run."""
+
+        if isinstance(operation, SuspendConstraints):
+            self.suspended_constraints.append(operation.entities)
+        self.output.write(operation)
 
     def warn_once(self, key: str, message: str):
         """Log a warning the first time a key is seen in this run."""
@@ -79,7 +88,7 @@ class MigrationContext:
         self.logger.print_log('[AVISO] ' + message)
 
     def load_reference_maps(self, declarations):
-        """Load every declared reference map through the metadata provider."""
+        """Load every declared reference map by reading the target adapter."""
 
         names = [declaration.name for declaration in declarations]
         repeated = sorted({name for name in names if names.count(name) > 1})
@@ -90,7 +99,8 @@ class MigrationContext:
             if not isinstance(declaration, ReferenceMap):
                 raise ReferenceMapError(f'Invalid reference map declaration {declaration!r}: expected ReferenceMap')
             try:
-                loaded = build_reference_map(declaration, self.metadata.load_reference_pairs(declaration))
+                rows = self.target.read(reference_query(declaration))
+                loaded = build_reference_map(declaration, reference_pairs(declaration, rows))
             except ReferenceMapError:
                 raise
             except Exception as exc:
@@ -103,6 +113,13 @@ class MigrationContext:
                     f'empty-reference-map:{declaration.name}',
                     f'Mapa de referência {declaration.name} carregou vazio. Confira tabela, filtros e banco.',
                 )
+
+    def close_target_reads(self):
+        """End target reads: from here on the generation does not query the target."""
+
+        close_reads = getattr(self.target, 'close_reads', None)
+        if close_reads is not None:
+            close_reads()
 
     def reference_map(self, name: str):
         """Return a loaded reference map by its declared name."""
@@ -128,21 +145,20 @@ class DefaultMigrationContextFactory:
     def from_clientdir(cls, clientdir: str) -> MigrationContext:
         config = dotenv_values(os.path.join(clientdir, '.env'))
         artifacts = ArtifactManager(clientdir)
-        output = SqlFileOutput(artifacts)
         logger = MigrationLogger(artifacts)
         progress = MigrationProgress(logger)
         logger.progress = progress
-        output.open_phase('setup')
 
         connections = {}
         opened = []
+        output = None
         try:
             source_configs, target_config = parse_connections(config)
             connections = {
                 'sources': {name: source.describe() for name, source in source_configs.items()},
                 'target': target_config.describe(),
             }
-            artifacts.write_manifest(status='running', connections=connections, output=output.describe())
+            artifacts.write_manifest(status='running', connections=connections)
             logger.print_log('Artefatos da execução: ' + artifacts.run_dir)
 
             sources = {}
@@ -150,20 +166,27 @@ class DefaultMigrationContextFactory:
                 logger.print_log(f'----- Conectando origem {name} ({source_config.adapter}) -----')
                 sources[name] = connect_adapter(source_config, 'source')
                 opened.append(sources[name])
+                _record_server_version(connections['sources'][name], sources[name])
 
             logger.print_log(f'----- Conectando destino ({target_config.adapter}) -----')
             target = connect_adapter(target_config, 'target')
             opened.append(target)
+            _record_server_version(connections['target'], target)
+
+            # The artifact format, and so the file extension, comes from the target adapter.
+            output = FileOutput(artifacts, target)
+            output.open_phase('setup')
         except Exception as exc:
             logger.print_log('[ERRO] ' + str(exc))
             artifacts.write_manifest(
                 status='failed',
                 connections=connections,
                 error=str(exc),
-                output=output.describe(),
+                output=output.describe() if output is not None else None,
             )
             _close_adapters(opened)
-            output.close()
+            if output is not None:
+                output.close()
             logger.close()
             raise
 
@@ -173,12 +196,17 @@ class DefaultMigrationContextFactory:
             artifacts=artifacts,
             sources=sources,
             target=target,
-            metadata=getattr(target, 'metadata', None),
             output=output,
             logger=logger,
             progress=progress,
             connections=connections,
         )
+
+
+def _record_server_version(description: dict, adapter):
+    version = getattr(adapter, 'server_version', None)
+    if version:
+        description['server_version'] = version
 
 
 def _close_adapters(adapters):

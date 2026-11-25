@@ -39,9 +39,18 @@ sys.modules.setdefault('dotenv', dotenv)
 
 from core.adapters import PostgresSourceAdapter, PostgresTargetAdapter
 from core.context import DefaultMigrationContextFactory, SourceNotConfiguredError
-from core.metadata import PostgresMetadataProvider
-from core.queries import SourceQuery
-from core.references import ReferenceMap, TargetReadClosedError
+from core.operations import (
+    Clear,
+    Comment,
+    Insert,
+    Native,
+    ResetIdentity,
+    ResumeConstraints,
+    SuspendConstraints,
+    ValueSerializationError,
+)
+from core.queries import NativeAdapterMismatchError, NativeQuery, SourceQuery
+from core.references import ReferenceMap, TargetReadClosedError, reference_pairs, reference_query
 from core.runner import MigrationRunner
 from core.sql import SqlLiteral
 
@@ -169,31 +178,75 @@ class AdapterContextMetadataTest(unittest.TestCase):
         self.assertTrue(read_cursor.closed)
         self.assertEqual(rows, [{'count': 7}])
 
-    def test_target_adapter_preserves_rendered_sql_literals(self):
+    def test_target_adapter_renders_inserts_with_quoted_identifiers(self):
         adapter = PostgresTargetAdapter()
 
-        sql = adapter.insert_statement(
-            'public.demo',
-            ['f_raw', 'f_name'],
-            [SqlLiteral('CURRENT_TIMESTAMP'), "O'Brien"],
-        )
+        commands = adapter.render(Insert('public.Pedidos', {
+            'f_raw': SqlLiteral('CURRENT_TIMESTAMP'),
+            'f_name': "O'Brien",
+            'user': None,
+        }))
+
+        self.assertEqual(commands, [
+            'INSERT INTO public."Pedidos" (f_raw, f_name, "user") '
+            "VALUES (CURRENT_TIMESTAMP, 'O''Brien', NULL);\n",
+        ])
+
+    def test_target_adapter_names_the_column_of_a_value_it_cannot_store(self):
+        with self.assertRaises(ValueSerializationError) as raised:
+            PostgresTargetAdapter().render(Insert('public.notes', {'f_id': 1, 'f_tags': ['a']}))
+
+        self.assertEqual((raised.exception.table, raised.exception.column), ('public.notes', 'f_tags'))
+
+    def test_target_adapter_renders_maintenance_operations(self):
+        adapter = PostgresTargetAdapter()
 
         self.assertEqual(
-            sql,
-            "INSERT INTO public.demo (f_raw, f_name) VALUES (CURRENT_TIMESTAMP, 'O''Brien');\n",
+            adapter.render(Clear(['public.b', 'public.a'])),
+            ['TRUNCATE public.b, public.a RESTART IDENTITY;\n'],
         )
+        self.assertEqual(
+            adapter.render(SuspendConstraints(['public.a', 'public.Pedidos'])),
+            ['ALTER TABLE public.a DISABLE TRIGGER ALL;\n', 'ALTER TABLE public."Pedidos" DISABLE TRIGGER ALL;\n'],
+        )
+        self.assertEqual(
+            adapter.render(ResumeConstraints(['public.a'])),
+            ['ALTER TABLE public.a ENABLE TRIGGER ALL;\n'],
+        )
+        self.assertEqual(
+            adapter.render(ResetIdentity('public.Pedidos', 'Id')),
+            ["SELECT pg_catalog.setval(pg_catalog.pg_get_serial_sequence('public.\"Pedidos\"', 'Id'), "
+             'COALESCE((SELECT MAX("Id") FROM public."Pedidos"), 1));\n'],
+        )
+        self.assertEqual(adapter.render(Native('postgres', 'VACUUM')), ['VACUUM\n'])
+        self.assertEqual(adapter.render(Comment('SECAO')), ['\n----------\n-----SECAO\n----------\n\n'])
 
-    def test_metadata_provider_renders_helpers(self):
-        provider = PostgresMetadataProvider(FakeConnection())
+    def test_target_adapter_refuses_native_operation_of_another_adapter(self):
+        with self.assertRaises(NativeAdapterMismatchError) as raised:
+            PostgresTargetAdapter().render(Native('mongodb', {'delete': 'people'}))
 
-        self.assertIn('indisready=false', provider.disable_indexes_sql(['idx_demo']))
-        self.assertIn('idx_demo', provider.enable_indexes_sql(['idx_demo']))
-        self.assertIn("setval('demo_f_id_seq'", provider.reset_sequence_sql('demo'))
-        self.assertIn("setval('demo_f_id_seq'", provider.reset_sequences_sql(['demo']))
+        self.assertIn("'mongodb'", str(raised.exception))
+        self.assertIn("'postgres'", str(raised.exception))
+
+    def test_suspend_without_entities_reads_the_catalog_once(self):
+        conn = FakeConnection(rows=[('public', 'a'), ('vendas', 'Pedidos')])
+        adapter = PostgresTargetAdapter(connection=conn)
+
+        disable = adapter.render(SuspendConstraints())
+        enable = adapter.render(ResumeConstraints())
+
+        self.assertEqual(disable, [
+            'ALTER TABLE public.a DISABLE TRIGGER ALL;\n',
+            'ALTER TABLE vendas."Pedidos" DISABLE TRIGGER ALL;\n',
+        ])
+        self.assertEqual(enable[1], 'ALTER TABLE vendas."Pedidos" ENABLE TRIGGER ALL;\n')
+        self.assertEqual(len(conn.cursor_calls), 1)
+        self.assertIn('pg_catalog.pg_tables', conn.cursor_calls[0][2].executed_sql)
+        self.assertTrue(conn.cursor_calls[0][2].closed)
 
     def test_reference_pairs_from_table_declaration(self):
-        conn = FakeConnection(rows=[(' A ', 1), (None, 2)])
-        provider = PostgresMetadataProvider(conn)
+        conn = FakeConnection(rows=[{'f_code': ' A ', 'f_id': 1}, {'f_code': None, 'f_id': 2}])
+        adapter = PostgresTargetAdapter(connection=conn)
         declaration = ReferenceMap(
             'states_by_code',
             table='public.states',
@@ -202,7 +255,7 @@ class AdapterContextMetadataTest(unittest.TestCase):
             filters={'f_active': True, 'Tipo': "O'B", 'f_deleted': None},
         )
 
-        pairs = provider.load_reference_pairs(declaration)
+        pairs = reference_pairs(declaration, adapter.read(reference_query(declaration)))
 
         self.assertEqual(pairs, [(' A ', 1), (None, 2)])
         self.assertEqual(
@@ -213,30 +266,39 @@ class AdapterContextMetadataTest(unittest.TestCase):
 
     def test_reference_pairs_from_query_declaration(self):
         conn = FakeConnection(rows=[{'code': 'SP', 'id': 25}])
-        provider = PostgresMetadataProvider(conn)
+        adapter = PostgresTargetAdapter(connection=conn)
         query = 'SELECT s.f_code, s.f_id FROM public.states s JOIN public.countries c ON c.f_id = s.f_country'
+        declaration = ReferenceMap('states', query=NativeQuery('postgres', query))
 
-        pairs = provider.load_reference_pairs(ReferenceMap('states', query=query))
+        pairs = reference_pairs(declaration, adapter.read(reference_query(declaration)))
 
         self.assertEqual(pairs, [('SP', 25)])
         self.assertEqual(conn.cursor_calls[0][2].executed_sql, query)
 
-    def test_reads_after_close_are_refused_and_cached_triggers_remain(self):
-        conn = FakeConnection(rows=[('ALTER TABLE public.a DISABLE TRIGGER ALL;', 'ALTER TABLE public.a ENABLE TRIGGER ALL;')])
-        provider = PostgresMetadataProvider(conn)
-        enable_before = provider.enable_triggers_sql()
+    def test_close_reads_caches_the_catalog_and_refuses_later_reads(self):
+        conn = FakeConnection(rows=[('public', 'a')])
+        adapter = PostgresTargetAdapter(connection=conn)
 
-        provider.close_reads()
+        adapter.close_reads()
 
         self.assertEqual(conn.rollback_calls, 1)
-        self.assertEqual(provider.enable_triggers_sql(), enable_before)
+        self.assertEqual(adapter.render(ResumeConstraints()), ['ALTER TABLE public.a ENABLE TRIGGER ALL;\n'])
         self.assertEqual(len(conn.cursor_calls), 1)
         with self.assertRaises(TargetReadClosedError):
-            provider.load_reference_pairs(ReferenceMap('x', table='public.x', key='a', value='b'))
-        fresh = PostgresMetadataProvider(FakeConnection())
-        fresh.close_reads()
+            adapter.read(SourceQuery('public.x'))
+        without_connection = PostgresTargetAdapter()
+        without_connection.close_reads()
         with self.assertRaises(TargetReadClosedError):
-            fresh.disable_triggers_sql()
+            without_connection.render(SuspendConstraints())
+
+    def test_server_version_from_the_connection(self):
+        for number, text in ((90624, '9.6.24'), (160004, '16.4'), (170002, '17.2')):
+            conn = FakeConnection()
+            conn.server_version = number
+            with self.subTest(number=number):
+                self.assertEqual(PostgresTargetAdapter(connection=conn).server_version, text)
+                self.assertEqual(PostgresSourceAdapter(conn, cursor_factory=object).server_version, text)
+        self.assertIsNone(PostgresTargetAdapter().server_version)
 
     def test_default_context_factory_builds_composed_runtime_from_existing_env(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -257,7 +319,7 @@ class AdapterContextMetadataTest(unittest.TestCase):
             self.assertIs(context.sources['fb'].connection, fb_v1)
             self.assertIs(context.target.connection, pg_v2)
             self.assertIsInstance(context.target, PostgresTargetAdapter)
-            self.assertIsInstance(context.metadata, PostgresMetadataProvider)
+            self.assertFalse(hasattr(context, 'metadata'))
 
             engine = context.source('v1')
             self.assertIs(engine.source_adapter, context.sources['v1'])
@@ -274,24 +336,22 @@ class AdapterContextMetadataTest(unittest.TestCase):
             os.makedirs(clientdir)
             self._write_env(clientdir)
             pg_v1 = FakeConnection()
-            pg_v2 = FakeConnection(rows=[
-                ('ALTER TABLE public.demo DISABLE TRIGGER ALL;', 'ALTER TABLE public.demo ENABLE TRIGGER ALL;'),
-            ])
+            pg_v2 = FakeConnection(rows=[('public', 'demo')])
             fb_v1 = FakeConnection()
 
             class ComposedMigration:
                 def __init__(self, context):
                     self.context = context
-                    self.enable_indexes = ''
 
                 def run_initial(self):
-                    self.context.output.write('-- prepare\n')
+                    self.context.emit(SuspendConstraints())
+                    self.context.emit(Native('postgres', '-- prepare\n'))
 
                 def run_inserts(self):
-                    self.context.output.write('-- load\n')
+                    self.context.emit(Native('postgres', '-- load\n'))
 
                 def reset_sequences(self):
-                    self.context.output.write(self.context.metadata.reset_sequence_sql('demo'))
+                    self.context.emit(ResetIdentity('public.demo', 'f_id'))
 
             with patch('psycopg2.connect', side_effect=[pg_v1, pg_v2]), \
                  patch('firebirdsql.connect', return_value=fb_v1):
@@ -300,14 +360,14 @@ class AdapterContextMetadataTest(unittest.TestCase):
                     MigrationRunner(context, ComposedMigration(context)).run()
 
             context.close()
-            with open(context.artifacts.sql_path('prepare_target'), encoding='utf-8') as sql_file:
-                self.assertEqual(sql_file.read(), '-- prepare\n')
-            with open(context.artifacts.sql_path('load_transformed_data'), encoding='utf-8') as sql_file:
+            with open(context.artifacts.command_path('prepare_target', 'sql'), encoding='utf-8') as sql_file:
+                self.assertEqual(sql_file.read(), 'ALTER TABLE public.demo DISABLE TRIGGER ALL;\n-- prepare\n')
+            with open(context.artifacts.command_path('load_transformed_data', 'sql'), encoding='utf-8') as sql_file:
                 self.assertEqual(sql_file.read(), '-- load\n')
-            with open(context.artifacts.sql_path('finalize_target'), encoding='utf-8') as sql_file:
+            with open(context.artifacts.command_path('finalize_target', 'sql'), encoding='utf-8') as sql_file:
                 finalize_sql = sql_file.read()
 
-            self.assertIn("setval('demo_f_id_seq'", finalize_sql)
+            self.assertIn("pg_get_serial_sequence('public.demo', 'f_id')", finalize_sql)
             self.assertIn('ALTER TABLE public.demo ENABLE TRIGGER ALL;', finalize_sql)
 
 

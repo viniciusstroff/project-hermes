@@ -63,23 +63,28 @@ class CompleteTarget:
         cls.connected_with = config
         return cls()
 
-    def serialize_value(self, value):
-        return str(value)
+    def render(self, operation):
+        return []
 
-    def insert_statement(self, table, columns, values):
-        return ''
+    def read(self, query):
+        return iter(())
 
     def close(self):
         pass
 
 
-class TargetWithoutInsert:
+class TargetWithoutRender:
+    """Target written for the old contract: insert_statement() instead of render()."""
+
     @classmethod
     def connect(cls, config):
         return cls()
 
-    def serialize_value(self, value):
-        return str(value)
+    def insert_statement(self, table, columns, values):
+        return ''
+
+    def read(self, query):
+        return iter(())
 
     def close(self):
         pass
@@ -200,9 +205,9 @@ class RegistryTest(unittest.TestCase):
 
     def test_third_party_path_missing_contract_method(self):
         with self.assertRaises(AdapterResolutionError) as raised:
-            resolve_adapter(f'{__name__}:TargetWithoutInsert', 'target')
+            resolve_adapter(f'{__name__}:TargetWithoutRender', 'target')
 
-        self.assertIn('insert_statement', str(raised.exception))
+        self.assertIn('render', str(raised.exception))
 
     def test_third_party_path_that_cannot_be_imported(self):
         with self.assertRaises(AdapterResolutionError) as raised:

@@ -78,20 +78,22 @@ Após a execução, os artefatos ficam em `runs/<cliente>/<YYYYmmdd-HHMMSS>/`:
 
 | Arquivo | Função |
 |---|---|
-| `manifest.json` | Metadados da execução, caminhos, modo debug, output usado e bancos sem senha |
+| `manifest.json` | Metadados da execução: modo debug, output, conexões sem senha com a versão de cada servidor e a lista de artefatos com fase, caminho e formato |
 | `logs/migration.log` | Log da geração feita pelo Python |
-| `sql/00_setup.sql` | Arquivo inicial da execução |
-| `sql/01_prepare_target.sql` | Preparação da V2, disable triggers/índices e limpeza |
-| `sql/02_dump_compatible_tables.sql` | `pg_dump` das tabelas compatíveis |
-| `sql/03_load_transformed_data.sql` | `INSERT`s e `UPDATE`s principais |
-| `sql/04_finalize_target.sql` | `setval`, enable triggers e enable indexes |
+| `comandos/00_setup.sql` | Arquivo inicial da execução |
+| `comandos/01_prepare_target.sql` | Limpeza da V2 e desativação de triggers |
+| `comandos/02_dump_compatible_tables.sql` | `pg_dump` das tabelas compatíveis |
+| `comandos/03_load_transformed_data.sql` | `INSERT`s principais |
+| `comandos/04_finalize_target.sql` | `setval` e reativação de triggers |
 | `aplicacoes/<YYYYmmdd-HHMMSS>-<modo>/` | Relatório de cada aplicação no destino, criado pelo `Aplicar.py` |
+
+A extensão dos arquivos de `comandos/` vem do adapter de destino. Com destino PostgreSQL, ela é `.sql`.
 
 ---
 
 ## Aplicando os SQLs no destino
 
-O `Aplicar.py` aplica os arquivos de `sql/` de uma execução já gerada, na ordem das fases e numa única transação. Ou a carga inteira entra, ou nada entra.
+O `Aplicar.py` aplica os arquivos `.sql` de `comandos/` de uma execução já gerada, na ordem das fases e numa única transação. Ou a carga inteira entra, ou nada entra.
 
 ```bash
 export PGHOST=localhost PGPORT=5432 PGDATABASE=tenant PGUSER=tenant PGPASSWORD=tenant
@@ -141,7 +143,7 @@ Depois de cada arquivo o aplicador executa `RESET ALL`. Assim o `search_path` va
 
 ### Relatório
 
-Cada aplicação cria uma pasta dentro da execução. O `manifest.json` e os arquivos de `sql/` não mudam.
+Cada aplicação cria uma pasta dentro da execução. O `manifest.json` e os arquivos de `comandos/` não mudam.
 
 ```text
 runs/Acme/20261124-153000/aplicacoes/
@@ -181,7 +183,7 @@ Um dry run com erros termina com código 0. Confira a linha `Comandos com erro` 
 ### Cuidados
 
 - O destino fica bloqueado durante toda a aplicação, porque o `TRUNCATE` segura o lock até o fim da transação. Rode só em janela sem uso concorrente, como já acontece com a carga.
-- O aplicador recusa execuções com status diferente de `success` ou sem algum arquivo de `sql/`. No modo debug o `02_dump_compatible_tables.sql` não existe e não é exigido.
+- O aplicador recusa execuções com status diferente de `success` ou sem algum arquivo de `comandos/`. No modo debug o `02_dump_compatible_tables.sql` não existe e não é exigido.
 - Num `apply` que falha, os `setval` que já rodaram continuam valendo, porque sequences não voltam no `ROLLBACK`. As tabelas voltam ao estado anterior e a próxima carga ajusta as sequences de novo.
 - No dry run, o `nextval` dos defaults de coluna avança as sequences. A carga real corrige isso pelos `setval` do dump e do `04`.
 - Um erro perto do fim descarta a carga inteira. Em cargas longas, rode o dry run antes, de preferência numa cópia do destino.
@@ -194,16 +196,16 @@ O `rodar2.sh` continua disponível, por exemplo para um servidor sem Python. Ele
 RUN_DIR=runs/Acme/20260910-220000 ./rodar2.sh
 ```
 
-O script lê os SQLs de `$RUN_DIR/sql/`, grava logs em `$RUN_DIR/logs/` e grava erros filtrados em `$RUN_DIR/erros/`.
+O script lê os SQLs de `$RUN_DIR/comandos/`, grava logs em `$RUN_DIR/logs/` e grava erros filtrados em `$RUN_DIR/erros/`.
 
 #### Com Docker manual
 
 ```bash
-date ; cat "$RUN_DIR/sql/00_setup.sql" | psql -a -h target-db -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/00_setup.sql.log" 2>&1 ; date
-date ; cat "$RUN_DIR/sql/01_prepare_target.sql" | psql -a -h target-db -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/01_prepare_target.sql.log" 2>&1 ; date
-date ; cat "$RUN_DIR/sql/02_dump_compatible_tables.sql" | psql -a -h target-db -d tenant -p 5432 -U tenant tenant > "$RUN_DIR/logs/02_dump_compatible_tables.sql.log" 2>&1 ; date
-date ; cat "$RUN_DIR/sql/03_load_transformed_data.sql" | psql -a -h target-db -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/03_load_transformed_data.sql.log" 2>&1 ; date
-date ; cat "$RUN_DIR/sql/04_finalize_target.sql" | psql -a -h target-db -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/04_finalize_target.sql.log" 2>&1 ; date
+date ; cat "$RUN_DIR/comandos/00_setup.sql" | psql -a -h target-db -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/00_setup.sql.log" 2>&1 ; date
+date ; cat "$RUN_DIR/comandos/01_prepare_target.sql" | psql -a -h target-db -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/01_prepare_target.sql.log" 2>&1 ; date
+date ; cat "$RUN_DIR/comandos/02_dump_compatible_tables.sql" | psql -a -h target-db -d tenant -p 5432 -U tenant tenant > "$RUN_DIR/logs/02_dump_compatible_tables.sql.log" 2>&1 ; date
+date ; cat "$RUN_DIR/comandos/03_load_transformed_data.sql" | psql -a -h target-db -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/03_load_transformed_data.sql.log" 2>&1 ; date
+date ; cat "$RUN_DIR/comandos/04_finalize_target.sql" | psql -a -h target-db -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/04_finalize_target.sql.log" 2>&1 ; date
 ```
 
 #### Verificando erros nos logs

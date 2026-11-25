@@ -20,7 +20,7 @@ BUILTIN_ADAPTERS = {
 
 ROLE_METHODS = {
     'source': ('connect', 'read', 'count', 'close'),
-    'target': ('connect', 'serialize_value', 'insert_statement', 'close'),
+    'target': ('connect', 'render', 'read', 'close'),
 }
 
 ROLE_NAMES = {'source': 'origem', 'target': 'destino'}

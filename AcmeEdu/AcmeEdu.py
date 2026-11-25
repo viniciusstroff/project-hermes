@@ -229,7 +229,7 @@ class Migracao(BaseMigration):
     def __init__(self):
         super().__init__(_clientdir)
 
-    # Fase de preparação (01_prepare_target.sql) ------------------------------
+    # Fase de preparação (01_prepare_target) ------------------------------
 
     def dump_ignoring_tables(self):
         return [f'public.{name}' for name in (*LEGACY_TABLES, *LEGACY_SEQUENCES)]
@@ -241,20 +241,14 @@ class Migracao(BaseMigration):
         # Lido da V2 antes da primeira fase, junto com os outros mapas.
         return [ReferenceMap('student_statuses', table='public.student_statuses', key='code', value='id')]
 
-    def set_indexes_commands(self):
-        # Mesmo uso do checklist de novo cliente: nomes de índice.
-        self.set_index_commands_for(['people_name_idx', 'enrollments_class_idx'])
-
     def run_initial(self):
-        self.print_comment('LIMPEZA DAS TABELAS DA V2')
-        tables = ', '.join(f'public.{name}' for name in [*reversed(TARGET_TABLES), 'holidays'])
-        self.write_sql(f'TRUNCATE {tables} RESTART IDENTITY;\n')
-        self.print_comment('DESABILITAR TRIGGERS DE TABELAS')
-        self.write_sql(self.disable_triggers)
-        self.print_comment('DESABILITAR ÍNDICES DE TABELAS')
-        self.write_sql(self.disable_indexes)
+        self.comment('LIMPEZA DAS TABELAS DA V2')
+        self.clear([f'public.{name}' for name in [*reversed(TARGET_TABLES), 'holidays']])
+        self.comment('DESABILITAR TRIGGERS DE TABELAS')
+        # Todas as tabelas do destino; o runner reabilita na fase final.
+        self.suspend_constraints()
 
-    # Fase de carga (03_load_transformed_data.sql) ----------------------------
+    # Fase de carga (03_load_transformed_data) ----------------------------
 
     def run_inserts(self):
         self.insert_courses()
@@ -266,7 +260,7 @@ class Migracao(BaseMigration):
 
     def insert_courses(self):
         self.print_log('Inserindo cursos')
-        self.print_comment('COURSES')
+        self.comment('COURSES')
         TableMigration(
             source=SourceQuery('public.tb_curso', order_by='cod_curso'),
             target='public.courses',
@@ -284,7 +278,7 @@ class Migracao(BaseMigration):
         """Cada aluno vira uma pessoa, um aluno, um telefone e um responsável."""
 
         self.print_log('Inserindo alunos, pessoas, telefones e responsáveis')
-        self.print_comment('PEOPLE, STUDENTS, PHONES E GUARDIANS (ALUNOS)')
+        self.comment('PEOPLE, STUDENTS, PHONES E GUARDIANS (ALUNOS)')
         MultiTargetMigration(
             source=SourceQuery('public.tb_aluno', order_by='cod_aluno'),
             label='public.students',
@@ -315,7 +309,7 @@ class Migracao(BaseMigration):
         """Professores que já são alunos reaproveitam a pessoa do aluno."""
 
         self.print_log('Inserindo professores')
-        self.print_comment('PEOPLE, TEACHERS E PHONES (PROFESSORES)')
+        self.comment('PEOPLE, TEACHERS E PHONES (PROFESSORES)')
         MultiTargetMigration(
             source=NativeQuery('postgres', TEACHERS_SQL.replace('{offset}', str(TEACHER_PERSON_OFFSET))),
             label='public.teachers',
@@ -346,7 +340,7 @@ class Migracao(BaseMigration):
 
     def insert_subjects(self):
         self.print_log('Inserindo disciplinas')
-        self.print_comment('SUBJECTS')
+        self.comment('SUBJECTS')
         TableMigration(
             source=SourceQuery('public.tb_disciplina', order_by='cod_disc'),
             target='public.subjects',
@@ -361,7 +355,7 @@ class Migracao(BaseMigration):
 
     def insert_classes(self):
         self.print_log('Inserindo turmas')
-        self.print_comment('CLASSES')
+        self.comment('CLASSES')
         TableMigration(
             source=SourceQuery('public.tb_turma', order_by='cod_turma'),
             target='public.classes',
@@ -376,7 +370,7 @@ class Migracao(BaseMigration):
 
     def insert_enrollments(self):
         self.print_log('Inserindo matrículas')
-        self.print_comment('ENROLLMENTS')
+        self.comment('ENROLLMENTS')
         TableMigration(
             source=SourceQuery('public.tb_matricula', order_by='cod_matricula'),
             target='public.enrollments',
@@ -391,11 +385,11 @@ class Migracao(BaseMigration):
             ],
         ).run(self.context.source('v1'))
 
-    # Fase final (04_finalize_target.sql) -------------------------------------
+    # Fase final (04_finalize_target) -------------------------------------
 
     def reset_sequences(self):
         self.print_log('Ajustando sequences')
-        self.write_reset_sequences(TARGET_TABLES, column='id')
+        self.reset_identity([f'public.{name}' for name in TARGET_TABLES], column='id')
 
     # Apoio -------------------------------------------------------------------
 

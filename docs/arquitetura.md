@@ -6,9 +6,9 @@ O script `Migracao.py` é uma aplicação CLI que:
 
 1. Lê a configuração do Acme em `Acme/.env`.
 2. Abre as conexões declaradas no `.env` do cliente: uma ou mais origens e um destino.
-3. Gera arquivos `.sql` com `DELETE`, `UPDATE`, `INSERT`, `ALTER TABLE` e `setval`.
+3. Gera os artefatos de cada fase no formato do destino: `.sql` com `TRUNCATE`, `INSERT`, `ALTER TABLE` e `setval` no PostgreSQL.
 4. Não aplica os dados na V2 durante a geração.
-5. Deixa a aplicação para depois, sobre os arquivos gerados em `runs/<cliente>/<timestamp>/sql/`. Quem aplica é o `Aplicar.py` (ou o próprio `Migracao.py` com `--apply` ou `--dry-run`), numa única transação. O `rodar2.sh` com `psql` continua como alternativa.
+5. Deixa a aplicação para depois, sobre os arquivos gerados em `runs/<cliente>/<timestamp>/comandos/`. Quem aplica é o `Aplicar.py` (ou o próprio `Migracao.py` com `--apply` ou `--dry-run`), numa única transação. O `rodar2.sh` com `psql` continua como alternativa.
 
 ## Bancos envolvidos
 
@@ -34,10 +34,12 @@ componentes menores.
 Componentes principais:
 
 - `MigrationContext`: agrupa configuração, artefatos, adapters de origem,
-  adapter de destino, provider de metadados, output, logger e progresso.
+  adapter de destino, output, logger e progresso. O `emit(operacao)` dele é o
+  único caminho de escrita da execução.
 - `DefaultMigrationContextFactory`: cria o contexto padrão a partir das conexões
   nomeadas do `.env`, conectando cada uma pelo registro de adapters. O manifesto
-  registra o adapter e os parâmetros de cada conexão, sem senha nem URI.
+  registra o adapter, os parâmetros e a versão do servidor de cada conexão,
+  sem senha nem URI.
 - `MigrationRunner`: orquestra as fases padrão da execução.
 - `SourceAdapter`: lê a origem por `read(query)` e conta as linhas por
   `count(query)`. A consulta é um `SourceQuery` (entidade, campos, filtros de
@@ -45,16 +47,22 @@ Componentes principais:
   O adapter traduz para a linguagem dele, como `LIMIT` no PostgreSQL e `ROWS`
   no Firebird. Ele recusa consulta ou campo nativo de outro adapter antes de ler.
   Os adapters SQL partem de `SqlSourceAdapter` (`core/adapters/sql_source.py`).
-- `TargetAdapter` e `Dialect`: renderizam `INSERT`s e valores SQL para o destino.
+- Operações de escrita (`core/operations.py`): `Insert`, `Clear`,
+  `SuspendConstraints`, `ResumeConstraints`, `ResetIdentity`, `Native` e
+  `Comment`. A migração descreve o que fazer, sem linguagem de banco.
+- `TargetAdapter`: traduz cada operação nos comandos do formato dele
+  (`render(operacao)`), lê dados de referência (`read(query)`) e declara o
+  formato dos artefatos (`artifact_format`). O PostgreSQL usa o `Dialect` para
+  os valores e põe aspas nos nomes que precisam. Uma operação sem sentido num
+  banco vira nenhum comando. Um `Native` de outro adapter é recusado.
 - Estratégias de campo (`core/strategies.py`): devolvem valores Python pelo `raw_value()` e não geram SQL.
   O adapter de destino é o único ponto de serialização. Código de um banco específico entra só por
   `NativeField` e `NativeQuery`, presos ao adapter de origem e conferidos antes da consulta, ou por
   `SqlLiteral`, copiado sem mudança para o destino. O catálogo está em [estrategias.md](estrategias.md).
-- `MetadataProvider`: concentra operações auxiliares do destino, como triggers,
-  índices, mapas de referência e sequences.
-- `OutputAdapter`: recebe o SQL gerado, fase por fase. A implementação padrão é
-  `SqlFileOutput`, que grava os arquivos em `runs/<cliente>/<timestamp>/sql/`.
-  O `MirrorOutput` entrega os mesmos comandos para mais de um output.
+- `OutputAdapter`: recebe as operações, fase por fase. A implementação padrão é
+  `FileOutput`, que pede ao adapter de destino os comandos de cada operação e
+  grava em `runs/<cliente>/<timestamp>/comandos/<NN>_<fase>.<extensão>`.
+  O `MirrorOutput` entrega as mesmas operações para mais de um output.
 - `BaseMigration`: fachada transitória para scripts que ainda usam herança.
 
 Responsabilidades do cliente:
@@ -62,20 +70,21 @@ Responsabilidades do cliente:
 - listar tabelas ignoradas ou ausentes no `pg_dump`;
 - declarar SQL bruto específico do cliente quando necessário;
 - declarar migrações de tabelas, transformações, inserts e updates;
-- indicar índices ou sequences por meio dos helpers do core quando a operação
-  for recorrente.
+- limpar tabelas, suspender triggers e ajustar sequences pelos atalhos da
+  fachada (`clear()`, `suspend_constraints()`, `reset_identity()`).
 
-SQL PostgreSQL puro continua permitido no cliente como escape hatch. A regra
-prática é: lógica excepcional do cliente pode ficar no Acme; operações
-recorrentes de infraestrutura devem passar por adapter, dialect ou provider.
+SQL PostgreSQL puro continua permitido no cliente como escape hatch, dentro de
+um `Native('postgres', sql)`. A regra prática é: lógica excepcional do cliente
+pode ficar no Acme; operações recorrentes de infraestrutura devem virar
+operação do core, traduzida pelo adapter.
 
 ## API de composição e compatibilidade
 
 O caminho preferido para novas integrações é receber um `MigrationContext` por
-composição e usar `context.source('v1')`, `context.source('fb')`,
-`context.output` e `context.metadata`. Pedir uma origem que o `.env` não declara
-gera um erro com o nome pedido e a lista das origens declaradas. Para escrever SQL fora de um engine, use
-`context.output.write(...)` e `context.output.comment(...)`. O `BaseMigration`
+composição e usar `context.source('v1')`, `context.source('fb')` e
+`context.emit(...)`. Pedir uma origem que o `.env` não declara gera um erro com
+o nome pedido e a lista das origens declaradas. Para escrever fora de um
+engine, emita uma operação com `context.emit(...)`. O `BaseMigration`
 usa esse mesmo contexto por baixo, então os scripts antigos podem continuar
 herdando da base durante a transição.
 
@@ -83,48 +92,58 @@ O contexto expõe a saída só por `context.output`. O antigo `context.writer` e
 classe `SqlArtifactWriter` foram removidos. Quem monta um `MigrationContext` à
 mão passa o output no argumento `output=`.
 
-Na fachada por herança, `BaseMigration.write_sql()`, `print_comment()`,
-`_open_sql_file()` e `_flush_writes()` continuam disponíveis e delegam para
-`context.output`, então funcionam com qualquer `OutputAdapter`. A propriedade
-`file` devolve o arquivo aberto pelo `SqlFileOutput` ou `None` quando o output
-não grava em arquivo.
+Na fachada por herança, a escrita é `emit(operacao)` e os atalhos `comment()`,
+`clear()`, `suspend_constraints()` e `reset_identity()`. Saíram `write_sql()`,
+`print_comment()`, `sql_value()`, `_open_sql_file()`, `_flush_writes()`, o
+helper de índices e o `write_reset_sequences()`. A propriedade `file` devolve o
+arquivo aberto pelo `FileOutput` ou `None` quando o output não grava em
+arquivo.
+
+Cada `SuspendConstraints` emitido fica registrado no contexto. Na fase final, o
+runner emite o `ResumeConstraints` das mesmas entidades, então o cliente não
+precisa lembrar de reabilitar as triggers.
+
+O helper de índices saiu sem substituto. Com nome de índice ele não fazia nada,
+e com nome de tabela deixava o índice sem as linhas carregadas. Desligar índice
+durante a carga pode voltar como otimização de um adapter.
 
 A fachada não expõe conexões de driver. Código de cliente deve usar adapters,
-providers e helpers como `reference_map()`, `set_index_commands_for()` e
-`write_reset_sequences()`.
+operações e helpers como `reference_map()`.
 
 ## Mapas de referência
 
 O cliente declara os mapas lidos do destino em `declare_reference_maps()`, com
 objetos `ReferenceMap` de `core/references.py`: tabela, coluna da chave, coluna
-do valor e filtros de igualdade, ou uma `query` em SQL do destino. O
-`MigrationRunner` carrega todos depois de gerar os comandos de trigger e antes
-de abrir `prepare_target`. Ele registra no log cada mapa com a quantidade de
+do valor e filtros de igualdade, ou uma `query` que é uma `NativeQuery` do
+adapter de destino. O `MigrationRunner` carrega todos antes de abrir
+`prepare_target`. Ele registra no log cada mapa com a quantidade de
 chaves. O código do cliente lê um mapa com `self.reference_map(nome)`.
 
-O provider só devolve pares de chave e valor (`load_reference_pairs()`). A
-normalização, o descarte de chave nula e a recusa de chave repetida com valores
-diferentes ficam em `build_reference_map()`, iguais para qualquer provider. O
+O adapter de destino lê os pares pelo mesmo `read()` das origens: a declaração
+com tabela vira um `SourceQuery` com a chave, o valor e os filtros
+(`reference_query()`). A `NativeQuery` vai como está. A normalização, o
+descarte de chave nula e a recusa de chave repetida com valores diferentes
+ficam em `build_reference_map()`, iguais para qualquer adapter. O
 mapa carregado é um `Mapping` só de leitura que guarda o normalizador. O
 `Lookup` usa esse normalizador quando não recebe outro.
 
-Logo depois da carga, o runner chama `close_reads()`. A partir daí o provider
-recusa consultar o destino (`TargetReadClosedError`). A transação de leitura
-termina em `ROLLBACK`, sem segurar lock nas tabelas. Os comandos de trigger
-continuam disponíveis porque ficaram em cache. A garantia não cobre consultas
+Logo depois da carga, o runner chama `context.close_target_reads()`, que chama
+o `close_reads()` do adapter. Antes de fechar, o adapter PostgreSQL guarda a
+lista de tabelas que `SuspendConstraints` e `ResumeConstraints` sem entidades
+vão usar. A partir daí ele recusa consultar o destino (`TargetReadClosedError`).
+A transação de leitura termina em `ROLLBACK`, sem segurar lock nas tabelas. A garantia não cobre consultas
 que o cliente faça direto pela conexão do adapter de destino
 (`context.target.connection`).
 
 ## Saída da migração
 
-O runtime não abre arquivos SQL por conta própria. Ele entrega os comandos para
+O runtime não abre arquivos por conta própria. Ele entrega as operações para
 um `OutputAdapter`, definido em `core/outputs/base.py`:
 
 ```python
 class OutputAdapter(Protocol):
     def open_phase(self, phase: str) -> None: ...
-    def write(self, sql: str) -> None: ...
-    def comment(self, text: str) -> None: ...
+    def write(self, operation) -> None: ...
     def flush(self) -> None: ...
     def finish(self, success: bool) -> None: ...
     def describe(self) -> dict: ...
@@ -133,9 +152,10 @@ class OutputAdapter(Protocol):
 
 As fases são chaves lógicas: `setup`, `prepare_target`, `load_transformed_data`
 e `finalize_target`. A `DefaultMigrationContextFactory` abre `setup` ao montar o
-contexto. O `MigrationRunner` abre as outras três na ordem padrão, escreve os
-comandos finais de índices e triggers e chama `flush()`. Os engines criados por
-`context.source()` escrevem pelo mesmo `output.write`.
+contexto, depois de conectar o destino, porque a extensão do arquivo vem do
+adapter. O `MigrationRunner` abre as outras três na ordem padrão, emite a
+retomada das triggers suspensas e chama `flush()`. Os engines criados por
+`context.source()` escrevem pelo mesmo `context.emit`.
 
 O output fica sabendo do resultado pelo `finish(success)`, que o runner chama
 uma vez por execução. Na execução que termina bem, `finish(True)` vem depois do
@@ -152,35 +172,39 @@ tratar a execução como não confirmada, o que para um output de banco signific
 `ROLLBACK`.
 
 O `describe()` devolve um dicionário que o manifesto grava na chave `output`.
-Com o contexto padrão o valor é `{"type": "sql-file"}`.
+Com o contexto padrão e destino PostgreSQL o valor é
+`{"type": "file", "format": "sql"}`.
 
-A implementação padrão é `SqlFileOutput`, em `core/outputs/sql_file.py`. Ela
-resolve cada fase pelo `ArtifactManager.sql_path()`, então os nomes de arquivo
-continuam definidos em um só lugar. O SQL fica em um buffer de até 500 trechos
-antes de ir para o arquivo. Trocar de fase, chamar `flush()` ou `close()` grava
-o que estiver pendente. O `comment()` gera o mesmo bloco `-----` que já aparecia
-nos arquivos. O `finish()` grava o buffer nos dois resultados: quando a execução
-falha, os arquivos parciais ficam no disco, como antes.
+A implementação padrão é `FileOutput`, em `core/outputs/file.py`. Ela recebe o
+adapter de destino, pede os comandos de cada operação (`render()`) e grava no
+arquivo da fase. O caminho vem do `ArtifactManager.command_path(fase, extensão)`,
+que também registra o artefato para a lista do manifesto. Os comandos ficam em
+um buffer de até 500 antes de ir para o arquivo. Trocar de fase, chamar
+`flush()` ou `close()` grava o que estiver pendente. Um `Comment` vira o mesmo
+bloco `-----` de antes no SQL. O `finish()` grava o buffer nos dois resultados:
+quando a execução falha, os arquivos parciais ficam no disco. Um valor que o
+destino não guarda falha no `write()`, com tabela e coluna na mensagem
+(`ValueSerializationError`).
 
 O `MirrorOutput`, em `core/outputs/mirror.py`, recebe uma lista de outputs e
 repassa cada chamada para todos, na ordem em que foram passados:
 
 ```python
-output = MirrorOutput(SqlFileOutput(artifacts), outro_output)
+output = MirrorOutput(FileOutput(artifacts, context.target), outro_output)
 ```
 
-`open_phase()`, `write()`, `comment()` e `flush()` param no primeiro erro, que
+`open_phase()`, `write()` e `flush()` param no primeiro erro, que
 derruba a execução. `finish()` e `close()` chegam a todos os outputs mesmo que
 um falhe, e o primeiro erro é relançado no fim. O `describe()` devolve
 `{"type": "mirror", "outputs": [...]}` com a descrição de cada output. Com
 `MirrorOutput`, a propriedade `BaseMigration.file` devolve `None`.
 
-A `DefaultMigrationContextFactory` ainda monta só o `SqlFileOutput`. Para usar
+A `DefaultMigrationContextFactory` ainda monta só o `FileOutput`. Para usar
 o `MirrorOutput` hoje é preciso montar o `MigrationContext` à mão ou trocar
 `context.output` antes de rodar. A escolha pelo CLI fica para quando houver
 outro output concreto.
 
-Nenhum output do core executa SQL no banco de destino. A aplicação acontece
+Nenhum output do core executa comandos no banco de destino. A aplicação acontece
 depois da geração, pelo aplicador descrito na próxima seção. O
 `DirectDatabaseOutput`, que executaria os comandos durante a geração, ficou
 adiado. O motivo está em [Aplicação no destino](#aplicação-no-destino) e no
@@ -280,20 +304,23 @@ Os artefatos ficam em `runs/<cliente>/<YYYYmmdd-HHMMSS>/`:
 - `logs/migration.log`
 - `logs/*.sql.log`, gravados pelo `rodar2.sh`
 - `erros/*.txt`, gravados pelo `rodar2.sh`
-- `sql/00_setup.sql`
-- `sql/01_prepare_target.sql`
-- `sql/02_dump_compatible_tables.sql`
-- `sql/03_load_transformed_data.sql`
-- `sql/04_finalize_target.sql`
+- `comandos/00_setup.sql`
+- `comandos/01_prepare_target.sql`
+- `comandos/02_dump_compatible_tables.sql`
+- `comandos/03_load_transformed_data.sql`
+- `comandos/04_finalize_target.sql`
 - `aplicacoes/<YYYYmmdd-HHMMSS>-<apply|dry-run>/relatorio.json` e `erros.txt`, um par por aplicação
 
 Responsabilidade de cada artefato:
 
 - `00_setup.sql`: arquivo inicial da execução.
-- `01_prepare_target.sql`: preparação da V2, com desabilitação de triggers/índices e limpeza de dados.
+- `01_prepare_target.sql`: preparação da V2, com limpeza de dados e desabilitação de triggers.
 - `02_dump_compatible_tables.sql`: saída do `pg_dump` da V1 para tabelas que podem ser carregadas em bloco.
 - `03_load_transformed_data.sql`: carga principal e ajustes intermediários.
-- `04_finalize_target.sql`: `setval` de sequences e reativação de índices/triggers.
+- `04_finalize_target.sql`: `setval` de sequences e reativação de triggers.
+
+A extensão vem do adapter de destino. O manifesto lista os artefatos da
+execução na chave `artifacts`, com fase, caminho relativo e formato.
 
 ## Estratégia de carga
 
@@ -311,7 +338,6 @@ O script já incorpora decisões de compatibilidade:
 - exclusão de tabelas problemáticas no `pg_dump`;
 - exclusão de tabelas inexistentes no ambiente do Acme;
 - limpeza prévia de tabelas da V2 para evitar `duplicate key`;
-- recriação de índices únicos em tabelas fictícias `acme_*`;
 - correções posteriores, como prefixo de `document_files.f_file` e ajustes em datas;
 - atualização de usernames com encoding inválido em IDs específicos.
 

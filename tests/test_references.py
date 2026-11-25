@@ -41,12 +41,15 @@ sys.modules.setdefault('dotenv', dotenv)
 from core.artifacts import ArtifactManager
 from core.base_migration import BaseMigration
 from core.context import MigrationContext
-from core.metadata import PostgresMetadataProvider
+from core.adapters.postgres import PostgresTargetAdapter
+from core.queries import NativeQuery, SourceQuery
 from core.references import (
     LoadedReferenceMap,
     ReferenceMap,
     ReferenceMapError,
     build_reference_map,
+    reference_pairs,
+    reference_query,
 )
 from core.runner import MigrationRunner
 from core.runtime import MigrationLogger, MigrationProgress
@@ -65,16 +68,43 @@ class DeclarationTest(unittest.TestCase):
 
     def test_invalid_declarations_name_the_map(self):
         invalid = [
-            lambda: ReferenceMap('both', table='t', key='k', value='v', query='SELECT 1, 2'),
+            lambda: ReferenceMap('both', table='t', key='k', value='v', query=NativeQuery('postgres', 'SELECT 1, 2')),
             lambda: ReferenceMap('neither'),
             lambda: ReferenceMap('no_key', table='t', value='v'),
-            lambda: ReferenceMap('query_filters', query='SELECT 1, 2', filters={'a': 1}),
+            lambda: ReferenceMap('query_filters', query=NativeQuery('postgres', 'SELECT 1, 2'), filters={'a': 1}),
+            lambda: ReferenceMap('text_query', query='SELECT 1, 2'),
         ]
         for build in invalid:
             with self.subTest(build=build):
                 with self.assertRaises(ReferenceMapError) as raised:
                     build()
                 self.assertIn("'", str(raised.exception))
+
+    def test_text_query_points_to_native_query(self):
+        with self.assertRaises(ReferenceMapError) as raised:
+            ReferenceMap('states', query='SELECT f_code, f_id FROM public.states')
+
+        self.assertIn('NativeQuery', str(raised.exception))
+
+    def test_table_declaration_reads_a_source_query(self):
+        declaration = ReferenceMap('states', table='public.states', key='f_code', value='f_id',
+                                   filters={'f_active': True})
+
+        self.assertEqual(
+            reference_query(declaration),
+            SourceQuery('public.states', fields=('f_code', 'f_id'), where={'f_active': True}),
+        )
+        self.assertEqual(
+            reference_pairs(declaration, [{'f_id': 25, 'f_code': 'SP'}]),
+            [('SP', 25)],
+        )
+
+    def test_query_declaration_uses_the_first_two_fields(self):
+        query = NativeQuery('postgres', 'SELECT s.f_code, s.f_id FROM public.states s')
+        declaration = ReferenceMap('states', query=query)
+
+        self.assertIs(reference_query(declaration), query)
+        self.assertEqual(reference_pairs(declaration, [{'code': 'SP', 'id': 25}]), [('SP', 25)])
 
     def test_declaration_is_immutable(self):
         declaration = ReferenceMap('states', table='t', key='k', value='v')
@@ -156,30 +186,26 @@ class LegacyLoaderRemovedTest(unittest.TestCase):
     def test_no_ad_hoc_loader(self):
         self.assertFalse(hasattr(MigrationContext, 'load_reference_map'))
         self.assertFalse(hasattr(BaseMigration, 'load_reference_map'))
-        self.assertFalse(hasattr(PostgresMetadataProvider, 'load_reference_map'))
+        self.assertFalse(hasattr(PostgresTargetAdapter, 'load_reference_map'))
         migration = BaseMigration('Acme', context=types.SimpleNamespace(
             config={}, artifacts=None, close=lambda: None))
         self.assertFalse(hasattr(migration, '_reference_maps'))
         self.assertEqual(migration.declare_reference_maps(), [])
 
 
-class FakeMetadata:
+class FakeTarget:
+    """Target that answers each SourceQuery with fixed (key, value) pairs of its entity."""
+
     def __init__(self, events, pairs=None, fail=None):
         self.events = events
         self.pairs = pairs or {}
         self.fail = fail
 
-    def disable_triggers_sql(self):
-        return ''
-
-    def enable_triggers_sql(self):
-        return ''
-
-    def load_reference_pairs(self, reference):
-        self.events.append(('load', reference.name))
-        if self.fail == reference.name:
-            raise RuntimeError('relation "public.nao_existe" does not exist')
-        return self.pairs.get(reference.name, [])
+    def read(self, query):
+        self.events.append(('load', query.entity))
+        if self.fail == query.entity:
+            raise RuntimeError(f'relation "{query.entity}" does not exist')
+        return [dict(zip(query.fields, pair)) for pair in self.pairs.get(query.entity, [])]
 
     def close_reads(self):
         self.events.append(('close_reads',))
@@ -192,10 +218,7 @@ class RecordingOutput:
     def open_phase(self, phase):
         self.events.append(('open_phase', phase))
 
-    def write(self, sql):
-        pass
-
-    def comment(self, text):
+    def write(self, operation):
         pass
 
     def flush(self):
@@ -227,8 +250,8 @@ class ReferenceMapsRunnerTest(unittest.TestCase):
         progress = MigrationProgress(logger)
         logger.progress = progress
         context = MigrationContext(
-            clientdir=clientdir, config={}, artifacts=artifacts, sources={}, target=None,
-            metadata=FakeMetadata(self.events, pairs, fail), output=RecordingOutput(self.events),
+            clientdir=clientdir, config={}, artifacts=artifacts, sources={},
+            target=FakeTarget(self.events, pairs, fail), output=RecordingOutput(self.events),
             logger=logger, progress=progress,
         )
         events = self.events
@@ -258,11 +281,11 @@ class ReferenceMapsRunnerTest(unittest.TestCase):
             ReferenceMap('areas', table='public.areas', key='f_code', value='f_id'),
         ]
         manifest, log, used = self.run_migration(
-            declarations, pairs={'states': [('SP', 25), ('RJ', 19)], 'areas': []}, uses=['states'],
+            declarations, pairs={'public.states': [('SP', 25), ('RJ', 19)], 'public.areas': []}, uses=['states'],
         )
 
         self.assertEqual(manifest['status'], 'success')
-        self.assertEqual(self.events[:4], [('load', 'states'), ('load', 'areas'), ('close_reads',),
+        self.assertEqual(self.events[:4], [('load', 'public.states'), ('load', 'public.areas'), ('close_reads',),
                                            ('open_phase', 'prepare_target')])
         self.assertEqual(used['states'], {'SP': 25, 'RJ': 19})
         self.assertIn('Mapa de referência states: 2 chaves', log)
@@ -276,7 +299,7 @@ class ReferenceMapsRunnerTest(unittest.TestCase):
 
     def test_load_error_fails_the_run_before_prepare_target(self):
         manifest, _, _ = self.run_migration(
-            [ReferenceMap('states', table='public.nao_existe', key='k', value='v')], fail='states',
+            [ReferenceMap('states', table='public.nao_existe', key='k', value='v')], fail='public.nao_existe',
         )
 
         self.assertEqual(manifest['status'], 'failed')
@@ -287,7 +310,7 @@ class ReferenceMapsRunnerTest(unittest.TestCase):
         cases = {
             'repeated': lambda: [ReferenceMap('states', table='t', key='k', value='v'),
                                  ReferenceMap('states', table='u', key='k', value='v')],
-            'invalid': lambda: [ReferenceMap('states', table='t', key='k', value='v', query='SELECT 1, 2')],
+            'invalid': lambda: [ReferenceMap('states', query='SELECT 1, 2')],
         }
         for name, declarations in cases.items():
             with self.subTest(case=name):

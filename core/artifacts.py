@@ -1,18 +1,38 @@
 import datetime
 import json
 import os
+from dataclasses import dataclass
+
+# Phases in the order of generation and application. The position gives the
+# number in the file name: comandos/<NN>_<phase>.<extension>.
+PHASES = (
+    'setup',
+    'prepare_target',
+    'dump_compatible_tables',
+    'load_transformed_data',
+    'finalize_target',
+)
+COMMANDS_DIR = 'comandos'
+
+
+@dataclass(frozen=True)
+class ArtifactFormat:
+    """Format of the artifacts written for a target adapter."""
+
+    name: str
+    extension: str
+
+
+def artifact_name(phase: str, extension: str) -> str:
+    """File name of a phase artifact, such as ``03_load_transformed_data.sql``."""
+
+    if phase not in PHASES:
+        raise KeyError(f'Fase desconhecida: {phase}')
+    return f'{PHASES.index(phase):02d}_{phase}.{extension}'
 
 
 class ArtifactManager:
     """Centraliza os artefatos gerados por uma execução de migração."""
-
-    SQL_FILES = {
-        'setup': '00_setup.sql',
-        'prepare_target': '01_prepare_target.sql',
-        'dump_compatible_tables': '02_dump_compatible_tables.sql',
-        'load_transformed_data': '03_load_transformed_data.sql',
-        'finalize_target': '04_finalize_target.sql',
-    }
 
     def __init__(self, clientdir: str, rootdir: str = None, timestamp: str = None):
         self.clientdir = os.path.abspath(clientdir)
@@ -20,25 +40,36 @@ class ArtifactManager:
         self.rootdir = os.path.abspath(rootdir or os.path.dirname(self.clientdir))
         self.timestamp = timestamp or datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
         self.run_dir = os.path.join(self.rootdir, 'runs', self.client_name, self.timestamp)
-        self.sql_dir = os.path.join(self.run_dir, 'sql')
+        self.commands_dir = os.path.join(self.run_dir, COMMANDS_DIR)
         self.logs_dir = os.path.join(self.run_dir, 'logs')
         self.errors_dir = os.path.join(self.run_dir, 'erros')
         self.manifest_path = os.path.join(self.run_dir, 'manifest.json')
+        self._artifacts = {}
 
-        for directory in (self.sql_dir, self.logs_dir, self.errors_dir):
+        for directory in (self.commands_dir, self.logs_dir, self.errors_dir):
             os.makedirs(directory, exist_ok=True)
 
-    def sql_path(self, key: str) -> str:
-        return os.path.join(self.sql_dir, self.SQL_FILES[key])
+    def command_path(self, phase: str, extension: str) -> str:
+        """Path of the artifact of a phase. The artifact goes to the manifest list."""
+
+        name = artifact_name(phase, extension)
+        self._artifacts[phase] = {
+            'phase': phase,
+            'path': f'{COMMANDS_DIR}/{name}',
+            'format': extension,
+        }
+        return os.path.join(self.commands_dir, name)
+
+    def artifacts(self) -> list:
+        """Artifacts handed out in this run, in phase order, with paths relative to the run."""
+
+        return [self._artifacts[phase] for phase in PHASES if phase in self._artifacts]
 
     def log_path(self, name: str) -> str:
         return os.path.join(self.logs_dir, name)
 
     def error_path(self, name: str) -> str:
         return os.path.join(self.errors_dir, name)
-
-    def sql_paths(self) -> dict:
-        return {key: self.sql_path(key) for key in self.SQL_FILES}
 
     def write_manifest(
         self,
@@ -58,10 +89,10 @@ class ArtifactManager:
                 'limit': debug_limit,
             },
             'run_dir': self.run_dir,
-            'sql_files': self.sql_paths(),
+            'artifacts': self.artifacts(),
             'logs_dir': self.logs_dir,
             'errors_dir': self.errors_dir,
-            # Adapter and parameters of each connection, without passwords.
+            # Adapter, parameters and server version of each connection, without passwords.
             'sources': (connections or {}).get('sources', {}),
             'target': (connections or {}).get('target'),
             'output': output,

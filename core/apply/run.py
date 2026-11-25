@@ -4,11 +4,12 @@ import json
 import os
 from dataclasses import dataclass
 
-from core.artifacts import ArtifactManager
+from core.artifacts import COMMANDS_DIR, PHASES, artifact_name
 
 # Phase order comes from the artifact manager, the same order of generation.
-PHASE_FILES = tuple(ArtifactManager.SQL_FILES.values())
-DUMP_FILE = ArtifactManager.SQL_FILES['dump_compatible_tables']
+# The applier only handles SQL artifacts for now.
+PHASE_FILES = tuple(artifact_name(phase, 'sql') for phase in PHASES)
+DUMP_FILE = artifact_name('dump_compatible_tables', 'sql')
 
 
 class IncompleteRunError(Exception):
@@ -49,7 +50,7 @@ class GeneratedRun:
         artifacts = []
         missing = []
         for name in PHASE_FILES:
-            path = os.path.join(run_dir, 'sql', name)
+            path = os.path.join(run_dir, COMMANDS_DIR, name)
             if os.path.isfile(path):
                 artifacts.append(Artifact(name, path))
             elif not (debug and name == DUMP_FILE):
@@ -57,7 +58,7 @@ class GeneratedRun:
                 missing.append(name)
 
         if missing:
-            raise IncompleteRunError(f'{run_dir}: artefatos ausentes em sql/: {", ".join(missing)}')
+            raise IncompleteRunError(f'{run_dir}: artefatos ausentes em {COMMANDS_DIR}/: {", ".join(missing)}')
 
         return cls(run_dir, debug, tuple(artifacts))
 

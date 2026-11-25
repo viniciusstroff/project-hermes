@@ -22,6 +22,35 @@ Each output adapter SHALL describe itself through `describe()` as a JSON-seriali
 - **WHEN** a `MirrorOutput` wraps two file outputs for a MongoDB target
 - **THEN** its description is `{"type": "mirror", "outputs": [{"type": "file", "format": "jsonl"}, {"type": "file", "format": "jsonl"}]}`
 
+### Requirement: Mirror output forwards to every output
+The `MirrorOutput` SHALL forward phase opening, operations, flush, finish and close to each configured output in the order the outputs were given.
+
+#### Scenario: Mirror forwards calls in order
+- **WHEN** a `MirrorOutput` built with two outputs receives `open_phase`, `write`, `flush`, `finish(True)` and `close`
+- **THEN** each output receives the same calls with the same arguments
+- **AND** the first output receives each call before the second output
+
+#### Scenario: Mirror stops writes on first error
+- **WHEN** the first output raises during `write`
+- **THEN** the error propagates
+- **AND** the second output does not receive that write
+
+#### Scenario: Mirror finishes and closes every output when one fails
+- **WHEN** the first output raises during `finish` or `close`
+- **THEN** the second output still receives the same `finish` or `close` call
+- **AND** the first error is raised after every output was called
+
+#### Scenario: Mirror requires at least one output
+- **WHEN** a `MirrorOutput` is created without outputs
+- **THEN** it raises `ValueError`
+
+### Requirement: Non-file outputs remain out of scope
+The default runtime SHALL NOT execute the generated commands against the target database as part of the generation.
+
+#### Scenario: Default migration runs
+- **WHEN** a migration runs with the default context
+- **THEN** the commands are written to the phase artifacts and are not applied directly to the target database by the output layer
+
 ## ADDED Requirements
 
 ### Requirement: File output writes artifacts in the target format
@@ -38,6 +67,11 @@ The `FileOutput` SHALL render each operation through the target adapter and writ
 #### Scenario: Operation without commands
 - **WHEN** the target adapter renders an operation into no command
 - **THEN** the file output writes nothing for it
+
+#### Scenario: Value the target cannot store
+- **WHEN** the target adapter cannot render a value of an `Insert`
+- **THEN** `write()` raises an error naming the entity, the column and the Python type
+- **AND** the run fails with that error
 
 ### Requirement: File output keeps artifacts on finish
 The `FileOutput` SHALL flush pending commands on `finish()` for both results and SHALL NOT remove or truncate artifacts when the run fails.

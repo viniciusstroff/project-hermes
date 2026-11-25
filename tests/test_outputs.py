@@ -39,11 +39,33 @@ dotenv.dotenv_values = dotenv_values
 sys.modules.setdefault('dotenv', dotenv)
 
 import core
-from core.artifacts import ArtifactManager
+from core.adapters.postgres import PostgresTargetAdapter
+from core.artifacts import ArtifactFormat, ArtifactManager
 from core.context import DefaultMigrationContextFactory, MigrationContext
-from core.outputs import MirrorOutput, OutputAdapter, SqlFileOutput
+from core.operations import Comment, Insert, Native, ResumeConstraints, SuspendConstraints
+from core.outputs import FileOutput, MirrorOutput, OutputAdapter
 from core.runner import MigrationRunner
 from core.runtime import MigrationLogger, MigrationProgress
+
+
+PG = PostgresTargetAdapter()
+
+
+def n(sql):
+    """Native PostgreSQL operation, rendered as the text itself."""
+    return Native('postgres', sql)
+
+
+class JsonLinesTarget:
+    """Fake non-SQL target: one line per Native payload, nothing for comments."""
+
+    name = 'jsonl-test'
+    artifact_format = ArtifactFormat('jsonl', 'jsonl')
+
+    def render(self, operation):
+        if isinstance(operation, Comment):
+            return []
+        return [f'{{"payload": "{operation.payload}"}}\n']
 
 
 def read_file(path):
@@ -71,11 +93,8 @@ class RecordingOutput:
     def open_phase(self, phase):
         self._record('open_phase', phase)
 
-    def write(self, sql):
-        self._record('write', sql)
-
-    def comment(self, text):
-        self._record('comment', text)
+    def write(self, operation):
+        self._record('write', operation)
 
     def flush(self):
         self._record('flush')
@@ -92,18 +111,16 @@ class RecordingOutput:
 
 
 class FailingMigration:
-    """Composed migration whose load phase raises after writing SQL."""
-
-    enable_indexes = ''
+    """Composed migration whose load phase raises after emitting operations."""
 
     def __init__(self, context):
         self.context = context
 
     def run_initial(self):
-        self.context.output.write('-- prepare\n')
+        self.context.emit(n('-- prepare\n'))
 
     def run_inserts(self):
-        self.context.output.write('INSERT INTO public.demo VALUES (1);\n')
+        self.context.emit(n('INSERT INTO public.demo VALUES (1);\n'))
         raise RuntimeError('falha no insert')
 
 
@@ -137,14 +154,6 @@ class FakeConnection:
         self.closed = True
 
 
-class FakeMetadata:
-    def disable_triggers_sql(self):
-        return 'ALTER TABLE public.demo DISABLE TRIGGER ALL;\n'
-
-    def enable_triggers_sql(self):
-        return 'ALTER TABLE public.demo ENABLE TRIGGER ALL;\n'
-
-
 ENV_LINES = [
     'SOURCE_V1_ADAPTER=postgres',
     'SOURCE_V1_HOST=source-db',
@@ -168,7 +177,7 @@ ENV_LINES = [
 ]
 
 
-class SqlFileOutputTest(unittest.TestCase):
+class FileOutputTest(unittest.TestCase):
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
         clientdir = os.path.join(self._tmpdir.name, 'Acme')
@@ -179,7 +188,7 @@ class SqlFileOutputTest(unittest.TestCase):
         self._tmpdir.cleanup()
 
     def test_open_phase_maps_logical_keys_to_existing_artifact_files(self):
-        output = SqlFileOutput(self.artifacts)
+        output = FileOutput(self.artifacts, PG)
         expected = {
             'setup': '00_setup.sql',
             'prepare_target': '01_prepare_target.sql',
@@ -189,13 +198,13 @@ class SqlFileOutputTest(unittest.TestCase):
 
         for phase, file_name in expected.items():
             output.open_phase(phase)
-            self.assertEqual(output.file.name, os.path.join(self.artifacts.sql_dir, file_name))
+            self.assertEqual(output.file.name, os.path.join(self.artifacts.commands_dir, file_name))
             self.assertTrue(os.path.exists(output.file.name))
 
         output.close()
 
     def test_writes_are_buffered_until_buffer_size_or_flush(self):
-        output = SqlFileOutput(self.artifacts, buffer_size=3)
+        output = FileOutput(self.artifacts, PG, buffer_size=3)
         output.open_phase('prepare_target')
         file_writes = []
         real_write = output.file.write
@@ -206,73 +215,75 @@ class SqlFileOutputTest(unittest.TestCase):
 
         output.file.write = recording_write
 
-        output.write('a;\n')
-        output.write('b;\n')
+        output.write(n('a;\n'))
+        output.write(n('b;\n'))
         self.assertEqual(file_writes, [])
 
-        output.write('c;\n')
+        output.write(n('c;\n'))
         self.assertEqual(file_writes, ['a;\nb;\nc;\n'])
 
-        output.write('d;\n')
+        output.write(n('d;\n'))
         self.assertEqual(file_writes, ['a;\nb;\nc;\n'])
         output.flush()
         self.assertEqual(file_writes, ['a;\nb;\nc;\n', 'd;\n'])
 
         output.close()
-        self.assertEqual(read_file(self.artifacts.sql_path('prepare_target')), 'a;\nb;\nc;\nd;\n')
+        self.assertEqual(read_file(self.artifacts.command_path('prepare_target', 'sql')), 'a;\nb;\nc;\nd;\n')
 
-    def test_comment_renders_current_sql_comment_block(self):
-        output = SqlFileOutput(self.artifacts)
+    def test_comment_renders_sql_comment_block(self):
+        output = FileOutput(self.artifacts, PG)
         output.open_phase('finalize_target')
 
-        output.comment('HABILITAR ÍNDICES')
+        output.write(Comment('HABILITAR ÍNDICES'))
         output.close()
 
         self.assertEqual(
-            read_file(self.artifacts.sql_path('finalize_target')),
+            read_file(self.artifacts.command_path('finalize_target', 'sql')),
             '\n-----' + '-' * 17 + '\n-----HABILITAR ÍNDICES\n-----' + '-' * 17 + '\n\n',
         )
 
     def test_opening_next_phase_flushes_previous_phase(self):
-        output = SqlFileOutput(self.artifacts)
+        output = FileOutput(self.artifacts, PG)
         output.open_phase('prepare_target')
-        output.write('-- prepare\n')
+        output.write(n('-- prepare\n'))
 
         output.open_phase('load_transformed_data')
-        output.write('-- load\n')
+        output.write(n('-- load\n'))
         output.close()
 
-        self.assertEqual(read_file(self.artifacts.sql_path('prepare_target')), '-- prepare\n')
-        self.assertEqual(read_file(self.artifacts.sql_path('load_transformed_data')), '-- load\n')
+        self.assertEqual(read_file(self.artifacts.command_path('prepare_target', 'sql')), '-- prepare\n')
+        self.assertEqual(read_file(self.artifacts.command_path('load_transformed_data', 'sql')), '-- load\n')
 
     def test_close_flushes_releases_file_and_is_idempotent(self):
-        output = SqlFileOutput(self.artifacts)
+        output = FileOutput(self.artifacts, PG)
         output.open_phase('setup')
         handle = output.file
-        output.write('-- setup\n')
+        output.write(n('-- setup\n'))
 
         output.close()
         output.close()
 
         self.assertTrue(handle.closed)
         self.assertIsNone(output.file)
-        self.assertEqual(read_file(self.artifacts.sql_path('setup')), '-- setup\n')
+        self.assertEqual(read_file(self.artifacts.command_path('setup', 'sql')), '-- setup\n')
 
     def test_core_package_exports_output_types(self):
-        self.assertIs(core.SqlFileOutput, SqlFileOutput)
+        self.assertIs(core.FileOutput, FileOutput)
         self.assertIs(core.MirrorOutput, MirrorOutput)
         self.assertIs(core.OutputAdapter, OutputAdapter)
         self.assertFalse(hasattr(core, 'SqlArtifactWriter'))
 
-    def test_sql_file_output_implements_output_adapter_contract(self):
-        for method in ('open_phase', 'write', 'comment', 'flush', 'finish', 'describe', 'close'):
+    def test_file_output_implements_output_adapter_contract(self):
+        for method in ('open_phase', 'write', 'flush', 'finish', 'describe', 'close'):
             self.assertTrue(hasattr(OutputAdapter, method), method)
-            self.assertTrue(callable(getattr(SqlFileOutput, method, None)), method)
+            self.assertTrue(callable(getattr(FileOutput, method, None)), method)
             self.assertTrue(callable(getattr(MirrorOutput, method, None)), method)
+        for output_type in (OutputAdapter, FileOutput, MirrorOutput):
+            self.assertFalse(hasattr(output_type, 'comment'), output_type)
 
     def test_finish_flushes_pending_sql_for_both_results(self):
         for success in (True, False):
-            output = SqlFileOutput(self.artifacts)
+            output = FileOutput(self.artifacts, PG)
             output.open_phase('load_transformed_data')
             file_writes = []
             real_write = output.file.write
@@ -282,17 +293,33 @@ class SqlFileOutputTest(unittest.TestCase):
                 return real_write(text)
 
             output.file.write = recording_write
-            output.write(f'-- {success}\n')
+            output.write(n(f'-- {success}\n'))
             self.assertEqual(file_writes, [])
 
             output.finish(success)
 
             self.assertEqual(file_writes, [f'-- {success}\n'])
             output.close()
-            self.assertEqual(read_file(self.artifacts.sql_path('load_transformed_data')), f'-- {success}\n')
+            self.assertEqual(read_file(self.artifacts.command_path('load_transformed_data', 'sql')), f'-- {success}\n')
 
-    def test_describe_identifies_sql_file_output(self):
-        self.assertEqual(SqlFileOutput(self.artifacts).describe(), {'type': 'sql-file'})
+    def test_describe_identifies_file_output_and_format(self):
+        self.assertEqual(FileOutput(self.artifacts, PG).describe(), {'type': 'file', 'format': 'sql'})
+
+    def test_extension_and_commands_come_from_the_target(self):
+        output = FileOutput(self.artifacts, JsonLinesTarget())
+
+        output.open_phase('load_transformed_data')
+        output.write(Comment('SEM COMANDO'))
+        output.write(Native('jsonl-test', 'a'))
+        output.close()
+
+        path = os.path.join(self.artifacts.commands_dir, '03_load_transformed_data.jsonl')
+        self.assertEqual(read_file(path), '{"payload": "a"}\n')
+        self.assertEqual(output.describe(), {'type': 'file', 'format': 'jsonl'})
+        self.assertEqual(
+            self.artifacts.artifacts(),
+            [{'phase': 'load_transformed_data', 'path': 'comandos/03_load_transformed_data.jsonl', 'format': 'jsonl'}],
+        )
 
 
 class OutputAdapterIntegrationTest(unittest.TestCase):
@@ -316,8 +343,7 @@ class OutputAdapterIntegrationTest(unittest.TestCase):
             config={},
             artifacts=artifacts,
             sources={'v1': source},
-            target=None,
-            metadata=FakeMetadata(),
+            target=PG,
             output=output,
             logger=logger,
             progress=progress,
@@ -331,13 +357,13 @@ class OutputAdapterIntegrationTest(unittest.TestCase):
         self.assertFalse(hasattr(context, 'writer'))
         context.close()
 
-    def test_context_source_writes_through_configured_output(self):
+    def test_context_source_emits_through_configured_output(self):
         output = RecordingOutput()
         context = self._context(output, source=object())
 
-        context.source('v1').write_sql('INSERT INTO demo VALUES (1);\n')
+        context.source('v1').insert('public.demo', [('f_id', 1)])
 
-        self.assertEqual(output.events, [('write', 'INSERT INTO demo VALUES (1);\n')])
+        self.assertEqual(output.events, [('write', Insert('public.demo', {'f_id': 1}))])
         context.close()
 
     def test_context_close_closes_configured_output_once(self):
@@ -355,19 +381,18 @@ class OutputAdapterIntegrationTest(unittest.TestCase):
         context = self._context(output)
 
         class ComposedMigration:
-            enable_indexes = 'REINDEX demo;\n'
-
             def __init__(self, context):
                 self.context = context
 
             def run_initial(self):
-                self.context.output.write('-- prepare\n')
+                self.context.emit(SuspendConstraints(['public.demo']))
+                self.context.emit(n('-- prepare\n'))
 
             def run_inserts(self):
-                self.context.output.write('-- load\n')
+                self.context.emit(n('-- load\n'))
 
             def reset_sequences(self):
-                self.context.output.write('-- finalize\n')
+                self.context.emit(n('-- finalize\n'))
 
         with redirect_stdout(StringIO()):
             MigrationRunner(context, ComposedMigration(context)).run()
@@ -377,51 +402,47 @@ class OutputAdapterIntegrationTest(unittest.TestCase):
             output.events,
             [
                 ('open_phase', 'prepare_target'),
-                ('write', '-- prepare\n'),
+                ('write', SuspendConstraints(('public.demo',))),
+                ('write', n('-- prepare\n')),
                 ('open_phase', 'load_transformed_data'),
-                ('write', '-- load\n'),
+                ('write', n('-- load\n')),
                 ('open_phase', 'finalize_target'),
-                ('write', '-- finalize\n'),
-                ('comment', 'HABILITAR ÍNDICES DE TABELAS'),
-                ('write', 'REINDEX demo;\n'),
-                ('comment', 'HABILITAR TRIGGERS DE TABELAS'),
-                ('write', 'ALTER TABLE public.demo ENABLE TRIGGER ALL;\n'),
+                ('write', n('-- finalize\n')),
+                ('write', Comment('HABILITAR TRIGGERS DE TABELAS')),
+                ('write', ResumeConstraints(('public.demo',))),
                 ('flush',),
                 ('finish', True),
                 ('close',),
             ],
         )
 
-    def test_default_factory_builds_sql_file_output_with_setup_phase_open(self):
+    def test_default_factory_builds_file_output_with_setup_phase_open(self):
         with patch('psycopg2.connect', side_effect=[FakeConnection(), FakeConnection()]), \
              patch('firebirdsql.connect', return_value=FakeConnection()):
             with redirect_stdout(StringIO()):
                 context = DefaultMigrationContextFactory.from_clientdir(self.clientdir)
 
-        self.assertIsInstance(context.output, SqlFileOutput)
-        self.assertEqual(context.output.file.name, context.artifacts.sql_path('setup'))
+        self.assertIsInstance(context.output, FileOutput)
+        self.assertEqual(context.output.file.name, context.artifacts.command_path('setup', 'sql'))
 
         context.close()
         self.assertIsNone(context.output.file)
 
     def test_default_output_writes_artifacts_without_executing_sql_on_target(self):
         pg_v1 = FakeConnection()
-        pg_v2 = FakeConnection(rows=[
-            ('ALTER TABLE public.demo DISABLE TRIGGER ALL;', 'ALTER TABLE public.demo ENABLE TRIGGER ALL;'),
-        ])
+        pg_v2 = FakeConnection(rows=[('public', 'demo')])
+        pg_v2.server_version = 160004
         fb_v1 = FakeConnection()
 
         class ComposedMigration:
-            enable_indexes = ''
-
             def __init__(self, context):
                 self.context = context
 
             def run_initial(self):
-                self.context.output.write('DELETE FROM public.demo;\n')
+                self.context.emit(n('DELETE FROM public.demo;\n'))
 
             def run_inserts(self):
-                self.context.output.write('INSERT INTO public.demo VALUES (1);\n')
+                self.context.source('v1').insert('public.demo', [('f_id', 1)])
 
         with patch('psycopg2.connect', side_effect=[pg_v1, pg_v2]), \
              patch('firebirdsql.connect', return_value=fb_v1):
@@ -431,23 +452,29 @@ class OutputAdapterIntegrationTest(unittest.TestCase):
         context.close()
 
         self.assertEqual(
-            read_file(context.artifacts.sql_path('prepare_target')),
+            read_file(context.artifacts.command_path('prepare_target', 'sql')),
             'DELETE FROM public.demo;\n',
         )
         self.assertEqual(
-            read_file(context.artifacts.sql_path('load_transformed_data')),
-            'INSERT INTO public.demo VALUES (1);\n',
+            read_file(context.artifacts.command_path('load_transformed_data', 'sql')),
+            'INSERT INTO public.demo (f_id) VALUES (1);\n',
         )
         executed = pg_v1.executed + pg_v2.executed + fb_v1.executed
         self.assertNotIn('DELETE FROM public.demo;\n', executed)
-        self.assertNotIn('INSERT INTO public.demo VALUES (1);\n', executed)
+        self.assertFalse(any('INSERT' in sql for sql in executed))
         self.assertTrue(all(sql.startswith('SELECT') for sql in executed))
 
         with open(context.artifacts.manifest_path, encoding='utf-8') as manifest_file:
             manifest_text = manifest_file.read()
         manifest = json.loads(manifest_text)
-        self.assertEqual(manifest['output'], {'type': 'sql-file'})
+        self.assertEqual(manifest['output'], {'type': 'file', 'format': 'sql'})
         self.assertEqual(manifest['sources']['v1']['host'], 'source-db')
+        self.assertEqual(manifest['target']['server_version'], '16.4')
+        self.assertNotIn('server_version', manifest['sources']['v1'])
+        self.assertIn(
+            {'phase': 'load_transformed_data', 'path': 'comandos/03_load_transformed_data.sql', 'format': 'sql'},
+            manifest['artifacts'],
+        )
         self.assertEqual(manifest['sources']['fb']['adapter'], 'firebird')
         self.assertEqual(manifest['target']['name'], 'target')
         for secret in ('source-pass', 'target-pass', 'firebird-pass'):
@@ -476,7 +503,7 @@ class OutputAdapterIntegrationTest(unittest.TestCase):
         context = self._context(output)
 
         class EmptyMigration:
-            enable_indexes = ''
+            pass
 
         manifest = self._run(context, EmptyMigration())
 
@@ -499,15 +526,15 @@ class OutputAdapterIntegrationTest(unittest.TestCase):
 
     def test_failed_run_keeps_partial_sql_artifacts(self):
         artifacts = ArtifactManager(self.clientdir)
-        context = self._context(SqlFileOutput(artifacts))
+        context = self._context(FileOutput(artifacts, PG))
         context.artifacts = artifacts
 
         manifest = self._run(context, FailingMigration(context))
 
         self.assertEqual(manifest['status'], 'failed')
-        self.assertEqual(read_file(artifacts.sql_path('prepare_target')), '-- prepare\n')
+        self.assertEqual(read_file(artifacts.command_path('prepare_target', 'sql')), '-- prepare\n')
         self.assertEqual(
-            read_file(artifacts.sql_path('load_transformed_data')),
+            read_file(artifacts.command_path('load_transformed_data', 'sql')),
             'INSERT INTO public.demo VALUES (1);\n',
         )
 
@@ -516,38 +543,37 @@ class OutputAdapterIntegrationTest(unittest.TestCase):
         context = self._context(output)
 
         class EmptyMigration:
-            enable_indexes = ''
+            pass
 
         manifest = self._run(context, EmptyMigration())
 
         self.assertEqual(manifest['status'], 'success')
         self.assertEqual(manifest['output'], {'type': 'mirror', 'outputs': [{'type': 'a'}, {'type': 'b'}]})
 
-    def test_mirror_of_sql_file_outputs_writes_identical_artifacts(self):
+    def test_mirror_of_file_outputs_writes_identical_artifacts(self):
         first = ArtifactManager(self.clientdir, timestamp='20260915-120000')
         second = ArtifactManager(self.clientdir, timestamp='20260915-120001')
-        context = self._context(MirrorOutput(SqlFileOutput(first), SqlFileOutput(second)))
+        context = self._context(MirrorOutput(FileOutput(first, PG), FileOutput(second, PG)))
 
         class ComposedMigration:
-            enable_indexes = 'REINDEX demo;\n'
-
             def __init__(self, context):
                 self.context = context
 
             def run_initial(self):
-                self.context.output.comment('PREPARACAO')
-                self.context.output.write('DELETE FROM public.demo;\n')
+                self.context.emit(Comment('PREPARACAO'))
+                self.context.emit(SuspendConstraints(['public.demo']))
+                self.context.emit(n('DELETE FROM public.demo;\n'))
 
             def run_inserts(self):
                 for index in range(3):
-                    self.context.output.write(f'INSERT INTO public.demo VALUES ({index});\n')
+                    self.context.emit(Insert('public.demo', {'f_id': index}))
 
         manifest = self._run(context, ComposedMigration(context))
 
         self.assertEqual(manifest['status'], 'success')
         for phase in ('prepare_target', 'load_transformed_data', 'finalize_target'):
-            self.assertEqual(read_file(first.sql_path(phase)), read_file(second.sql_path(phase)), phase)
-        self.assertIn('DELETE FROM public.demo;\n', read_file(first.sql_path('prepare_target')))
+            self.assertEqual(read_file(first.command_path(phase, 'sql')), read_file(second.command_path(phase, 'sql')), phase)
+        self.assertIn('DELETE FROM public.demo;\n', read_file(first.command_path('prepare_target', 'sql')))
 
 
 class MirrorOutputTest(unittest.TestCase):
@@ -562,16 +588,16 @@ class MirrorOutputTest(unittest.TestCase):
         output = MirrorOutput(first, second)
 
         output.open_phase('prepare_target')
-        output.write('DELETE FROM demo;\n')
-        output.comment('SECAO')
+        output.write(n('DELETE FROM demo;\n'))
+        output.write(Comment('SECAO'))
         output.flush()
         output.finish(True)
         output.close()
 
         calls = [
             ('open_phase', 'prepare_target'),
-            ('write', 'DELETE FROM demo;\n'),
-            ('comment', 'SECAO'),
+            ('write', n('DELETE FROM demo;\n')),
+            ('write', Comment('SECAO')),
             ('flush',),
             ('finish', True),
             ('close',),
@@ -589,7 +615,7 @@ class MirrorOutputTest(unittest.TestCase):
         output = MirrorOutput(first, second)
 
         with self.assertRaisesRegex(RuntimeError, 'first falhou em write'):
-            output.write('INSERT INTO demo VALUES (1);\n')
+            output.write(n('INSERT INTO demo VALUES (1);\n'))
 
         self.assertEqual(second.events, [])
 
@@ -609,11 +635,11 @@ class MirrorOutputTest(unittest.TestCase):
     def test_describe_lists_wrapped_outputs(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             artifacts = ArtifactManager(os.path.join(tmpdir, 'Acme'))
-            output = MirrorOutput(SqlFileOutput(artifacts), SqlFileOutput(artifacts))
+            output = MirrorOutput(FileOutput(artifacts, JsonLinesTarget()), FileOutput(artifacts, JsonLinesTarget()))
 
             self.assertEqual(
                 output.describe(),
-                {'type': 'mirror', 'outputs': [{'type': 'sql-file'}, {'type': 'sql-file'}]},
+                {'type': 'mirror', 'outputs': [{'type': 'file', 'format': 'jsonl'}, {'type': 'file', 'format': 'jsonl'}]},
             )
 
 
