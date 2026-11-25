@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(_clientdir))
 
 from core.base_migration import BaseMigration
 from core.multi_target_migration import MultiTargetMigration, TargetMigration
+from core.references import ReferenceMap
 from core.strategies import DateConvert, Fixed, Lookup, Rename, Transform
 from core.table_migration import TableMigration
 
@@ -241,6 +242,10 @@ class Migracao(BaseMigration):
     def dump_non_existing_tables(self):
         return []
 
+    def declare_reference_maps(self):
+        # Lido da V2 antes da primeira fase, junto com os outros mapas.
+        return [ReferenceMap('student_statuses', table='public.student_statuses', key='code', value='id')]
+
     def set_indexes_commands(self):
         # Mesmo uso do checklist de novo cliente: nomes de índice.
         self.set_index_commands_for(['people_name_idx', 'enrollments_class_idx'])
@@ -402,10 +407,7 @@ class Migracao(BaseMigration):
     def student_status_ids(self):
         """Letra da V1 -> id de student_statuses, lido da V2."""
 
-        ids_by_code = self.context.load_reference_map(
-            'student_statuses',
-            'SELECT code, id FROM public.student_statuses',
-        )
+        ids_by_code = self.reference_map('student_statuses')
         missing = sorted(set(STUDENT_STATUS_CODES.values()) - set(ids_by_code))
         if missing:
             raise ValueError(f'student_statuses da V2 sem os códigos: {", ".join(missing)}')

@@ -18,6 +18,8 @@ from abc import ABC, abstractmethod
 import datetime
 import re
 
+from core.references import LoadedReferenceMap
+
 REQUIRED_FIELD_ATTRIBUTES = ('select_columns', 'insert_col', 'raw_value')
 
 
@@ -159,6 +161,9 @@ class Lookup(FieldStrategy):
         self.lookup_dict = lookup_dict
         self.v2_name = v2_name or name
         self.fallback = fallback
+        if key_normalizer is None and isinstance(lookup_dict, LoadedReferenceMap):
+            # The loaded map already knows how its keys were normalized.
+            key_normalizer = lookup_dict.normalize_key
         self.key_normalizer = key_normalizer or (lambda value: str(value).strip())
 
     @property

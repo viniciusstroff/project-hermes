@@ -24,7 +24,7 @@ Também inclui um plano para desacoplar a forma de saída da migração. Hoje o 
 | 4 | Testes unitários e de contrato do core | Médio | Alto |
 | 5 | Eliminar SQL manual residual dos Acmes | Médio | Alto |
 | 6 | Expandir o uso de `MultiTargetMigration` | Médio | Médio |
-| 7 | Padronizar lookups de referência | Médio | Médio |
+| 7 | Padronizar lookups de referência (feito) | Médio | Médio |
 | 8 | Revisar estratégias e expressões dependentes de dialeto (feito) | Médio | Médio |
 | 9 | Limpar código legado e utilitários obsoletos (feito) | Baixo | Baixo |
 | 10 | Criar interface gráfica para leigos/configuração assistida de migrações | Alto | Alto |
@@ -174,9 +174,9 @@ Executaria direto no destino, durante a geração:
 - exige estratégia de rollback e observabilidade
 - deve oferecer um modo de dry run (ver avaliação abaixo)
 
-Ao detalhar o desenho apareceu um conflito com a geração atual. O `load_reference_map()` lê o destino enquanto os inserts são gerados. Com os comandos executados durante a geração, essa leitura veria uma tabela já truncada, se usasse a mesma conexão do output. Numa conexão separada, ficaria esperando o lock do `TRUNCATE` da própria transação. Além disso, o `02_dump_compatible_tables.sql` não passa pelo output, porque o `pg_dump` grava o arquivo direto.
+Ao detalhar o desenho apareceu um conflito com a geração da época. O `load_reference_map()` lia o destino enquanto os inserts eram gerados. Com os comandos executados durante a geração, essa leitura veria uma tabela já truncada, se usasse a mesma conexão do output. Numa conexão separada, ficaria esperando o lock do `TRUNCATE` da própria transação. Além disso, o `02_dump_compatible_tables.sql` não passa pelo output, porque o `pg_dump` grava o arquivo direto.
 
-O `DirectDatabaseOutput` volta a fazer sentido quando a geração parar de ler o destino no meio da carga. O item 7 pode resolver isso carregando os mapas de referência antes da primeira fase. Até lá, a aplicação no destino é feita pelo `SqlArtifactApplier`, sobre os arquivos gerados.
+O item 7 resolveu a primeira parte: os mapas de referência são carregados antes da primeira fase e as leituras do destino ficam fechadas depois disso. O `DirectDatabaseOutput` está proposto na change `introduzir-direct-database-output`, que precisa ser revista para o modelo de operações da `desacoplar-migracao-de-banco-e-versao`. Até lá, a aplicação no destino é feita pelo `SqlArtifactApplier`, sobre os arquivos gerados.
 
 #### `ManifestOutput`
 
@@ -392,34 +392,14 @@ Deixar o Acme o mais declarativo possível, e empurrar o comportamento genérico
 
 ## 7 — Padronizar lookups de referência
 
-O padrão de `states_map` já foi melhorado, mas ele ainda pode virar uma API mais declarativa.
+Feito pela change `padronizar-lookups-de-referencia`:
 
-### Objetivo
+- o cliente declara os mapas em `declare_reference_maps()`, com `ReferenceMap` (tabela, chave, valor e filtros de igualdade, ou uma `query` do destino). A leitura é com `self.reference_map(nome)`;
+- o runner carrega todos antes da fase `prepare_target` e fecha as leituras do destino logo depois. O provider passa a recusar consultas e encerra a transação de leitura;
+- a normalização, o descarte de chave nula e a recusa de chave ambígua ficam no core, iguais para qualquer provider. O mapa carregado guarda o normalizador e o `Lookup` reaproveita;
+- saíram `load_reference_map()` do contexto, da fachada e do provider, junto com o cache `_reference_maps`.
 
-Evitar SQL auxiliar solto em Acmes para construir mapas de referência.
-
-### Possível API
-
-```python
-self.reference_map(
-    name='states_by_code',
-    table='public.states',
-    key='f_code',
-    value='f_id',
-    key_normalizer=lambda v: str(v).strip().upper(),
-)
-```
-
-### Benefícios
-
-- cache centralizado
-- menos SQL repetido
-- menor acoplamento com o banco alvo
-- mesma interface para qualquer `MetadataProvider`
-
-### Relação com a saída direta
-
-Hoje os mapas são carregados sob demanda, no meio da geração, pela conexão com o destino. Carregar todos antes da primeira fase tira essa leitura do meio da carga. É o que falta para o `DirectDatabaseOutput` do item 2 executar os comandos durante a geração.
+Ficou de fora: chave composta, que hoje se resolve concatenando no `query`. A garantia de não ler o destino no meio da carga também não cobre consultas feitas direto por `pg_v2_conn`.
 
 ---
 

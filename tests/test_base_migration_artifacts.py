@@ -298,7 +298,6 @@ class BaseMigrationArtifactsTest(unittest.TestCase):
         context = types.SimpleNamespace(
             config={},
             artifacts=None,
-            _reference_maps={},
             legacy_connections={},
             output=output,
             close=lambda: None,

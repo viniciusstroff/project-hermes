@@ -88,6 +88,7 @@ _clientdir = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.dirname(_clientdir))
 
 from core.base_migration import BaseMigration
+from core.references import ReferenceMap
 from core.table_migration import TableMigration
 from core.strategies import Copy, Rename, Fixed, Lookup, RegexClean, DateConvert, EmailExtract, NullIfBlank, Truncate, Default
 
@@ -111,6 +112,13 @@ class Migracao(BaseMigration):
         return [
             # tabelas referenciadas no schema mas ausentes no Acme
             # 'public.tabela_que_nao_existe_aqui',
+        ]
+
+    def declare_reference_maps(self) -> list:
+        # Mapas lidos da V2 antes da primeira fase. Use com
+        # Lookup('f_campo', self.reference_map('nome_do_mapa')).
+        return [
+            # ReferenceMap('states_by_code', table='public.states', key='f_code', value='f_id'),
         ]
 
     def set_indexes_commands(self):
@@ -229,6 +237,7 @@ Veja o passo a passo completo em [execucao.md](execucao.md).
 - [ ] `NomeAcme/NomeAcme.py` criado herdando `BaseMigration`
 - [ ] `dump_ignoring_tables()` revisado
 - [ ] `dump_non_existing_tables()` revisado
+- [ ] `declare_reference_maps()` com os mapas lidos da V2, sem SQL solto no `run_inserts()`
 - [ ] `reset_sequences()` com todas as tabelas que têm sequence
 - [ ] `run_initial()` com truncates e disables
 - [ ] `run_inserts()` com todos os métodos em ordem de FK

@@ -158,12 +158,11 @@ def make_migration(rows_by_table):
     context = types.SimpleNamespace(
         config={},
         artifacts=None,
-        _reference_maps={},
         legacy_connections={},
         output=types.SimpleNamespace(write=written.append, comment=lambda text: None),
         logger=types.SimpleNamespace(print_log=lambda line: None),
         engine=lambda name: MigrationEngine(source, PostgresTargetAdapter(), written.append),
-        load_reference_map=lambda key, sql: {'active': 1, 'on_hold': 2, 'graduated': 3, 'cancelled': 4},
+        reference_map=lambda name: {'active': 1, 'on_hold': 2, 'graduated': 3, 'cancelled': 4},
         close=lambda: None,
     )
     migration = acmeedu.Migracao.__new__(acmeedu.Migracao)

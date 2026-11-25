@@ -6,8 +6,9 @@ _clientdir = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.dirname(_clientdir))
 
 from core.base_migration import BaseMigration
+from core.references import ReferenceMap
 from core.table_migration import TableMigration
-from core.strategies import Copy, EmailExtract, Fixed, Rename
+from core.strategies import Copy, EmailExtract, Fixed, Lookup, Rename
 
 
 class Migracao(BaseMigration):
@@ -24,6 +25,20 @@ class Migracao(BaseMigration):
             2: 20,  # Financeiro
             3: 30,  # Atendimento
         }
+
+    def declare_reference_maps(self):
+        # Lidos da V2 antes da primeira fase. O normalizador vale também para
+        # o Lookup que usa o mapa.
+        return [
+            ReferenceMap(
+                'regions_by_code',
+                table='public.acme_regions_demo',
+                key='f_code',
+                value='f_id',
+                filters={'f_active': True},
+                key_normalizer=lambda value: str(value).strip().upper(),
+            ),
+        ]
 
     def dump_ignoring_tables(self):
         return [
@@ -74,6 +89,7 @@ class Migracao(BaseMigration):
                 Copy('f_id'),
                 Rename('f_full_name', 'f_name'),
                 EmailExtract('f_email'),
+                Lookup('f_region_code', self.reference_map('regions_by_code'), v2_name='f_region'),
                 Fixed('f_status', 1),
             ],
         ).run(self.context.engine('pg_v1'))

@@ -40,6 +40,7 @@ sys.modules.setdefault('dotenv', dotenv)
 from core.adapters import PostgresSourceAdapter, PostgresTargetAdapter
 from core.context import DefaultMigrationContextFactory, SourceNotConfiguredError
 from core.metadata import PostgresMetadataProvider
+from core.references import ReferenceMap, TargetReadClosedError
 from core.runner import MigrationRunner
 from core.sql import SqlLiteral
 
@@ -77,6 +78,9 @@ class FakeConnection:
 
     def close(self):
         self.closed = True
+
+    def rollback(self):
+        self.rollback_calls = getattr(self, 'rollback_calls', 0) + 1
 
 
 POSTGRES_ENV = [
@@ -168,18 +172,60 @@ class AdapterContextMetadataTest(unittest.TestCase):
             "INSERT INTO public.demo (f_raw, f_name) VALUES (CURRENT_TIMESTAMP, 'O''Brien');\n",
         )
 
-    def test_metadata_provider_loads_maps_and_renders_helpers(self):
-        conn = FakeConnection(rows=[(' A ', 1), (None, 2)])
-        provider = PostgresMetadataProvider(conn)
+    def test_metadata_provider_renders_helpers(self):
+        provider = PostgresMetadataProvider(FakeConnection())
 
-        ref_map = provider.load_reference_map('SELECT key, value FROM refs')
-
-        self.assertEqual(ref_map, {'A': 1})
-        self.assertEqual(conn.cursor_calls[0][2].executed_sql, 'SELECT key, value FROM refs')
         self.assertIn('indisready=false', provider.disable_indexes_sql(['idx_demo']))
         self.assertIn('idx_demo', provider.enable_indexes_sql(['idx_demo']))
         self.assertIn("setval('demo_f_id_seq'", provider.reset_sequence_sql('demo'))
         self.assertIn("setval('demo_f_id_seq'", provider.reset_sequences_sql(['demo']))
+
+    def test_reference_pairs_from_table_declaration(self):
+        conn = FakeConnection(rows=[(' A ', 1), (None, 2)])
+        provider = PostgresMetadataProvider(conn)
+        declaration = ReferenceMap(
+            'states_by_code',
+            table='public.states',
+            key='f_code',
+            value='f_id',
+            filters={'f_active': True, 'Tipo': "O'B", 'f_deleted': None},
+        )
+
+        pairs = provider.load_reference_pairs(declaration)
+
+        self.assertEqual(pairs, [(' A ', 1), (None, 2)])
+        self.assertEqual(
+            conn.cursor_calls[0][2].executed_sql,
+            'SELECT f_code, f_id FROM public.states '
+            'WHERE f_active = true AND "Tipo" = \'O\'\'B\' AND f_deleted IS NULL',
+        )
+
+    def test_reference_pairs_from_query_declaration(self):
+        conn = FakeConnection(rows=[{'code': 'SP', 'id': 25}])
+        provider = PostgresMetadataProvider(conn)
+        query = 'SELECT s.f_code, s.f_id FROM public.states s JOIN public.countries c ON c.f_id = s.f_country'
+
+        pairs = provider.load_reference_pairs(ReferenceMap('states', query=query))
+
+        self.assertEqual(pairs, [('SP', 25)])
+        self.assertEqual(conn.cursor_calls[0][2].executed_sql, query)
+
+    def test_reads_after_close_are_refused_and_cached_triggers_remain(self):
+        conn = FakeConnection(rows=[('ALTER TABLE public.a DISABLE TRIGGER ALL;', 'ALTER TABLE public.a ENABLE TRIGGER ALL;')])
+        provider = PostgresMetadataProvider(conn)
+        enable_before = provider.enable_triggers_sql()
+
+        provider.close_reads()
+
+        self.assertEqual(conn.rollback_calls, 1)
+        self.assertEqual(provider.enable_triggers_sql(), enable_before)
+        self.assertEqual(len(conn.cursor_calls), 1)
+        with self.assertRaises(TargetReadClosedError):
+            provider.load_reference_pairs(ReferenceMap('x', table='public.x', key='a', value='b'))
+        fresh = PostgresMetadataProvider(FakeConnection())
+        fresh.close_reads()
+        with self.assertRaises(TargetReadClosedError):
+            fresh.disable_triggers_sql()
 
     def test_default_context_factory_builds_composed_runtime_from_existing_env(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -101,5 +101,17 @@ class PostgresTypeSerializationTest(unittest.TestCase):
                 self.assertIsInstance(raised.exception, TypeError)
 
 
+
+class PostgresIdentifierTest(unittest.TestCase):
+    def test_quotes_names_that_postgres_would_change_or_reject(self):
+        quote = PostgresDialect().quote_identifier
+        self.assertEqual(quote('public.states'), 'public.states')
+        self.assertEqual(quote('f_code'), 'f_code')
+        self.assertEqual(quote('Tipo'), '"Tipo"')
+        self.assertEqual(quote('public.Estados'), 'public."Estados"')
+        self.assertEqual(quote('nome com espaço'), '"nome com espaço"')
+        self.assertEqual(quote('a"b'), '"a""b"')
+
+
 if __name__ == '__main__':
     unittest.main()

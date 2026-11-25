@@ -20,7 +20,6 @@ class BaseMigration:
         self._clientdir = clientdir
         self.config = self.context.config
         self.artifacts = self.context.artifacts
-        self._reference_maps = self.context._reference_maps
 
         self.pg_v1_conn = self.context.legacy_connections.get('pg_v1_conn')
         self.pg_v2_conn = self.context.legacy_connections.get('pg_v2_conn')
@@ -83,22 +82,13 @@ class BaseMigration:
     def sql_value(self, value):
         return self.context.target.serialize_value(value)
 
-    def load_reference_map(
-        self,
-        cache_key: str,
-        sql: str,
-        *,
-        key_normalizer=None,
-        value_normalizer=None,
-        skip_null_keys: bool = True,
-    ) -> dict:
-        return self.context.load_reference_map(
-            cache_key,
-            sql,
-            key_normalizer=key_normalizer,
-            value_normalizer=value_normalizer,
-            skip_null_keys=skip_null_keys,
-        )
+    def declare_reference_maps(self) -> list:
+        """Override to declare the ReferenceMap list loaded before the first phase."""
+        return []
+
+    def reference_map(self, name: str):
+        """Return a reference map declared in declare_reference_maps()."""
+        return self.context.reference_map(name)
 
     def set_trigger_commands(self):
         self.print_log('Gerando comandos de triggers para tabelas')

@@ -59,25 +59,58 @@ Fixed('f_active', True)
 
 ### `Lookup`: resolução por dicionário
 
-Converte um valor da V1 usando um dicionário. Útil para `varchar` V1 → FK inteira V2.
+Converte um valor da V1 usando um dicionário. Útil para `varchar` V1 → FK inteira V2. O dicionário pode ser escrito no script ou vir de uma tabela da V2, como mapa de referência.
 
 ```python
 Lookup('f_state', {'SP': 25, 'RJ': 19, 'MG': 13}, fallback=None)
 
 # Com renomeação
 Lookup('f_area_v1', areas_map, v2_name='f_area', fallback=1)
-
-# Com normalização da chave de entrada
-Lookup('f_state', states_map, fallback=None, key_normalizer=lambda v: str(v).strip().upper())
 ```
+
+Quando os valores estão numa tabela da V2, declare o mapa em `declare_reference_maps()` e leia com `self.reference_map(nome)`:
+
+```python
+from core.references import ReferenceMap
+
+def declare_reference_maps(self):
+    return [
+        ReferenceMap(
+            'states_by_code',
+            table='public.states',
+            key='f_code',
+            value='f_id',
+            filters={'f_active': True},
+            key_normalizer=lambda v: str(v).strip().upper(),
+        ),
+    ]
+
+# no método de carga
+Lookup('f_state', self.reference_map('states_by_code'), fallback=None)
+```
+
+O `Lookup` reaproveita o `key_normalizer` do mapa: `' sp '` encontra a chave `'SP'` sem repetir a regra. Um `key_normalizer` passado ao `Lookup` vale no lugar do normalizador do mapa.
 
 | Parâmetro | Obrigatório | Descrição |
 |---|---|---|
 | `name` | sim | Nome do campo na V1 |
-| `lookup_dict` | sim | Dicionário de mapeamento |
+| `lookup_dict` | sim | Dicionário ou mapa de referência carregado |
 | `v2_name` | não | Nome na V2 (padrão: igual ao da V1) |
 | `fallback` | não | Valor quando a chave não for encontrada (padrão: `None` → `NULL`) |
-| `key_normalizer` | não | Função para normalizar a chave lida da V1 antes do `.get()` |
+| `key_normalizer` | não | Função para normalizar a chave lida da V1. Com mapa de referência, o padrão é o normalizador do mapa |
+
+Campos do `ReferenceMap`:
+
+| Campo | Uso |
+|---|---|
+| `name` | nome único do mapa na execução |
+| `table`, `key`, `value` | tabela da V2 e colunas da chave e do valor |
+| `filters` | igualdades combinadas com `E`; `None` vira `IS NULL` |
+| `query` | SQL da V2 que devolve chave e valor, no lugar de `table` |
+| `key_normalizer`, `value_normalizer` | funções aplicadas a cada linha; a chave usa `str(v).strip()` por padrão |
+| `skip_null_keys` | descarta linhas com chave nula (padrão `True`) |
+
+O runner carrega os mapas declarados antes de abrir a primeira fase e registra no log cada um com a quantidade de chaves. Depois disso a geração não consulta mais a V2. Viram erro, antes de qualquer fase: nome repetido, declaração com `table` e `query` juntos ou sem nenhum dos dois e chave que, depois de normalizada, aparece com dois valores diferentes. Pedir um mapa que não foi declarado também é erro. Um mapa vazio gera só um aviso no log.
 
 **Use quando:** um campo da V1 tem valores discretos que precisam ser convertidos para IDs ou valores diferentes na V2.
 
@@ -222,7 +255,14 @@ Vale o mesmo para uma estratégia própria cujo `raw_value()` devolve um `SqlLit
 
 ### Mapas de referência com consulta própria
 
-A declaração de mapa de referência com `query=`, prevista na change `padronizar-lookups-de-referencia`, também é dependente de dialeto: a consulta é SQL do destino.
+Um `ReferenceMap` com `query=` também é dependente de dialeto: a consulta é SQL do destino. A primeira coluna é a chave e a segunda é o valor.
+
+```python
+ReferenceMap(
+    'states_by_country',
+    query="SELECT s.f_code || '-' || c.f_code, s.f_id FROM public.states s JOIN public.countries c ON c.f_id = s.f_country",
+)
+```
 
 ---
 

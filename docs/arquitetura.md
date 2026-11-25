@@ -90,8 +90,30 @@ não grava em arquivo.
 
 Os atributos `pg_v1_conn`, `pg_v2_conn` e `fb_v1_conn` permanecem disponíveis
 na fachada por compatibilidade. Código novo deve preferir adapters, providers e
-helpers como `load_reference_map()`, `set_index_commands_for()` e
+helpers como `reference_map()`, `set_index_commands_for()` e
 `write_reset_sequences()`.
+
+## Mapas de referência
+
+O cliente declara os mapas lidos do destino em `declare_reference_maps()`, com
+objetos `ReferenceMap` de `core/references.py`: tabela, coluna da chave, coluna
+do valor e filtros de igualdade, ou uma `query` em SQL do destino. O
+`MigrationRunner` carrega todos depois de gerar os comandos de trigger e antes
+de abrir `prepare_target`. Ele registra no log cada mapa com a quantidade de
+chaves. O código do cliente lê um mapa com `self.reference_map(nome)`.
+
+O provider só devolve pares de chave e valor (`load_reference_pairs()`). A
+normalização, o descarte de chave nula e a recusa de chave repetida com valores
+diferentes ficam em `build_reference_map()`, iguais para qualquer provider. O
+mapa carregado é um `Mapping` só de leitura que guarda o normalizador. O
+`Lookup` usa esse normalizador quando não recebe outro.
+
+Logo depois da carga, o runner chama `close_reads()`. A partir daí o provider
+recusa consultar o destino (`TargetReadClosedError`). A transação de leitura
+termina em `ROLLBACK`, sem segurar lock nas tabelas. Os comandos de trigger
+continuam disponíveis porque ficaram em cache. A garantia não cobre consultas
+que o cliente faz direto por `pg_v2_conn`, que continua na fachada até os
+clientes privados migrarem.
 
 ## Saída da migração
 
@@ -178,13 +200,17 @@ O código fica em `core/apply/`:
 
 ### Por que depois da geração
 
-A geração lê o destino enquanto gera os inserts: `load_reference_map()` consulta
-a V2 pela conexão do `PostgresMetadataProvider`. Se os comandos fossem
-executados durante a geração, essa leitura veria o destino no meio da carga.
-Na mesma conexão, uma tabela truncada pelo `01_prepare_target` apareceria vazia.
-Numa conexão separada, a leitura esperaria o lock do `TRUNCATE`, que só sai no
-fim da transação. O processo ficaria esperando por ele mesmo. Além disso, o
-`02_dump_compatible_tables.sql` é gravado pelo `pg_dump`, fora do output.
+Quando o aplicador foi criado, a geração lia o destino enquanto gerava os
+inserts: o antigo `load_reference_map()` consultava a V2 no meio do
+`run_inserts()`. Se os comandos fossem executados durante a geração, essa
+leitura veria o destino no meio da carga. Na mesma conexão, uma tabela truncada
+pelo `01_prepare_target` apareceria vazia. Numa conexão separada, a leitura
+esperaria o lock do `TRUNCATE`, que só sai no fim da transação.
+
+Esse impedimento acabou: os mapas de referência são carregados antes da
+primeira fase e as leituras do destino ficam fechadas depois disso. Continua
+valendo o outro motivo: o `02_dump_compatible_tables.sql` é gravado pelo
+`pg_dump`, fora do output.
 
 Aplicando a pasta da execução depois, o dump entra pela ordem dos arquivos e a
 aplicação pode rodar em outra máquina. O `GeneratedRun` resolve os arquivos a
