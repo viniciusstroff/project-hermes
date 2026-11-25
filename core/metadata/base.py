@@ -1,18 +1,18 @@
-from typing import Any, Callable, Protocol
+from typing import Any, Iterable, Protocol
 
 
 class MetadataProvider(Protocol):
     """Contract for auxiliary target database metadata operations."""
 
-    def load_reference_map(
-        self,
-        sql: str,
-        *,
-        key_normalizer: Callable[[Any], Any] | None = None,
-        value_normalizer: Callable[[Any], Any] | None = None,
-        skip_null_keys: bool = True,
-    ) -> dict[Any, Any]:
-        """Load a reference map from the target database."""
+    def load_reference_pairs(self, reference) -> Iterable[tuple[Any, Any]]:
+        """Read the key and value pairs of a ``ReferenceMap`` declaration from the target."""
+        ...
+
+    def close_reads(self) -> None:
+        """End target reads: later queries to the target must raise ``TargetReadClosedError``.
+
+        Results already cached, such as trigger commands, stay available.
+        """
         ...
 
     def disable_triggers_sql(self) -> str:

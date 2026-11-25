@@ -1,43 +1,65 @@
-from typing import Any, Callable
+from typing import Any, Iterable
+
+from core.dialects import PostgresDialect
+from core.references import TargetReadClosedError
 
 
 class PostgresMetadataProvider:
     """PostgreSQL-backed provider for target metadata operations."""
 
-    def __init__(self, connection):
+    def __init__(self, connection, dialect=None):
         self.connection = connection
+        self.dialect = dialect or PostgresDialect()
         self._trigger_sql = None
+        self._reads_closed = False
 
-    def load_reference_map(
-        self,
-        sql: str,
-        *,
-        key_normalizer: Callable[[Any], Any] | None = None,
-        value_normalizer: Callable[[Any], Any] | None = None,
-        skip_null_keys: bool = True,
-    ) -> dict[Any, Any]:
-        key_normalizer = key_normalizer or (lambda value: str(value).strip())
-        value_normalizer = value_normalizer or (lambda value: value)
-
-        ref_map = {}
+    def load_reference_pairs(self, reference) -> Iterable[tuple[Any, Any]]:
+        self._ensure_reads_open()
+        sql = reference.query if reference.query is not None else self._reference_select(reference)
         cur = self.connection.cursor()
         try:
             cur.execute(sql)
-            for raw_key, raw_value in cur:
-                if raw_key is None and skip_null_keys:
-                    continue
-                key = key_normalizer(raw_key)
-                if key is None and skip_null_keys:
-                    continue
-                ref_map[key] = value_normalizer(raw_value)
+            return [self._pair(row) for row in cur]
         finally:
             if hasattr(cur, 'close'):
                 cur.close()
 
-        return ref_map
+    def close_reads(self) -> None:
+        self._reads_closed = True
+        # psycopg2 opened a transaction on the first read. Ending it releases
+        # the ACCESS SHARE locks held on the tables and the catalog.
+        if hasattr(self.connection, 'rollback'):
+            self.connection.rollback()
+
+    def _reference_select(self, reference) -> str:
+        quote = self.dialect.quote_identifier
+        sql = f'SELECT {quote(reference.key)}, {quote(reference.value)} FROM {quote(reference.table)}'
+        conditions = [
+            f'{quote(column)} IS NULL' if value is None
+            else f'{quote(column)} = {self.dialect.serialize_value(value)}'
+            for column, value in reference.filters.items()
+        ]
+        if conditions:
+            sql += ' WHERE ' + ' AND '.join(conditions)
+        return sql
+
+    @staticmethod
+    def _pair(row):
+        if isinstance(row, dict):
+            values = list(row.values())
+            return values[0], values[1]
+        return row[0], row[1]
+
+    def _ensure_reads_open(self):
+        if self._reads_closed:
+            raise TargetReadClosedError(
+                'Target reads are closed: the metadata provider cannot query the target '
+                'after the reference maps are loaded'
+            )
 
     def trigger_commands_sql(self) -> tuple[str, str]:
         if self._trigger_sql is None:
+            self._ensure_reads_open()
             disable = []
             enable = []
             cur = self.connection.cursor()

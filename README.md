@@ -152,15 +152,15 @@ Os contratos de adapters, o `OutputAdapter` (com `SqlFileOutput` e `MirrorOutput
 
 ### Próximo passo
 
-Pela ordem de `melhorias-futuras.md`, o próximo item é levar os demais clientes para o `core/` e reduzir o SQL montado à mão nos scripts de cliente.
+A próxima change é a `desacoplar-migracao-de-banco-e-versao`. Ela tira do core a dependência de PostgreSQL, de Firebird e de uma versão específica, para que qualquer banco com adapter sirva de origem ou destino. As duas changes que ela pedia antes já foram feitas: as strategies não geram mais SQL e os mapas de referência são declarados e carregados antes da primeira fase.
 
-O `DirectDatabaseOutput`, que executaria os comandos durante a geração em vez de depois, ficou adiado. Hoje a geração lê o destino no meio da carga para montar mapas de referência. Executar os comandos ao mesmo tempo mudaria o que essa leitura enxerga. Ele volta à fila quando os lookups forem carregados antes da primeira fase (melhoria 7).
+O `DirectDatabaseOutput`, que executaria os comandos durante a geração, deixou de esbarrar na leitura do destino no meio da carga. A change `introduzir-direct-database-output` ainda precisa ser revista para o modelo de operações da `desacoplar`.
 
 ### Depois
 
 A ordem segue a recomendada em `melhorias-futuras.md`:
 
-1. Padronizar os lookups de referência e então implementar o `DirectDatabaseOutput`, com a escolha do output pela linha de comando.
+1. Implementar o `DirectDatabaseOutput`, revisto para o modelo de operações, com a escolha do output pela linha de comando.
 2. Definir um formato declarativo de plano de migração em YAML ou JSON, interpretado pelo mesmo core.
 3. Criar um `ExecutionAdapter` que separe a orquestração da execução pesada.
 4. Logs estruturados em JSON Lines e relatório por execução com contagem de linhas e tempo por tabela.

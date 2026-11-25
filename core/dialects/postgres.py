@@ -86,6 +86,8 @@ class PostgresDialect:
         return limit or ''
 
     def _quote_part(self, identifier: str) -> str:
-        if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', identifier):
+        # PostgreSQL folds unquoted names to lower case, so any upper-case
+        # letter needs quotes to keep pointing at the same column.
+        if re.fullmatch(r'[a-z_][a-z0-9_]*', identifier):
             return identifier
         return '"' + identifier.replace('"', '""') + '"'

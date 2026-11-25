@@ -11,6 +11,7 @@ from core.artifacts import ArtifactManager
 from core.metadata import PostgresMetadataProvider
 from core.migration_engine import MigrationEngine
 from core.outputs import OutputAdapter, SqlFileOutput
+from core.references import ReferenceMap, ReferenceMapError, build_reference_map
 from core.runtime import MigrationLogger, MigrationProgress
 
 
@@ -40,7 +41,7 @@ class MigrationContext:
     legacy_connections: dict[str, Any] = field(default_factory=dict)
     limit: str = ''
     debug_limit: int | None = None
-    _reference_maps: dict[str, dict] = field(default_factory=dict)
+    _loaded_reference_maps: dict = field(default_factory=dict)
     _warnings_logged: set = field(default_factory=set)
     _closed: bool = False
 
@@ -78,23 +79,38 @@ class MigrationContext:
         self._warnings_logged.add(key)
         self.logger.print_log('[AVISO] ' + message)
 
-    def load_reference_map(
-        self,
-        cache_key: str,
-        sql: str,
-        *,
-        key_normalizer=None,
-        value_normalizer=None,
-        skip_null_keys: bool = True,
-    ) -> dict:
-        if cache_key not in self._reference_maps:
-            self._reference_maps[cache_key] = self.metadata.load_reference_map(
-                sql,
-                key_normalizer=key_normalizer,
-                value_normalizer=value_normalizer,
-                skip_null_keys=skip_null_keys,
-            )
-        return self._reference_maps[cache_key]
+    def load_reference_maps(self, declarations):
+        """Load every declared reference map through the metadata provider."""
+
+        names = [declaration.name for declaration in declarations]
+        repeated = sorted({name for name in names if names.count(name) > 1})
+        if repeated:
+            raise ReferenceMapError(f'Reference map declared more than once: {", ".join(repeated)}')
+
+        for declaration in declarations:
+            if not isinstance(declaration, ReferenceMap):
+                raise ReferenceMapError(f'Invalid reference map declaration {declaration!r}: expected ReferenceMap')
+            try:
+                loaded = build_reference_map(declaration, self.metadata.load_reference_pairs(declaration))
+            except ReferenceMapError:
+                raise
+            except Exception as exc:
+                raise ReferenceMapError(f"Reference map '{declaration.name}' failed to load: {exc}") from exc
+            self._loaded_reference_maps[declaration.name] = loaded
+            if len(loaded):
+                self.logger.print_log(f'Mapa de referência {declaration.name}: {len(loaded)} chaves')
+            else:
+                self.warn_once(
+                    f'empty-reference-map:{declaration.name}',
+                    f'Mapa de referência {declaration.name} carregou vazio. Confira tabela, filtros e banco.',
+                )
+
+    def reference_map(self, name: str):
+        """Return a loaded reference map by its declared name."""
+
+        if name not in self._loaded_reference_maps:
+            raise ReferenceMapError(f"Reference map '{name}' was not declared in declare_reference_maps()")
+        return self._loaded_reference_maps[name]
 
     def close(self):
         if self._closed:

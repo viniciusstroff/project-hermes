@@ -16,6 +16,7 @@ class MigrationRunner:
             self.context.logger.print_log('----- Início do script de importação V1 - V2 -----')
 
             self._prepare_trigger_commands()
+            self._load_reference_maps()
             self._call_hook('set_indexes_commands')
 
             output.open_phase('prepare_target')
@@ -65,6 +66,17 @@ class MigrationRunner:
         self.migration.disable_triggers = self.context.metadata.disable_triggers_sql()
         self.migration.enable_triggers = self.context.metadata.enable_triggers_sql()
         self.context.logger.print_log('Comandos de trigger gerados')
+
+    def _load_reference_maps(self):
+        """Load the declared maps, then close target reads before the first phase."""
+
+        hook = getattr(self.migration, 'declare_reference_maps', None)
+        declarations = list(hook()) if hook is not None else []
+        if declarations:
+            self.context.load_reference_maps(declarations)
+        close_reads = getattr(self.context.metadata, 'close_reads', None)
+        if close_reads is not None:
+            close_reads()
 
     def _call_hook(self, name: str):
         hook = getattr(self.migration, name, None)
