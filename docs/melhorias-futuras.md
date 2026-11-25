@@ -434,17 +434,18 @@ Feito pela change `revisar-estrategias-dependentes-de-dialeto`:
 - entraram as strategies portáveis `NullIfBlank`, `Truncate`, `Upper`, `Lower` e `Default`. O `regexp_replace` é coberto pelo `RegexClean`;
 - o `docs/estrategias.md` separa as strategies portáveis das dependentes de dialeto.
 
-### Tipos que a serialização ainda não trata
+### Tipos especiais na serialização
 
-A change `preservar-barra-invertida-nos-literais` corrigiu as strings com barra invertida no `PostgresDialect.serialize_value`. A mesma análise achou tipos que ainda saem errados no SQL gerado:
+Feito pela change `serializar-tipos-especiais-no-dialeto`. O `PostgresDialect` passou a aceitar uma lista fechada de tipos:
 
-- `bytes` e `memoryview`, que o `firebirdsql` e o `psycopg2` devolvem para BLOB e `bytea`, viram o texto da representação Python, como `<memory at 0x...>`. O valor gravado no destino não tem relação com o original e nenhum erro aparece.
-- `float('nan')`, `inf` e `-inf` saem sem aspas. O PostgreSQL lê `nan` como nome de coluna e o comando falha.
-- O caractere NUL (`\x00`) não pode ser gravado em `text` no PostgreSQL, então a linha não entra no destino como está.
+- binários (`bytes`, `bytearray`, `memoryview`) viram `decode('<hex>', 'hex')`, que não depende do `standard_conforming_strings`;
+- `NaN` e infinitos viram literais com cast (`'NaN'::float8`, `'Infinity'::numeric`). O `Decimal` finito sai sem aspas;
+- datas, horas e `UUID` saem em texto ISO 8601 ou canônico, com o mesmo literal de antes para `date` e `datetime`;
+- texto com NUL e qualquer tipo fora da lista fazem a geração falhar, com a tabela, a coluna e o tipo na mensagem, sem o valor.
 
-Os dois primeiros têm correção direta no dialeto. Para binários, `decode('<hex>', 'hex')`, que não depende do `standard_conforming_strings`. Para os valores especiais, `'NaN'::float8`. O NUL pede uma decisão de dados, como remover o caractere ou recusar a linha. Talvez caiba melhor numa strategy do que no dialeto.
+Uma coluna que recebe binário gera um aviso no log, uma vez por tabela e coluna, porque numa coluna `text` o valor vira a forma hexadecimal sem erro.
 
-A change `serializar-tipos-especiais-no-dialeto` cuida desses três casos.
+Continuam sem tratamento automático e falham na geração: `timedelta`, `list` e `dict`. Os dois últimos podem ser array ou JSON, dependendo da coluna de destino. Se esses tipos aparecerem nos clientes, cabem strategies próprias, como uma `Json` que faça `json.dumps`.
 
 ---
 

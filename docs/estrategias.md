@@ -266,16 +266,37 @@ Nesses casos, crie um método `insert_*` ou `update_*` na classe do Acme com a l
 
 ## Serialização
 
-Quem transforma o valor Python em SQL é o adapter de destino. No PostgreSQL:
+Quem transforma o valor Python em SQL é o adapter de destino. O dialeto PostgreSQL aceita uma lista fechada de tipos:
 
 | Tipo Python | Saída SQL |
 |---|---|
 | `None` | `NULL` |
 | `bool` | `true` / `false` |
 | `int`, `float` | número literal |
+| `float` especial | `'NaN'::float8`, `'Infinity'::float8`, `'-Infinity'::float8` |
+| `Decimal` | número sem aspas, como `85.00` ou `1E+2` |
+| `Decimal` especial | `'NaN'::numeric`, `'Infinity'::numeric`, `'-Infinity'::numeric` |
 | `str` com `\` | `E'...'` com a barra dobrada e `'` duplicado |
 | `str` sem `\` | `'...'` com `'` duplicado |
-| `date`, `datetime` | `'2026-06-06'`, `'2026-06-06 10:30:00'` |
+| `date` | `'2026-06-06'` |
+| `datetime` | `'2026-06-06 10:30:00'`, com o fuso quando houver: `'2026-06-06 10:30:00-03:00'` |
+| `time` | `'10:30:00'` |
+| `UUID` | `'12345678-1234-5678-1234-567812345678'` |
+| `bytes`, `bytearray`, `memoryview` | `decode('4142', 'hex')` |
 | `SqlLiteral` | o texto, sem mudança |
 
-Os tipos que o dialeto ainda não trata (`bytes`, `NaN`, caractere NUL) estão na change `serializar-tipos-especiais-no-dialeto`.
+`'Infinity'::numeric` só existe a partir do PostgreSQL 14.
+
+Qualquer outro tipo (`list`, `dict`, `timedelta` e afins) e texto com o caractere NUL fazem a geração falhar. O erro cita a tabela de destino, a coluna e o tipo Python. No caso do NUL, cita também a posição do caractere. O valor não aparece na mensagem, que vai para o log e para o manifesto. O `--debug` costuma achar esses casos antes de uma geração completa.
+
+O PostgreSQL não grava NUL em texto. A decisão de remover o caractere, trocá-lo ou descartar a linha é do cliente. A correção mais comum:
+
+```python
+Transform('f_obs', lambda value, row: value.replace('\x00', '') if value else value)
+```
+
+Um BLOB de texto lido sem charset chega como `bytes`. Numa coluna `text`, o PostgreSQL aceita o `decode(...)` e grava a forma hexadecimal (`\x4142`), sem erro. Por isso a geração registra no log um aviso, uma vez por tabela e coluna, quando uma coluna recebe valor binário. Se a coluna é de texto, decodifique na strategy:
+
+```python
+Transform('f_texto', lambda value, row: bytes(value).decode('latin-1') if value is not None else None)
+```

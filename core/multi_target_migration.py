@@ -61,12 +61,15 @@ class MultiTargetMigration:
 
     def insert_sql(self, row: dict, target: TargetMigration, engine):
         insert_cols = [field.insert_col for field in target.fields]
-        insert_vals = [self._field_value(field, row, engine) for field in target.fields]
+        insert_vals = [
+            engine.render_value(target.target, field.insert_col, self._field_value(field, row, engine))
+            for field in target.fields
+        ]
         return engine.insert_statement(target.target, insert_cols, insert_vals)
 
     @staticmethod
     def _field_value(field, row: dict, engine):
-        # The target adapter serializes the value inside insert_statement().
+        # The engine serializes it through the target adapter, with the column in any error.
         return field.raw_value(row)
 
     def run_row(self, row: dict, engine):

@@ -258,7 +258,7 @@ class GeneratedSqlTest(unittest.TestCase):
             "(3, 'Pedagogia', 'PED', 1, 3200, true);\n",
             "INSERT INTO public.classes (id, subject_id, year, term, room) VALUES (7, 7, 2022, 1, 'Sala 107');\n",
             "INSERT INTO public.enrollments (id, student_id, class_id, enrolled_at, final_grade, attendance_pct, status) "
-            "VALUES (97, 25, 7, NULL, '5.89', '85.00', 3);\n",
+            "VALUES (97, 25, 7, NULL, 5.89, 85.00, 3);\n",
         ])
 
 
