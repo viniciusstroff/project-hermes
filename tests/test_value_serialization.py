@@ -41,30 +41,31 @@ sys.modules.setdefault('dotenv', dotenv)
 from core.adapters.postgres import PostgresTargetAdapter
 from core.artifacts import ArtifactManager
 from core.context import MigrationContext
-from core.migration_engine import MigrationEngine, ValueSerializationError
+from core.migration_engine import MigrationEngine
 from core.multi_target_migration import MultiTargetMigration, TargetMigration
+from core.operations import ValueSerializationError
 from core.queries import SourceQuery
 from core.runner import MigrationRunner
 from core.runtime import MigrationLogger, MigrationProgress
 from core.strategies import Copy, Rename
 from core.table_migration import TableMigration
-from tests.source_fakes import FakeSqlSource
+from tests.source_fakes import FakeSqlSource, sql_writer
 
 SECRET = 'cpf 123.456.789-00'
 
 
 class ListOutput:
+    """Output that keeps the SQL of each operation, rendered by the PostgreSQL target."""
+
     def __init__(self):
+        self.target = PostgresTargetAdapter()
         self.written = []
 
     def open_phase(self, phase):
         pass
 
-    def write(self, sql):
-        self.written.append(sql)
-
-    def comment(self, text):
-        pass
+    def write(self, operation):
+        self.written.extend(self.target.render(operation))
 
     def flush(self):
         pass
@@ -81,7 +82,7 @@ class ListOutput:
 
 def engine_for(rows, warn_fn=None):
     writes = []
-    engine = MigrationEngine(FakeSqlSource('postgres', rows), PostgresTargetAdapter(), writes.append, warn_fn=warn_fn)
+    engine = MigrationEngine(FakeSqlSource('postgres', rows), PostgresTargetAdapter(), sql_writer(writes), warn_fn=warn_fn)
     return engine, writes
 
 
@@ -143,9 +144,6 @@ class RunnerFailureTest(unittest.TestCase):
             def __init__(self, context):
                 self.context = context
 
-            def set_trigger_commands(self):
-                self.disable_triggers = self.enable_triggers = ''
-
             def run_inserts(self):
                 TableMigration(SourceQuery('notas'), 'public.notes',
                                [Copy('f_text')]).run(self.context.source('v1'))
@@ -163,7 +161,6 @@ class RunnerFailureTest(unittest.TestCase):
                 artifacts=artifacts,
                 sources={'v1': FakeSqlSource('postgres', [{'f_text': SECRET + '\x00'}])},
                 target=PostgresTargetAdapter(),
-                metadata=None,
                 output=ListOutput(),
                 logger=logger,
                 progress=progress,
@@ -185,7 +182,7 @@ class RunnerFailureTest(unittest.TestCase):
     def test_context_warns_once_per_key(self):
         lines = []
         context = MigrationContext(
-            clientdir='x', config={}, artifacts=None, sources={}, target=None, metadata=None,
+            clientdir='x', config={}, artifacts=None, sources={}, target=None,
             output=None, logger=types.SimpleNamespace(print_log=lines.append), progress=None,
         )
 

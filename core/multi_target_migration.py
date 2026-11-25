@@ -45,24 +45,10 @@ class MultiTargetMigration:
     def source_query(self):
         return with_default_fields(self.source, self.source_select_columns())
 
-    def insert_sql(self, row: dict, target: TargetMigration, engine):
-        insert_cols = [field.insert_col for field in target.fields]
-        insert_vals = [
-            engine.render_value(target.target, field.insert_col, self._field_value(field, row, engine))
-            for field in target.fields
-        ]
-        return engine.insert_statement(target.target, insert_cols, insert_vals)
-
-    @staticmethod
-    def _field_value(field, row: dict, engine):
-        # The engine serializes it through the target adapter, with the column in any error.
-        return field.raw_value(row)
-
     def run_row(self, row: dict, engine):
         for target in self.targets:
-            if not target.should_write(row):
-                continue
-            engine.write_sql(self.insert_sql(row, target, engine))
+            if target.should_write(row):
+                engine.insert(target.target, [(field.insert_col, field.raw_value(row)) for field in target.fields])
 
     def run(self, engine):
         query = self.source_query()

@@ -1,24 +1,8 @@
-from core.dialects.base import UnsupportedValueError
+from core.operations import Insert
 from core.queries import UnsupportedQueryError, with_limit
-from core.sql import SqlLiteral
 
 DEFAULT_PROGRESS_EVERY = 1000
 BINARY_TYPES = (bytes, bytearray, memoryview)
-
-
-class ValueSerializationError(UnsupportedValueError):
-    """A field value the target cannot represent, with the place it came from.
-
-    The message names the target table, the column and the Python type, and
-    leaves the value out: it goes to the log and to the manifest.
-    """
-
-    def __init__(self, table: str, column: str, python_type: str, reason: str):
-        self.table = table
-        self.column = column
-        self.python_type = python_type
-        self.reason = reason
-        super().__init__(f'{table}.{column} ({python_type}): {reason}')
 
 
 class MigrationEngine:
@@ -65,26 +49,25 @@ class MigrationEngine:
             return None
         return None if total is None else int(total)
 
-    def write_sql(self, sql: str):
-        self.writer(sql)
+    def emit(self, operation):
+        """Deliver one write operation to the output, which renders it for the target."""
+        self.writer(operation)
 
-    def insert_statement(self, table: str, columns, values) -> str:
-        return self.target_adapter.insert_statement(table, columns, values)
+    def insert(self, entity: str, pairs):
+        """Emit an Insert from (column, Python value) pairs, in the order of the fields."""
 
-    def render_value(self, table: str, column: str, value) -> SqlLiteral:
-        """Serialize one field value through the target adapter, naming the column on failure."""
-
-        try:
-            rendered = self.target_adapter.serialize_value(value)
-        except UnsupportedValueError as exc:
-            raise ValueSerializationError(table, column, type(value).__name__, str(exc)) from exc
-        if isinstance(value, BINARY_TYPES) and self.warn_fn is not None:
-            # A text column also accepts bytea, storing the hexadecimal form.
-            self.warn_fn(
-                f'binary:{table}.{column}',
-                f'{table}.{column} recebeu valor binário. Se a coluna é de texto, decodifique com Transform.',
-            )
-        return SqlLiteral(rendered)
+        values = {}
+        for column, value in pairs:
+            if column in values:
+                raise ValueError(f'{entity}: a coluna {column} recebe valor de mais de um campo.')
+            values[column] = value
+            if isinstance(value, BINARY_TYPES) and self.warn_fn is not None:
+                # A text column also accepts bytea, storing the hexadecimal form.
+                self.warn_fn(
+                    f'binary:{entity}.{column}',
+                    f'{entity}.{column} recebeu valor binário. Se a coluna é de texto, decodifique com Transform.',
+                )
+        self.emit(Insert(entity, values))
 
     def report_progress(self, table: str, count: int, total: int = None, done: bool = False):
         if self.progress_fn is not None:

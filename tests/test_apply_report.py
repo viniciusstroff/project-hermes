@@ -14,7 +14,7 @@ TARGET = {'host': 'target-db', 'port': '5432', 'database': 'tenant', 'user': 'te
 
 def fingerprint(run_dir):
     paths = [os.path.join(run_dir, 'manifest.json')]
-    paths += [os.path.join(run_dir, 'sql', name) for name in sorted(os.listdir(os.path.join(run_dir, 'sql')))]
+    paths += [os.path.join(run_dir, 'comandos', name) for name in sorted(os.listdir(os.path.join(run_dir, 'comandos')))]
     result = {}
     for path in paths:
         with open(path, 'rb') as artifact:

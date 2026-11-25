@@ -7,7 +7,7 @@ if [ -z "${RUN_DIR:-}" ]; then
     exit 1
 fi
 
-SQL_DIR="$RUN_DIR/sql"
+SQL_DIR="$RUN_DIR/comandos"
 LOG_DIR="$RUN_DIR/logs"
 ERROR_DIR="$RUN_DIR/erros"
 

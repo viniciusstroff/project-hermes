@@ -97,9 +97,10 @@ The core package SHALL NOT keep modules or `BaseMigration` helpers whose only ro
 - **WHEN** migration code calls `context.engine('pg_v1')`
 - **THEN** the call fails because the context exposes sources only through `source(name)`
 
-#### Scenario: Facade keeps its writing helpers
-- **WHEN** migration code calls `write_sql()`, `print_comment()`, `_open_sql_file()` or `_flush_writes()` on a `BaseMigration`
-- **THEN** the call is delegated to the configured output adapter as before
+#### Scenario: Facade writes only operations
+- **WHEN** migration code looks for `write_sql()`, `print_comment()`, `sql_value()`, `_open_sql_file()` or `_flush_writes()` on a `BaseMigration`
+- **THEN** none of them exists
+- **AND** `emit()`, `comment()`, `clear()`, `suspend_constraints()` and `reset_identity()` deliver operations through `context.emit()`
 
 #### Scenario: Database drivers are imported where connections open
 - **WHEN** the default context opens the source and target connections
@@ -119,6 +120,15 @@ The core SHALL offer `Clear`, `SuspendConstraints`, `ResumeConstraints` and `Res
 #### Scenario: Suspend constraints on PostgreSQL
 - **WHEN** `SuspendConstraints()` is rendered by the PostgreSQL adapter
 - **THEN** it produces one `ALTER TABLE ... DISABLE TRIGGER ALL` per user table read from the target catalog
+- **AND** the table list is read before target reads close, so rendering in later phases does not query the target
+
+#### Scenario: Suspended constraints are resumed by the runner
+- **WHEN** a migration emits `SuspendConstraints(['public.a'])` in the `prepare_target` phase
+- **THEN** the runner emits `ResumeConstraints(['public.a'])` in the `finalize_target` phase without a call from the migration
+
+#### Scenario: Index helper removed
+- **WHEN** migration code looks for `set_index_commands_for` or `set_indexes_commands` on a `BaseMigration`
+- **THEN** neither exists and no index command is generated
 
 ### Requirement: Calculated source fields are bound to an adapter
 A field computed at the source SHALL be declared as `NativeField(adapter, expression, alias)`, which is also a field strategy, and the source adapter SHALL refuse a `NativeField` of another adapter before sending any query, including the progress count.

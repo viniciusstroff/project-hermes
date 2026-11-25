@@ -10,15 +10,15 @@ Cada cliente tem um diretório com o próprio script de migração e o `.env` de
 
 | Arquivo | Conteúdo |
 |---|---|
-| `sql/00_setup.sql` | Abertura da execução |
-| `sql/01_prepare_target.sql` | Limpeza das tabelas do destino e desativação de triggers e índices |
-| `sql/02_dump_compatible_tables.sql` | `pg_dump` das tabelas que passam da V1 para a V2 sem transformação |
-| `sql/03_load_transformed_data.sql` | `INSERT`s e `UPDATE`s gerados em Python para as tabelas que precisam de mapeamento |
-| `sql/04_finalize_target.sql` | Ajuste de sequences e reativação de triggers e índices |
+| `comandos/00_setup.sql` | Abertura da execução |
+| `comandos/01_prepare_target.sql` | Limpeza das tabelas do destino e desativação de triggers |
+| `comandos/02_dump_compatible_tables.sql` | `pg_dump` das tabelas que passam da V1 para a V2 sem transformação |
+| `comandos/03_load_transformed_data.sql` | `INSERT`s gerados em Python para as tabelas que precisam de mapeamento |
+| `comandos/04_finalize_target.sql` | Ajuste de sequences e reativação de triggers |
 
-Os arquivos ficam em `runs/<cliente>/<AAAAmmdd-HHMMSS>/`, junto com `manifest.json` e `logs/migration.log`. O diretório `runs/` é ignorado pelo Git.
+Os arquivos ficam em `runs/<cliente>/<AAAAmmdd-HHMMSS>/`, junto com `manifest.json` e `logs/migration.log`. A extensão vem do adapter de destino: `.sql` no PostgreSQL. O manifesto lista cada artefato com fase, caminho e formato. Ele também registra a versão de cada servidor. O diretório `runs/` é ignorado pelo Git.
 
-O núcleo em `core/` trabalha com contratos em vez de drivers. A origem é lida por um `SourceAdapter` e todo SQL gerado passa por um `OutputAdapter`. Hoje existem adapters para PostgreSQL e Firebird. Do lado da saída há o `SqlFileOutput` (o padrão) e o `MirrorOutput`, que repassa os mesmos comandos para mais de um output. Os detalhes estão em [docs/arquitetura.md](docs/arquitetura.md).
+O núcleo em `core/` trabalha com contratos em vez de drivers. A origem é lida por um `SourceAdapter` com consultas neutras. A migração emite operações (`Insert`, `Clear`, `SuspendConstraints`, `ResetIdentity`...). O adapter de destino traduz cada uma para o formato dele. Hoje existem adapters para PostgreSQL e Firebird. Do lado da saída há o `FileOutput` (o padrão) e o `MirrorOutput`, que repassa as mesmas operações para mais de um output. Os detalhes estão em [docs/arquitetura.md](docs/arquitetura.md).
 
 ## Requisitos
 
@@ -103,7 +103,7 @@ python3 Aplicar.py runs/Acme/20261120-153000 --dry-run
 python3 Aplicar.py runs/Acme/20261120-153000
 ```
 
-O `Aplicar.py` roda os arquivos de `sql/` na ordem das fases, numa única transação. Se algo falha, nada da carga fica no destino. O dry run usa `--on-error continue` por padrão e lista todos os erros de uma vez. Cada aplicação grava `relatorio.json` e `erros.txt` em `aplicacoes/<timestamp>-<modo>/`, dentro da pasta da execução.
+O `Aplicar.py` roda os arquivos `.sql` de `comandos/` na ordem das fases, numa única transação. Se algo falha, nada da carga fica no destino. O dry run usa `--on-error continue` por padrão e lista todos os erros de uma vez. Cada aplicação grava `relatorio.json` e `erros.txt` em `aplicacoes/<timestamp>-<modo>/`, dentro da pasta da execução.
 
 Para gerar e aplicar de uma vez no destino das chaves `TARGET_*`, use `python3 Migracao.py Acme --dry-run` ou `--apply`. Os modos, as políticas de erro e os cuidados estão em [docs/execucao.md](docs/execucao.md#aplicando-os-sqls-no-destino).
 
@@ -161,7 +161,7 @@ rodar2.sh        alternativa ao Aplicar.py, com psql
 
 ## Planos futuros
 
-Os contratos de adapters, o `OutputAdapter` (com `SqlFileOutput` e `MirrorOutput`) e a aplicação no destino com dry run já estão implementados. O plano completo, com a justificativa de cada item, está em [docs/melhorias-futuras.md](docs/melhorias-futuras.md).
+Os contratos de adapters, o `OutputAdapter` (com `FileOutput` e `MirrorOutput`) e a aplicação no destino com dry run já estão implementados. O plano completo, com a justificativa de cada item, está em [docs/melhorias-futuras.md](docs/melhorias-futuras.md).
 
 ### Próximo passo
 

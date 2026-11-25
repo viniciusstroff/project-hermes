@@ -3,7 +3,7 @@
 - [ ] 1.1 Create `core/metrics.py` with `GenerationMetrics`, the unit and phase records and `LostValue(value, reason, sample, reference_map=None)`.
 - [ ] 1.2 Keep unit counters as plain integers: rows read, statements per target table, start, end, duration and state (`done` or `interrupted`).
 - [ ] 1.3 Group losses by unit, target table, column, strategy and reason, keeping the count and at most 20 distinct samples truncated to 100 characters.
-- [ ] 1.4 Write `relatorio-geracao.json` at the run root with run id, status, debug limit, timestamps, phases, units, losses and the size of each existing file in `sql/`.
+- [ ] 1.4 Write `relatorio-geracao.json` at the run root with run id, status, debug limit, timestamps, phases, units, losses and the size of each existing file in `comandos/`.
 
 ## 2. Context, Engine and Runner
 

@@ -39,6 +39,7 @@ sys.modules.setdefault('dotenv', dotenv)
 from core.adapters.postgres import PostgresTargetAdapter
 from core.base_migration import BaseMigration
 from core.migration_engine import MigrationEngine
+from core.operations import Comment, Insert, ResetIdentity, SuspendConstraints
 from tests.source_fakes import FakeSqlSource
 
 acmeedu = importlib.import_module('AcmeEdu.AcmeEdu')
@@ -143,21 +144,32 @@ class FakeSource(FakeSqlSource):
 
 
 def make_migration(rows_by_table):
+    """Migração com origem falsa. ``written`` guarda o SQL dos inserts e
+    ``context.operations`` guarda todas as operações emitidas."""
+
     written = []
+    operations = []
     source = FakeSource(rows_by_table)
+    target = PostgresTargetAdapter()
+
+    def emit(operation):
+        operations.append(operation)
+        if isinstance(operation, Insert):
+            written.extend(target.render(operation))
+
     context = types.SimpleNamespace(
         config={},
         artifacts=None,
-        output=types.SimpleNamespace(write=written.append, comment=lambda text: None),
+        operations=operations,
+        emit=emit,
         logger=types.SimpleNamespace(print_log=lambda line: None),
-        source=lambda name: MigrationEngine(source, PostgresTargetAdapter(), written.append),
+        source=lambda name: MigrationEngine(source, target, emit),
         reference_map=lambda name: {'active': 1, 'on_hold': 2, 'graduated': 3, 'cancelled': 4},
         close=lambda: None,
     )
     migration = acmeedu.Migracao.__new__(acmeedu.Migracao)
     BaseMigration.__init__(migration, 'AcmeEdu', context=context)
     migration.print_log = lambda line: None
-    migration.print_comment = lambda text: None
     return migration, written, source
 
 
@@ -268,26 +280,28 @@ class PhaseSqlTest(unittest.TestCase):
         self.assertNotIn('public.holidays', ignored)
         self.assertNotIn('public.holidays_id_seq', ignored)
 
-    def test_initial_sql_truncates_targets_and_disables_triggers(self):
-        migration, written, _ = make_migration({})
-        migration.disable_triggers = 'ALTER TABLE public.people DISABLE TRIGGER ALL;\n'
+    def test_initial_phase_clears_targets_and_suspends_constraints(self):
+        migration, _, _ = make_migration({})
 
         migration.run_initial()
 
-        self.assertTrue(written[0].startswith('TRUNCATE public.enrollments, public.classes'))
-        self.assertIn('public.holidays RESTART IDENTITY;', written[0])
-        self.assertNotIn('student_statuses', written[0])
-        self.assertIn('ALTER TABLE public.people DISABLE TRIGGER ALL;\n', written)
+        operations = [op for op in migration.context.operations if not isinstance(op, Comment)]
+        clear, suspend = operations
+        self.assertEqual(clear.entities[:2], ('public.enrollments', 'public.classes'))
+        self.assertEqual(clear.entities[-1], 'public.holidays')
+        self.assertNotIn('public.student_statuses', clear.entities)
+        self.assertEqual(suspend, SuspendConstraints())
+        self.assertTrue(PostgresTargetAdapter().render(clear)[0].endswith('public.holidays RESTART IDENTITY;\n'))
 
     def test_sequences_use_id_column(self):
-        migration, written, _ = make_migration({})
-        migration.context.metadata = types.SimpleNamespace(
-            reset_sequences_sql=lambda tables, column: f'-- {",".join(tables)} {column}\n'
-        )
+        migration, _, _ = make_migration({})
 
         migration.reset_sequences()
 
-        self.assertEqual(written, [f'-- {",".join(acmeedu.TARGET_TABLES)} id\n'])
+        self.assertEqual(
+            migration.context.operations,
+            [ResetIdentity(f'public.{table}', 'id') for table in acmeedu.TARGET_TABLES],
+        )
 
 
 if __name__ == '__main__':

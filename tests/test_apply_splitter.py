@@ -21,8 +21,13 @@ from core.apply.splitter import (
     split_sql,
     split_sql_file,
 )
-from core.outputs import SqlFileOutput
+from core.operations import Comment, Insert, Native
+from core.outputs import FileOutput
 from core.sql import SqlLiteral
+
+
+def insert(entity, row):
+    return Insert(entity, dict(zip(('id', 'nome', 'valor', 'ativo'), row)))
 
 
 def split(text, **kwargs):
@@ -331,8 +336,8 @@ class CoreGeneratedSqlTest(unittest.TestCase):
         def __init__(self, directory):
             self.directory = directory
 
-        def sql_path(self, phase):
-            return os.path.join(self.directory, f'{phase}.sql')
+        def command_path(self, phase, extension):
+            return os.path.join(self.directory, f'{phase}.{extension}')
 
     def test_splits_sql_written_by_core_outputs(self):
         adapter = PostgresTargetAdapter()
@@ -344,20 +349,17 @@ class CoreGeneratedSqlTest(unittest.TestCase):
         ]
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            output = SqlFileOutput(self.FakeArtifacts(tmpdir), buffer_size=2)
+            output = FileOutput(self.FakeArtifacts(tmpdir), adapter, buffer_size=2)
             output.open_phase('load_transformed_data')
-            output.comment('Tabela clientes; com ponto e vírgula')
+            output.write(Comment('Tabela clientes; com ponto e vírgula'))
             for row in rows:
-                output.write(adapter.insert_statement('public.clientes', ['id', 'nome', 'valor', 'ativo'], row))
-            output.write("UPDATE public.clientes SET nome = 'x;y' WHERE id = 1;\n")
+                output.write(insert('public.clientes', row))
+            output.write(Native('postgres', "UPDATE public.clientes SET nome = 'x;y' WHERE id = 1;\n"))
             output.close()
 
             statements = list(split_sql_file(os.path.join(tmpdir, 'load_transformed_data.sql')))
 
-        expected = [
-            adapter.insert_statement('public.clientes', ['id', 'nome', 'valor', 'ativo'], row).rstrip().rstrip(';')
-            for row in rows
-        ]
+        expected = [adapter.render(insert('public.clientes', row))[0].rstrip().rstrip(';') for row in rows]
         expected.append("UPDATE public.clientes SET nome = 'x;y' WHERE id = 1")
         self.assertEqual([statement.kind for statement in statements], [SQL] * 5)
         self.assertEqual([statement.text for statement in statements], expected)
@@ -366,8 +368,8 @@ class CoreGeneratedSqlTest(unittest.TestCase):
     def test_value_ending_in_backslash_does_not_absorb_next_statement(self):
         adapter = PostgresTargetAdapter()
         sql = (
-            adapter.insert_statement('public.arquivos', ['id', 'caminho'], [1, 'C:\\pasta\\'])
-            + adapter.insert_statement('public.arquivos', ['id', 'caminho'], [2, 'D:\\'])
+            adapter.render(Insert('public.arquivos', {'id': 1, 'caminho': 'C:\\pasta\\'}))[0]
+            + adapter.render(Insert('public.arquivos', {'id': 2, 'caminho': 'D:\\'}))[0]
         )
 
         statements = split(sql)

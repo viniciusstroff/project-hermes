@@ -32,3 +32,12 @@ class FakeSqlSource(SqlSourceAdapter):
     def _scalar(self, sql):
         self.queries.append(sql)
         return len(self.rows)
+
+
+def sql_writer(writes, target=None):
+    """Engine writer that renders each operation with the PostgreSQL target into ``writes``."""
+
+    from core.adapters.postgres import PostgresTargetAdapter
+
+    target = target or PostgresTargetAdapter()
+    return lambda operation: writes.extend(target.render(operation))

@@ -1,7 +1,7 @@
 class MirrorOutput:
-    """Delivers the same commands to several outputs, in the given order.
+    """Delivers the same operations to several outputs, in the given order.
 
-    Delivery calls (``open_phase``, ``write``, ``comment``, ``flush``) stop at
+    Delivery calls (``open_phase``, ``write``, ``flush``) stop at
     the first error, which fails the run. ``finish`` and ``close`` reach every
     output even when one of them fails, so a failing database output does not
     keep the file output from finishing, and the first error is raised at the
@@ -17,13 +17,9 @@ class MirrorOutput:
         for output in self.outputs:
             output.open_phase(phase)
 
-    def write(self, sql: str):
+    def write(self, operation):
         for output in self.outputs:
-            output.write(sql)
-
-    def comment(self, text: str):
-        for output in self.outputs:
-            output.comment(text)
+            output.write(operation)
 
     def flush(self):
         for output in self.outputs:

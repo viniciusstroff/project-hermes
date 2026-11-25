@@ -21,12 +21,12 @@
 
 ## 4. Write Operations and Artifacts
 
-- [ ] 4.1 Add the operation types and the target contract with `render`, `read`, `session`, `capabilities` and `artifact_format`.
-- [ ] 4.2 Port the PostgreSQL target: inserts through the dialect with identifiers quoted by `quote_identifier`, `Clear`, `SuspendConstraints` from the catalog, `ResetIdentity` with `pg_get_serial_sequence`.
-- [ ] 4.3 Remove `MetadataProvider`, `set_index_commands_for` and the legacy connection attributes; add the facade shortcuts and `emit()`. (The legacy connection attributes already left in phase 2, together with the fixed `.env` keys.)
-- [ ] 4.4 Replace `SqlFileOutput` with `FileOutput` writing `comandos/<NN>_<phase>.<extension>`, and make `OutputAdapter.write` receive operations.
-- [ ] 4.5 Record sources, target, server versions and the artifact list in the manifest.
-- [ ] 4.6 Port `Acme` to the new API and update the tests that use the removed helpers.
+- [x] 4.1 Add the operation types and the target contract with `render`, `read`, `session`, `capabilities` and `artifact_format`. (`session` and `capabilities` come with the applier in 6.1, where they are used.)
+- [x] 4.2 Port the PostgreSQL target: inserts through the dialect with identifiers quoted by `quote_identifier`, `Clear`, `SuspendConstraints` from the catalog, `ResetIdentity` with `pg_get_serial_sequence`.
+- [x] 4.3 Remove `MetadataProvider`, `set_index_commands_for` and the legacy connection attributes; add the facade shortcuts and `emit()`. (The legacy connection attributes already left in phase 2, together with the fixed `.env` keys.)
+- [x] 4.4 Replace `SqlFileOutput` with `FileOutput` writing `comandos/<NN>_<phase>.<extension>`, and make `OutputAdapter.write` receive operations.
+- [x] 4.5 Record sources, target, server versions and the artifact list in the manifest. (PostgreSQL reports its version now; Firebird does in 7.1.)
+- [x] 4.6 Port `Acme` to the new API and update the tests that use the removed helpers.
 
 ## 5. Compatible Entities
 

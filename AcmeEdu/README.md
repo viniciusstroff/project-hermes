@@ -1,6 +1,6 @@
 # AcmeEdu
 
-Cliente fictício para rodar o Hermes de ponta a ponta sem dado real. A AcmeEdu é uma instituição de ensino com uma V1 legada e uma V2 nova, as duas em Docker. A migração exercita os recursos do core usados pelos clientes reais: `TableMigration`, `MultiTargetMigration`, strategies de limpeza, mapa de referência lido da V2, `pg_dump` de tabela compatível, triggers, índices e sequences.
+Cliente fictício para rodar o Hermes de ponta a ponta sem dado real. A AcmeEdu é uma instituição de ensino com uma V1 legada e uma V2 nova, as duas em Docker. A migração exercita os recursos do core usados pelos clientes reais: `TableMigration`, `MultiTargetMigration`, strategies de limpeza, mapa de referência lido da V2, `pg_dump` de tabela compatível, `NativeQuery`, limpeza, suspensão de triggers e ajuste de sequences por operações.
 
 Nada aqui representa uma instituição real. Nomes, CPFs, telefones e e-mails são gerados. Os e-mails usam o domínio reservado `.example`.
 
@@ -68,7 +68,7 @@ Volume: 6 cursos, 25 professores, 48 disciplinas, 120 turmas, 1500 alunos, 6000 
 
 ## Da V1 para a V2
 
-A V2 usa nomes em inglês, sem prefixo, com chave `id` e sequence `<tabela>_id_seq`. Como o core assume `f_id` por padrão, o script passa `column='id'` ao `write_reset_sequences`.
+A V2 usa nomes em inglês, sem prefixo, com chave `id`. O script ajusta as sequences com `reset_identity(..., column='id')`. O adapter acha cada sequence pelo `pg_get_serial_sequence`.
 
 | V2 | V1 | Mudança |
 |---|---|---|

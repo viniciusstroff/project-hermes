@@ -1,5 +1,7 @@
 import traceback
 
+from core.operations import Comment, ResumeConstraints
+
 
 class MigrationRunner:
     """Runs the standard migration phases against a composed context."""
@@ -15,9 +17,7 @@ class MigrationRunner:
         try:
             self.context.logger.print_log('----- Início do script de importação V1 - V2 -----')
 
-            self._prepare_trigger_commands()
             self._load_reference_maps()
-            self._call_hook('set_indexes_commands')
 
             output.open_phase('prepare_target')
             self._call_hook('run_initial')
@@ -29,10 +29,7 @@ class MigrationRunner:
 
             output.open_phase('finalize_target')
             self._call_hook('reset_sequences')
-            output.comment('HABILITAR ÍNDICES DE TABELAS')
-            output.write(getattr(self.migration, 'enable_indexes', ''))
-            output.comment('HABILITAR TRIGGERS DE TABELAS')
-            output.write(getattr(self.migration, 'enable_triggers', ''))
+            self._resume_constraints()
             output.flush()
 
             # finish() runs once per run: a failing finish(True) is not
@@ -57,16 +54,6 @@ class MigrationRunner:
         except Exception as exc:
             self.context.logger.print_log('[ERRO] Falha ao finalizar o output: ' + str(exc))
 
-    def _prepare_trigger_commands(self):
-        if hasattr(self.migration, 'set_trigger_commands'):
-            self.migration.set_trigger_commands()
-            return
-
-        self.context.logger.print_log('Gerando comandos de triggers para tabelas')
-        self.migration.disable_triggers = self.context.metadata.disable_triggers_sql()
-        self.migration.enable_triggers = self.context.metadata.enable_triggers_sql()
-        self.context.logger.print_log('Comandos de trigger gerados')
-
     def _load_reference_maps(self):
         """Load the declared maps, then close target reads before the first phase."""
 
@@ -74,9 +61,16 @@ class MigrationRunner:
         declarations = list(hook()) if hook is not None else []
         if declarations:
             self.context.load_reference_maps(declarations)
-        close_reads = getattr(self.context.metadata, 'close_reads', None)
-        if close_reads is not None:
-            close_reads()
+        self.context.close_target_reads()
+
+    def _resume_constraints(self):
+        """Resume, in the last phase, every suspension emitted during the run."""
+
+        suspended = list(self.context.suspended_constraints)
+        if suspended:
+            self.context.emit(Comment('HABILITAR TRIGGERS DE TABELAS'))
+        for entities in suspended:
+            self.context.emit(ResumeConstraints(entities))
 
     def _call_hook(self, name: str):
         hook = getattr(self.migration, name, None)

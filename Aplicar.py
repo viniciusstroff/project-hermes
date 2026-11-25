@@ -25,7 +25,7 @@ from core.apply.cli import MissingTargetError, libpq_connect, libpq_target, run_
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         prog='Aplicar.py',
-        description='Aplica os arquivos de sql/ de uma execução no destino, em transação única.',
+        description='Aplica os arquivos .sql de comandos/ de uma execução no destino, em transação única.',
     )
     parser.add_argument('run_dir', help='pasta da execução, por exemplo runs/Acme/20261124-153000')
     parser.add_argument(

@@ -119,34 +119,31 @@ class Migracao(BaseMigration):
             # ReferenceMap('states_by_code', table='public.states', key='f_code', value='f_id'),
         ]
 
-    def set_indexes_commands(self):
-        # Desabilitar índices que tornam a carga muito lenta.
-        # Deixe vazio se não houver índices problemáticos.
-        self.set_index_commands_for([
-            # 'indice_problematico',
-        ])
-
     def reset_sequences(self):
-        tables = [
-            'acme_customers_demo',
-            'acme_orders_demo',
-            # adicione as demais tabelas com sequences
-        ]
-        self.write_reset_sequences(tables)
+        # O adapter acha a sequence de cada coluna; não depende de nome.
+        self.reset_identity([
+            'public.acme_customers_demo',
+            'public.acme_orders_demo',
+            # adicione as demais tabelas com identidade
+        ], column='f_id')
 
     # ------------------------------------------------------------------
-    # Fase inicial (01_prepare_target.sql)
+    # Fase inicial (01_prepare_target)
     # ------------------------------------------------------------------
 
     def run_initial(self):
-        self.create_truncates()
-        self.print_comment('DESABILITAR TRIGGERS DE TABELAS')
-        self.write_sql(self.disable_triggers)
-        self.print_comment('DESABILITAR ÍNDICES DE TABELAS')
-        self.write_sql(self.disable_indexes)
+        self.comment('LIMPEZA DAS TABELAS DA V2')
+        self.clear([
+            'public.acme_orders_demo',
+            'public.acme_customers_demo',
+        ])
+        self.comment('DESABILITAR TRIGGERS DE TABELAS')
+        # Sem argumentos vale para todas as tabelas do destino. O runner
+        # reabilita na fase final.
+        self.suspend_constraints()
 
     # ------------------------------------------------------------------
-    # Fase de carga (03_load_transformed_data.sql)
+    # Fase de carga (03_load_transformed_data)
     # ------------------------------------------------------------------
 
     def run_inserts(self):
@@ -201,7 +198,7 @@ Para cada tabela da V1 que precisa ser migrada, decida a estratégia:
 |---|---|
 | Tabela idêntica ou quase idêntica em V1 e V2 | `pg_dump` (lista em `dump_ignoring_tables` apenas as que *não* devem ser incluídas) |
 | Campos renomeados, FK diferente ou dados que precisam de limpeza | `TableMigration` com estratégias |
-| Lógica condicional por linha ou múltiplas fontes | método manual com `write_sql()` |
+| Lógica condicional por linha ou múltiplas fontes | método manual que lê com `self.context.source(...).read()` e emite `Insert` |
 
 Consulte [estrategias.md](estrategias.md) para o catálogo completo de estratégias.
 
@@ -227,7 +224,7 @@ python3 Migracao.py NomeAcme --debug 100
 Isso limita cada consulta da origem a 100 linhas, inclusive as `NativeQuery`. Verifique:
 
 - Nenhum erro de Python na saída do terminal.
-- Os arquivos em `runs/NomeAcme/<timestamp>/sql/` foram gerados.
+- Os arquivos em `runs/NomeAcme/<timestamp>/comandos/` foram gerados.
 - O SQL gerado parece correto (amostragem manual).
 
 ---

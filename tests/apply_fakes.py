@@ -20,7 +20,7 @@ DEFAULT_FILES = {
 
 def make_run(tmpdir, files=None, status='success', debug=False):
     run_dir = os.path.join(tmpdir, 'runs', 'Acme', '20261124-100000')
-    os.makedirs(os.path.join(run_dir, 'sql'))
+    os.makedirs(os.path.join(run_dir, 'comandos'))
     manifest = {
         'client': 'Acme',
         'status': status,
@@ -30,7 +30,7 @@ def make_run(tmpdir, files=None, status='success', debug=False):
         json.dump(manifest, manifest_file)
 
     for name, content in (DEFAULT_FILES if files is None else files).items():
-        with open(os.path.join(run_dir, 'sql', name), 'w', encoding='utf-8') as sql_file:
+        with open(os.path.join(run_dir, 'comandos', name), 'w', encoding='utf-8') as sql_file:
             sql_file.write(content)
     return run_dir
 

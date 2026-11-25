@@ -12,6 +12,7 @@ sys.modules.setdefault('psycopg2.extras', psycopg2_extras)
 from core.adapters import FirebirdSourceAdapter, PostgresTargetAdapter
 from core.migration_engine import MigrationEngine
 from core.queries import SourceQuery
+from tests.source_fakes import sql_writer
 from core.table_migration import TableMigration
 from core.strategies import Copy, CpfClean, PhoneClean
 
@@ -59,7 +60,7 @@ class FirebirdEngineTest(unittest.TestCase):
         engine = MigrationEngine(
             FirebirdSourceAdapter(conn),
             PostgresTargetAdapter(),
-            writes.append,
+            sql_writer(writes),
             limit=10,
         )
 

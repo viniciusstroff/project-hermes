@@ -26,13 +26,14 @@ from core.strategies import (
     Upper,
 )
 from core.table_migration import TableMigration
-from tests.source_fakes import FakeSqlSource
+from tests.source_fakes import FakeSqlSource, sql_writer
 
 TARGET = PostgresTargetAdapter()
 
 
 def render(strategy, row):
-    return TARGET.serialize_value(strategy.raw_value(row))
+    value = strategy.raw_value(row)
+    return value.sql if isinstance(value, SqlLiteral) else TARGET.dialect.serialize_value(value)
 
 
 def run_table(fields, source):
@@ -41,7 +42,7 @@ def run_table(fields, source):
         source=SourceQuery('t'),
         target='public.t',
         fields=fields,
-    ).run(MigrationEngine(source, TARGET, writes.append))
+    ).run(MigrationEngine(source, TARGET, sql_writer(writes)))
     return writes
 
 

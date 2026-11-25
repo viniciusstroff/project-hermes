@@ -16,6 +16,7 @@ from core.expand_migration import ExpandMigration
 from core.table_migration import TableMigration
 from core.multi_target_migration import MultiTargetMigration, TargetMigration
 from core.queries import SourceQuery
+from tests.source_fakes import sql_writer
 from core.strategies import Copy, Transform
 
 
@@ -96,7 +97,7 @@ class TableMigrationProgressTest(unittest.TestCase):
 
         engine = make_engine(
             conn,
-            writes.append,
+            sql_writer(writes),
             progress_fn=lambda table, count, total, done: progress.append((table, count, total, done)),
             progress_every=2,
         )
@@ -165,7 +166,7 @@ class ExpandMigrationTest(unittest.TestCase):
         ).run(
             make_engine(
                 conn,
-                writes.append,
+                sql_writer(writes),
                 progress_fn=lambda table, count, total, done: progress.append((table, count, total, done)),
                 progress_every=2,
             )
@@ -217,12 +218,15 @@ class ExpandMigrationTest(unittest.TestCase):
 
     def test_deduplicates_select_columns(self):
         conn = FakeConnection([{'f_id': 1}])
+        writes = []
 
         TableMigration(
             source=SourceQuery('public.source'),
             target='public.target',
-            fields=[FakeField('f_id'), FakeField('f_id')],
-        ).run(make_engine(conn, lambda sql: None))
+            fields=[Copy('f_id'), Transform('f_id', lambda value, row: value, v2_name='f_origin')],
+        ).run(make_engine(conn, sql_writer(writes)))
+
+        self.assertEqual(writes, ['INSERT INTO public.target (f_id, f_origin) VALUES (1, 1);\n'])
 
         self.assertEqual(
             conn.cursor_calls[0].executed_sql,
@@ -232,6 +236,20 @@ class ExpandMigrationTest(unittest.TestCase):
             conn.cursor_calls[1].executed_sql,
             'SELECT f_id FROM public.source',
         )
+
+
+    def test_two_fields_for_the_same_target_column_are_refused(self):
+        conn = FakeConnection([{'f_id': 1}])
+
+        with self.assertRaises(ValueError) as raised:
+            TableMigration(
+                source=SourceQuery('public.source'),
+                target='public.target',
+                fields=[FakeField('f_id'), FakeField('f_id')],
+            ).run(make_engine(conn, lambda operation: None))
+
+        self.assertIn('public.target', str(raised.exception))
+        self.assertIn('f_id', str(raised.exception))
 
 
 class MultiTargetMigrationTest(unittest.TestCase):
@@ -274,7 +292,7 @@ class MultiTargetMigrationTest(unittest.TestCase):
         ).run(
             make_engine(
                 conn,
-                writes.append,
+                sql_writer(writes),
                 progress_fn=lambda table, count, total, done: progress.append((table, count, total, done)),
                 progress_every=1,
             )
