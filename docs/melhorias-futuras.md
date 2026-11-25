@@ -26,7 +26,7 @@ Também inclui um plano para desacoplar a forma de saída da migração. Hoje o 
 | 6 | Expandir o uso de `MultiTargetMigration` | Médio | Médio |
 | 7 | Padronizar lookups de referência | Médio | Médio |
 | 8 | Revisar estratégias e expressões dependentes de dialeto | Médio | Médio |
-| 9 | Limpar código legado e utilitários obsoletos | Baixo | Baixo |
+| 9 | Limpar código legado e utilitários obsoletos (feito) | Baixo | Baixo |
 | 10 | Criar interface gráfica para leigos/configuração assistida de migrações | Alto | Alto |
 | 11 | Criar camada de execução performática para migrações pesadas, com opção de executor Go | Alto | Muito alto |
 | 12 | Adicionar paralelismo e streaming controlados | Alto | Muito alto |
@@ -86,51 +86,9 @@ Criar quatro camadas explícitas:
    - resolver referências
    - sequences/reset
 
-### Possível estrutura
+### Estrutura atual
 
-```text
-core/
-  adapters/
-    source_adapter.py
-    target_adapter.py
-    postgres_source.py
-    firebird_source.py
-    postgres_target.py
-  dialects/
-    base.py
-    postgres.py
-    firebird.py
-  metadata/
-    base.py
-    postgres.py
-  outputs/
-    base.py
-    sql_file.py
-    direct_db_output.py
-  migrations/
-    table_migration.py
-    expand_migration.py
-    multi_target_migration.py
-```
-
-### Contratos sugeridos
-
-```python
-class SourceAdapter(Protocol):
-    def cursor(self): ...
-    def scalar(self, sql: str): ...
-    def limit_clause(self, limit: str) -> str: ...
-
-class TargetAdapter(Protocol):
-    def serialize_value(self, value) -> str: ...
-    def insert_statement(self, table: str, columns: list[str], values: list[str]) -> str: ...
-
-class MetadataProvider(Protocol):
-    def load_reference_map(self, table: str, key_col: str, value_col: str, **kwargs) -> dict: ...
-    def disable_triggers_sql(self) -> str: ...
-    def enable_triggers_sql(self) -> str: ...
-    def reset_sequence_sql(self, table: str) -> str: ...
-```
+A estrutura e os contratos que já existem estão em [arquitetura.md](arquitetura.md). Os adapters ficam em `core/adapters/`, os dialetos em `core/dialects/`, os providers de metadados em `core/metadata/` e os outputs em `core/outputs/`. As migrações (`TableMigration`, `ExpandMigration` e `MultiTargetMigration`) ficam na raiz de `core/`. Os contratos ainda trafegam SQL. A change `desacoplar-migracao-de-banco-e-versao` propõe contratos sem SQL, para qualquer banco.
 
 ### O que precisa mudar
 
@@ -502,12 +460,21 @@ Os dois primeiros têm correção direta no dialeto. Para binários, `decode('<h
 
 ## 9 — Limpar código legado e utilitários obsoletos
 
-Há pontos pequenos que não mudam a arquitetura, mas reduzem ruído:
+Feito pela change `limpar-codigo-legado`. Saíram:
 
-- revisar `common/dateutil.py`
-- revisar imports antigos em `core/engine.py` e `core/__init__.py`
-- consolidar documentação já implementada em relação ao que ainda é futuro
-- remover helpers locais que ficaram duplicados após a refatoração
+- `common/`, com `dateutil.py` e `regexutil.py`, que não tinham uso e tinham defeito;
+- `core/engine.py`, que só reexportava classes dos módulos atuais. O `core/__init__.py` ficou como estava;
+- os doze helpers privados de engine, progresso e TUI do `BaseMigration`. O engine vem só de `self.context.engine(nome)`;
+- os imports de `psycopg2` e `firebirdsql` do `core/base_migration.py`, que não eram usados;
+- `queries_duplicidade_dados.sql`, que atualizava tabelas que o `Acme` não migra.
+
+A configuração de depuração do VS Code passou a apontar para o container `project-hermes`.
+
+Ficaram de fora, porque outras changes cuidam deles:
+
+- `FieldStrategy.value()`, `sql_value()` e o `RegexClean`, na `revisar-estrategias-dependentes-de-dialeto`;
+- `load_reference_map()`, na `padronizar-lookups-de-referencia`;
+- as conexões `pg_v1_conn`, `pg_v2_conn` e `fb_v1_conn` e o `rodar2.sh`, na `desacoplar-migracao-de-banco-e-versao`.
 
 ---
 

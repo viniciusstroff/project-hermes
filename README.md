@@ -131,7 +131,6 @@ core/            runner, contexto, migrations e estratégias de campo
   dialects/      diferenças de sintaxe entre bancos
   metadata/      triggers, índices, sequences e mapas de referência do destino
   outputs/       para onde vai o SQL gerado
-common/          utilitários de data e regex
 tests/           testes unitários
 docs/            documentação técnica
 openspec/        specs e changes do fluxo OpenSpec

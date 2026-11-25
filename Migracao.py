@@ -21,7 +21,7 @@ import sys
 import traceback
 
 _rootdir = os.path.dirname(os.path.realpath(__file__))
-# Adiciona a raiz do projeto ao path para que core/ e common/ sejam importáveis
+# Adiciona a raiz do projeto ao path para que core/ seja importável
 sys.path.insert(0, _rootdir)
 
 from core.apply import APPLY, CONTINUE, DRY_RUN, STOP
