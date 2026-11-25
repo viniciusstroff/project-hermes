@@ -26,10 +26,12 @@
 
 ## 4. Entry Points
 
-- [ ] 4.1 Create `Aplicar.py <run_dir> [--dry-run] [--on-error stop|continue]` using libpq environment variables and requiring `PGHOST` and `PGDATABASE`.
-- [ ] 4.2 Print the target and mode before starting and exit with a non-zero code when the result is `failed`.
-- [ ] 4.3 Add `--apply` and `--dry-run` to `Migracao.py`, applying the generated run with the `PG_V2_*` connection only when generation succeeded.
-- [ ] 4.4 Open the target connection with `client_encoding` UTF8.
+- [x] 4.1 Create `Aplicar.py <run_dir> [--dry-run] [--on-error stop|continue]` using libpq environment variables and requiring `PGHOST` and `PGDATABASE`.
+- [x] 4.2 Print the target and mode before starting and exit with a non-zero code when the result is `failed`.
+- [x] 4.3 Add `--apply` and `--dry-run` to `Migracao.py`, applying the generated run with the `PG_V2_*` connection only when generation succeeded.
+- [x] 4.4 Open the target connection with `client_encoding` UTF8.
+- [x] 4.5 Show progress during the application: start and counters of each artifact and a line every 50000 statements.
+- [x] 4.6 Accept `--on-error` in `Migracao.py` together with `--apply` or `--dry-run`, and parse both entry points with `argparse`.
 
 ## 5. Documentation
 

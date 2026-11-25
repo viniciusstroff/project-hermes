@@ -78,6 +78,9 @@ class ApplicationReport:
         counters = self._files[name]
         counters.duration_seconds = round(time.perf_counter() - counters.started, 3)
 
+    def file_counters(self, name: str) -> dict:
+        return self._files[name].as_dict()
+
     def record_executed(self, name: str, count: int = 1):
         self._files[name].executed += count
 

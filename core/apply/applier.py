@@ -28,6 +28,7 @@ ROLLED_BACK = 'rolled_back'
 FAILED = 'failed'
 
 DEFAULT_BATCH_SIZE = 1000
+DEFAULT_PROGRESS_EVERY = 50000
 
 
 class ApplicationError(Exception):
@@ -238,6 +239,9 @@ class SqlArtifactApplier:
     ``connect`` is called without arguments and returns a DB-API connection
     (psycopg2 in production). It is called only after the run directory was
     checked, so an incomplete run never opens a connection.
+
+    ``log`` receives progress messages: the start and the counters of each
+    artifact, and a line every ``progress_every`` statements read.
     """
 
     def __init__(
@@ -248,6 +252,8 @@ class SqlArtifactApplier:
         on_error: str = None,
         batch_size: int = DEFAULT_BATCH_SIZE,
         report_clock=None,
+        log: Callable[[str], None] = None,
+        progress_every: int = DEFAULT_PROGRESS_EVERY,
     ):
         if mode not in _MODES:
             raise ValueError(f'modo inválido: {mode!r}. Use {APPLY} ou {DRY_RUN}.')
@@ -255,14 +261,16 @@ class SqlArtifactApplier:
         self.on_error = on_error or self._mode.default_on_error
         if self.on_error not in _POLICIES:
             raise ValueError(f'política de erro inválida: {self.on_error!r}. Use {STOP} ou {CONTINUE}.')
-        if batch_size < 1:
-            raise ValueError('batch_size precisa ser maior que zero')
+        if batch_size < 1 or progress_every < 1:
+            raise ValueError('batch_size e progress_every precisam ser maiores que zero')
 
         self.run_dir = run_dir
         self.mode = mode
         self.batch_size = batch_size
+        self.progress_every = progress_every
         self._connect = connect
         self._report_options = {'clock': report_clock} if report_clock else {}
+        self._log = log or (lambda message: None)
 
     def apply(self) -> ApplicationReport:
         """Apply the run and return its report.
@@ -310,15 +318,19 @@ class SqlArtifactApplier:
         policy = _POLICIES[self.on_error](cursor, report, self.batch_size)
 
         for artifact in run.artifacts:
+            self._log(f'Aplicando {artifact.name}')
             report.start_file(artifact.name)
             statements = split_sql_file(artifact.path, standard_conforming_strings=standard_conforming_strings)
             for number, statement in enumerate(statements, 1):
                 self._apply_statement(policy, report, _Item(artifact.name, number, statement))
+                if number % self.progress_every == 0:
+                    self._log(f'  {artifact.name}: {number} comandos lidos')
             policy.flush()
             # Each artifact used to run in its own psql session. Settings
             # changed by one (search_path from pg_dump) must not reach the next.
             cursor.execute('RESET ALL')
             report.end_file(artifact.name)
+            self._log(_summarize_file(report.file_counters(artifact.name)))
 
     def _apply_statement(self, policy, report: ApplicationReport, item: _Item):
         reason = self._mode.skip_reason(item.statement)
@@ -331,6 +343,14 @@ class SqlArtifactApplier:
                 'porque os dados viriam no formato do psql. Gere o dump com --column-inserts.'
             )
         policy.execute(item)
+
+
+def _summarize_file(counters: dict) -> str:
+    skipped = sum(counters['skipped'].values())
+    return (
+        f"  {counters['file']}: executados {counters['executed']}, com erro {counters['errors']}, "
+        f"pulados {skipped}, {counters['duration_seconds']:.1f} s"
+    )
 
 
 def _server_standard_conforming_strings(cursor) -> bool:
