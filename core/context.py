@@ -14,6 +14,16 @@ from core.outputs import OutputAdapter, SqlFileOutput
 from core.runtime import MigrationLogger, MigrationProgress
 
 
+class SourceNotConfiguredError(LookupError):
+    """Raised when a migration asks for a source the context does not have."""
+
+    def __init__(self, source_name: str, sources: dict):
+        available = ', '.join(sorted(sources)) or 'nenhuma'
+        super().__init__(
+            f"Origem '{source_name}' não configurada no .env do cliente. Origens disponíveis: {available}."
+        )
+
+
 @dataclass
 class MigrationContext:
     """Composed runtime dependencies for a client migration."""
@@ -48,6 +58,8 @@ class MigrationContext:
         )
 
     def engine(self, source_name: str = 'pg_v1') -> MigrationEngine:
+        if source_name not in self.sources:
+            raise SourceNotConfiguredError(source_name, self.sources)
         return MigrationEngine(
             self.sources[source_name],
             self.target,
@@ -123,14 +135,17 @@ class DefaultMigrationContextFactory:
                 dbname=config['PG_V2_NAME'],
                 user=config['PG_V2_USER'], password=config['PG_V2_PASS'])
 
-            logger.print_log('----- Conectando BD Firebird V1 -----')
-            fb_v1_conn = firebirdsql.connect(
-                host=config['FB_V1_HOST'],
-                port=config['FB_V1_PORT'],
-                database=config['FB_V1_NAME'],
-                user=config['FB_V1_USER'],
-                password=config['FB_V1_PASS'],
-                charset=config['FB_V1_CHARSET'])
+            if _firebird_configured(config):
+                logger.print_log('----- Conectando BD Firebird V1 -----')
+                fb_v1_conn = firebirdsql.connect(
+                    host=config['FB_V1_HOST'],
+                    port=config['FB_V1_PORT'],
+                    database=config['FB_V1_NAME'],
+                    user=config['FB_V1_USER'],
+                    password=config['FB_V1_PASS'],
+                    charset=config['FB_V1_CHARSET'])
+            else:
+                logger.print_log('----- Firebird V1 não configurado (FB_V1_HOST vazio) -----')
         except Exception as exc:
             logger.print_log('[ERRO] ' + str(exc))
             artifacts.write_manifest(
@@ -151,10 +166,7 @@ class DefaultMigrationContextFactory:
             clientdir=clientdir,
             config=config,
             artifacts=artifacts,
-            sources={
-                'pg_v1': PostgresSourceAdapter(pg_v1_conn),
-                'fb_v1': FirebirdSourceAdapter(fb_v1_conn),
-            },
+            sources=_sources(pg_v1_conn, fb_v1_conn),
             target=PostgresTargetAdapter(),
             metadata=PostgresMetadataProvider(pg_v2_conn),
             output=output,
@@ -166,3 +178,14 @@ class DefaultMigrationContextFactory:
                 'fb_v1_conn': fb_v1_conn,
             },
         )
+
+
+def _firebird_configured(config: dict) -> bool:
+    return bool((config.get('FB_V1_HOST') or '').strip())
+
+
+def _sources(pg_v1_conn, fb_v1_conn) -> dict:
+    sources = {'pg_v1': PostgresSourceAdapter(pg_v1_conn)}
+    if fb_v1_conn is not None:
+        sources['fb_v1'] = FirebirdSourceAdapter(fb_v1_conn)
+    return sources

@@ -38,7 +38,7 @@ dotenv.dotenv_values = dotenv_values
 sys.modules.setdefault('dotenv', dotenv)
 
 from core.adapters import PostgresSourceAdapter, PostgresTargetAdapter
-from core.context import DefaultMigrationContextFactory
+from core.context import DefaultMigrationContextFactory, SourceNotConfiguredError
 from core.metadata import PostgresMetadataProvider
 from core.runner import MigrationRunner
 from core.sql import SqlLiteral
@@ -79,29 +79,66 @@ class FakeConnection:
         self.closed = True
 
 
+POSTGRES_ENV = [
+    'PG_V1_HOST=source-db',
+    'PG_V1_PORT=5432',
+    'PG_V1_NAME=source',
+    'PG_V1_USER=source-user',
+    'PG_V1_PASS=source-pass',
+    'PG_V2_HOST=target-db',
+    'PG_V2_PORT=5432',
+    'PG_V2_NAME=target',
+    'PG_V2_USER=target-user',
+    'PG_V2_PASS=target-pass',
+]
+FIREBIRD_ENV = [
+    'FB_V1_HOST=firebird-db',
+    'FB_V1_PORT=3050',
+    'FB_V1_NAME=firebird',
+    'FB_V1_USER=firebird-user',
+    'FB_V1_PASS=firebird-pass',
+    'FB_V1_CHARSET=ISO8859_1',
+]
+
+
 class AdapterContextMetadataTest(unittest.TestCase):
-    def _write_env(self, clientdir):
+    def _write_env(self, clientdir, lines=None):
         with open(os.path.join(clientdir, '.env'), 'w', encoding='utf-8') as env_file:
-            env_file.write(
-                '\n'.join([
-                    'PG_V1_HOST=source-db',
-                    'PG_V1_PORT=5432',
-                    'PG_V1_NAME=source',
-                    'PG_V1_USER=source-user',
-                    'PG_V1_PASS=source-pass',
-                    'PG_V2_HOST=target-db',
-                    'PG_V2_PORT=5432',
-                    'PG_V2_NAME=target',
-                    'PG_V2_USER=target-user',
-                    'PG_V2_PASS=target-pass',
-                    'FB_V1_HOST=firebird-db',
-                    'FB_V1_PORT=3050',
-                    'FB_V1_NAME=firebird',
-                    'FB_V1_USER=firebird-user',
-                    'FB_V1_PASS=firebird-pass',
-                    'FB_V1_CHARSET=ISO8859_1',
-                ])
-            )
+            env_file.write('\n'.join(lines if lines is not None else [*POSTGRES_ENV, *FIREBIRD_ENV]))
+
+    def _context_without_firebird(self, tmpdir, extra_lines=()):
+        clientdir = os.path.join(tmpdir, 'AcmeEdu')
+        os.makedirs(clientdir)
+        self._write_env(clientdir, [*POSTGRES_ENV, *extra_lines])
+        pg_v1 = FakeConnection()
+        pg_v2 = FakeConnection()
+        with patch('core.context.psycopg2.connect', side_effect=[pg_v1, pg_v2]), \
+             patch('core.context.firebirdsql.connect') as firebird_connect:
+            with redirect_stdout(StringIO()):
+                context = DefaultMigrationContextFactory.from_clientdir(clientdir)
+        return context, firebird_connect
+
+    def test_context_without_firebird_keys_does_not_connect_to_firebird(self):
+        for extra_lines in ((), ('FB_V1_HOST=', 'FB_V1_PORT=3050')):
+            with self.subTest(extra_lines=extra_lines), tempfile.TemporaryDirectory() as tmpdir:
+                context, firebird_connect = self._context_without_firebird(tmpdir, extra_lines)
+
+                firebird_connect.assert_not_called()
+                self.assertIn('pg_v1', context.sources)
+                self.assertNotIn('fb_v1', context.sources)
+                self.assertIsNone(context.legacy_connections['fb_v1_conn'])
+                context.close()
+
+    def test_engine_for_missing_source_names_the_source(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            context, _ = self._context_without_firebird(tmpdir)
+
+            with self.assertRaises(SourceNotConfiguredError) as raised:
+                context.engine('fb_v1')
+
+            self.assertIn("'fb_v1'", str(raised.exception))
+            self.assertIn('pg_v1', str(raised.exception))
+            context.close()
 
     def test_postgres_source_adapter_owns_cursor_and_scalar_behavior(self):
         conn = FakeConnection(rows=[{'count': 7}])
