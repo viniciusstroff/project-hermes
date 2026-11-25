@@ -146,22 +146,25 @@ class FakeMetadata:
 
 
 ENV_LINES = [
-    'PG_V1_HOST=source-db',
-    'PG_V1_PORT=5432',
-    'PG_V1_NAME=source',
-    'PG_V1_USER=source-user',
-    'PG_V1_PASS=source-pass',
-    'PG_V2_HOST=target-db',
-    'PG_V2_PORT=5432',
-    'PG_V2_NAME=target',
-    'PG_V2_USER=target-user',
-    'PG_V2_PASS=target-pass',
-    'FB_V1_HOST=firebird-db',
-    'FB_V1_PORT=3050',
-    'FB_V1_NAME=firebird',
-    'FB_V1_USER=firebird-user',
-    'FB_V1_PASS=firebird-pass',
-    'FB_V1_CHARSET=ISO8859_1',
+    'SOURCE_V1_ADAPTER=postgres',
+    'SOURCE_V1_HOST=source-db',
+    'SOURCE_V1_PORT=5432',
+    'SOURCE_V1_NAME=source',
+    'SOURCE_V1_USER=source-user',
+    'SOURCE_V1_PASS=source-pass',
+    'TARGET_ADAPTER=postgres',
+    'TARGET_HOST=target-db',
+    'TARGET_PORT=5432',
+    'TARGET_NAME=target',
+    'TARGET_USER=target-user',
+    'TARGET_PASS=target-pass',
+    'SOURCE_FB_ADAPTER=firebird',
+    'SOURCE_FB_HOST=firebird-db',
+    'SOURCE_FB_PORT=3050',
+    'SOURCE_FB_NAME=firebird',
+    'SOURCE_FB_USER=firebird-user',
+    'SOURCE_FB_PASS=firebird-pass',
+    'SOURCE_FB_CHARSET=ISO8859_1',
 ]
 
 
@@ -312,7 +315,7 @@ class OutputAdapterIntegrationTest(unittest.TestCase):
             clientdir=self.clientdir,
             config={},
             artifacts=artifacts,
-            sources={'pg_v1': source},
+            sources={'v1': source},
             target=None,
             metadata=FakeMetadata(),
             output=output,
@@ -328,11 +331,11 @@ class OutputAdapterIntegrationTest(unittest.TestCase):
         self.assertFalse(hasattr(context, 'writer'))
         context.close()
 
-    def test_context_engine_writes_through_configured_output(self):
+    def test_context_source_writes_through_configured_output(self):
         output = RecordingOutput()
         context = self._context(output, source=object())
 
-        context.engine('pg_v1').write_sql('INSERT INTO demo VALUES (1);\n')
+        context.source('v1').write_sql('INSERT INTO demo VALUES (1);\n')
 
         self.assertEqual(output.events, [('write', 'INSERT INTO demo VALUES (1);\n')])
         context.close()
@@ -390,8 +393,8 @@ class OutputAdapterIntegrationTest(unittest.TestCase):
         )
 
     def test_default_factory_builds_sql_file_output_with_setup_phase_open(self):
-        with patch('core.context.psycopg2.connect', side_effect=[FakeConnection(), FakeConnection()]), \
-             patch('core.context.firebirdsql.connect', return_value=FakeConnection()):
+        with patch('psycopg2.connect', side_effect=[FakeConnection(), FakeConnection()]), \
+             patch('firebirdsql.connect', return_value=FakeConnection()):
             with redirect_stdout(StringIO()):
                 context = DefaultMigrationContextFactory.from_clientdir(self.clientdir)
 
@@ -420,8 +423,8 @@ class OutputAdapterIntegrationTest(unittest.TestCase):
             def run_inserts(self):
                 self.context.output.write('INSERT INTO public.demo VALUES (1);\n')
 
-        with patch('core.context.psycopg2.connect', side_effect=[pg_v1, pg_v2]), \
-             patch('core.context.firebirdsql.connect', return_value=fb_v1):
+        with patch('psycopg2.connect', side_effect=[pg_v1, pg_v2]), \
+             patch('firebirdsql.connect', return_value=fb_v1):
             with redirect_stdout(StringIO()):
                 context = DefaultMigrationContextFactory.from_clientdir(self.clientdir)
                 MigrationRunner(context, ComposedMigration(context)).run()
@@ -441,7 +444,14 @@ class OutputAdapterIntegrationTest(unittest.TestCase):
         self.assertTrue(all(sql.startswith('SELECT') for sql in executed))
 
         with open(context.artifacts.manifest_path, encoding='utf-8') as manifest_file:
-            self.assertEqual(json.load(manifest_file)['output'], {'type': 'sql-file'})
+            manifest_text = manifest_file.read()
+        manifest = json.loads(manifest_text)
+        self.assertEqual(manifest['output'], {'type': 'sql-file'})
+        self.assertEqual(manifest['sources']['v1']['host'], 'source-db')
+        self.assertEqual(manifest['sources']['fb']['adapter'], 'firebird')
+        self.assertEqual(manifest['target']['name'], 'target')
+        for secret in ('source-pass', 'target-pass', 'firebird-pass'):
+            self.assertNotIn(secret, manifest_text)
 
     def _run(self, context, migration):
         with redirect_stdout(StringIO()):

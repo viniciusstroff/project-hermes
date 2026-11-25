@@ -285,7 +285,7 @@ TableMigration(
         Default('f_type', 1),
         Fixed('f_create_user', 814),
     ],
-).run(self.context.engine('pg_v1'))
+).run(self.context.source('v1'))
 ```
 
 O `{fields}` no `source_sql` é substituído automaticamente pelas colunas de `select_columns` de cada estratégia (exceto `Fixed`, que não contribui).

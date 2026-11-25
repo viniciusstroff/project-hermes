@@ -44,7 +44,7 @@ class ArtifactManager:
         self,
         *,
         status: str,
-        config: dict = None,
+        connections: dict = None,
         debug_limit: int = None,
         error: str = None,
         output: dict = None,
@@ -61,7 +61,9 @@ class ArtifactManager:
             'sql_files': self.sql_paths(),
             'logs_dir': self.logs_dir,
             'errors_dir': self.errors_dir,
-            'databases': self._database_config(config or {}),
+            # Adapter and parameters of each connection, without passwords.
+            'sources': (connections or {}).get('sources', {}),
+            'target': (connections or {}).get('target'),
             'output': output,
         }
 
@@ -71,18 +73,3 @@ class ArtifactManager:
         with open(self.manifest_path, 'w', encoding='utf-8') as manifest_file:
             json.dump(manifest, manifest_file, indent=2, ensure_ascii=False)
             manifest_file.write('\n')
-
-    def _database_config(self, config: dict) -> dict:
-        return {
-            'pg_v1': self._safe_database_entry(config, 'PG_V1', ('HOST', 'PORT', 'NAME', 'USER')),
-            'pg_v2': self._safe_database_entry(config, 'PG_V2', ('HOST', 'PORT', 'NAME', 'USER')),
-            'fb_v1': self._safe_database_entry(config, 'FB_V1', ('HOST', 'PORT', 'NAME', 'USER', 'CHARSET')),
-        }
-
-    def _safe_database_entry(self, config: dict, prefix: str, suffixes: tuple) -> dict:
-        entry = {}
-        for suffix in suffixes:
-            key = f'{prefix}_{suffix}'
-            if key in config:
-                entry[suffix.lower()] = config[key]
-        return entry

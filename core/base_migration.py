@@ -10,20 +10,21 @@ import os
 import shlex
 import subprocess
 
+from core.connections import parse_connections
 from core.context import DefaultMigrationContextFactory
 from core.runner import MigrationRunner
 
 
 class BaseMigration:
+    # Named source read by pg_dump for the compatible tables. Until the
+    # generic copy replaces pg_dump, it must be a PostgreSQL connection.
+    dump_source = 'v1'
+
     def __init__(self, clientdir: str, context=None):
         self.context = context or DefaultMigrationContextFactory.from_clientdir(clientdir)
         self._clientdir = clientdir
         self.config = self.context.config
         self.artifacts = self.context.artifacts
-
-        self.pg_v1_conn = self.context.legacy_connections.get('pg_v1_conn')
-        self.pg_v2_conn = self.context.legacy_connections.get('pg_v2_conn')
-        self.fb_v1_conn = self.context.legacy_connections.get('fb_v1_conn')
 
         self.disable_triggers = ''
         self.enable_triggers = ''
@@ -141,20 +142,21 @@ class BaseMigration:
 
     def dump_tables(self):
         exclude_tables = [*self.dump_ignoring_tables(), *self.dump_non_existing_tables()]
+        source = self._dump_connection()
 
         command = (
             'pg_dump -h {host} -p {port} -U {user} -a -b --column-inserts -f {file} {name} '
             '-E utf-8 --disable-triggers {excludes}'
         ).format(
-            host=self.config['PG_V1_HOST'],
-            port=self.config['PG_V1_PORT'],
-            user=self.config['PG_V1_USER'],
+            host=source.get('host'),
+            port=source.get('port', '5432'),
+            user=source.get('user'),
             file=self.artifacts.sql_path('dump_compatible_tables'),
-            name=self.config['PG_V1_NAME'],
+            name=source.get('name'),
             excludes=''.join([f"-T '{t}' " for t in exclude_tables]),
         )
 
-        os.environ['PGPASSWORD'] = self.config['PG_V1_PASS']
+        os.environ['PGPASSWORD'] = source.get('pass', '')
         self.print_log('Executando pg_dump de tabelas diferentes e com dados')
 
         if subprocess.call(shlex.split(command), shell=False) != 0:
@@ -163,6 +165,17 @@ class BaseMigration:
 
         self.print_log('Tabelas ignoradas: ' + ', '.join(exclude_tables))
         self.print_log('Dump finalizado')
+
+    def _dump_connection(self):
+        sources, _ = parse_connections(self.config)
+        source = sources.get(self.dump_source)
+        if source is None or source.adapter != 'postgres':
+            raise ValueError(
+                f"O pg_dump lê a origem '{self.dump_source}', que precisa ser declarada com "
+                f"SOURCE_{self.dump_source.upper()}_ADAPTER=postgres"
+            )
+        source.require('host', 'name', 'user')
+        return source
 
     def run(self):
         MigrationRunner(self.context, self).run()

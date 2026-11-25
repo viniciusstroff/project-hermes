@@ -58,7 +58,7 @@ Os clientes montam o contexto dentro do `BaseMigration.__init__`, chamando `supe
 
 4. Conexão de escrita própria, aberta só depois do `close_reads()`.
 
-   O output abre a própria conexão com as chaves `PG_V2_*`, `client_encoding` UTF8 e `autocommit` desligado. Ele não reaproveita a conexão do provider porque o código do cliente ainda pode ler o destino por `pg_v2_conn`. Na mesma conexão, essa leitura veria a carga em andamento (tabelas truncadas) e montaria dados errados sem aviso. Numa conexão separada, ela espera o lock do `TRUNCATE`: o processo para, mas o log mostra onde. A limitação fica documentada e some quando o item 1 remover `pg_v2_conn`.
+   O output abre a própria conexão com as chaves `TARGET_*`, `client_encoding` UTF8 e `autocommit` desligado. Ele não reaproveita a conexão do provider porque o código do cliente ainda pode ler o destino pela conexão do adapter (`context.target.connection`). Na mesma conexão, essa leitura veria a carga em andamento (tabelas truncadas) e montaria dados errados sem aviso. Numa conexão separada, ela espera o lock do `TRUNCATE`: o processo para, mas o log mostra onde. A limitação fica documentada e some quando a `desacoplar-migracao-de-banco-e-versao` tirar a conexão do driver da API do cliente.
 
    O `psycopg2` abre uma transação no primeiro `SELECT` e só a fecha com `commit` ou `rollback`. Depois de carregar mapas e triggers, a conexão do provider fica parada dentro dessa transação, com locks `ACCESS SHARE` nas tabelas lidas e no catálogo. Um `TRUNCATE` dessas tabelas na conexão de escrita esperaria para sempre. Por isso a change `padronizar-lookups-de-referencia` faz o `close_reads()` encerrar a transação de leitura com `ROLLBACK`. Esta change depende disso.
 
@@ -108,7 +108,7 @@ Os clientes montam o contexto dentro do `BaseMigration.__init__`, chamando `supe
 
 - Destino bloqueado durante toda a geração -> aceito, porque a carga já exige janela sem uso concorrente. A janela passa a incluir o tempo de geração.
 - Conexão ociosa derrubada no meio de uma carga longa (túnel SSH, proxy, firewall) -> a transação é desfeita e a carga se perde no fim. O timeout de sessão ociosa fica desligado na conexão de escrita, mas os outros limites dependem da rede. Ver Open Questions.
-- Cliente que lê o destino por `pg_v2_conn` no meio da geração fica parado esperando o lock -> documentar e remover `pg_v2_conn` no item 1.
+- Cliente que lê o destino pela conexão do adapter no meio da geração fica parado esperando o lock -> documentar. A `desacoplar-migracao-de-banco-e-versao` tira essa conexão da API do cliente.
 - Estouro do cache de subtransações com `continue` -> o mesmo do aplicador. Medir numa carga real.
 - O separador incremental divergir do separador de arquivo -> os dois usam a mesma máquina de estados. Os testes partem o mesmo texto em pedaços arbitrários e comparam com a separação do arquivo inteiro.
 - Erro perto do fim descarta a carga inteira -> é o preço da transação única, igual ao do aplicador.

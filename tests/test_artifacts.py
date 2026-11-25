@@ -39,7 +39,7 @@ class ArtifactManagerTest(unittest.TestCase):
                 os.path.join(artifacts.sql_dir, '02_dump_compatible_tables.sql'),
             )
 
-    def test_manifest_omits_passwords(self):
+    def test_manifest_records_sources_and_target(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             clientdir = os.path.join(tmpdir, 'Acme')
             os.makedirs(clientdir)
@@ -48,15 +48,9 @@ class ArtifactManagerTest(unittest.TestCase):
             artifacts.write_manifest(
                 status='running',
                 debug_limit=100,
-                config={
-                    'PG_V1_HOST': 'source-db',
-                    'PG_V1_PORT': '5432',
-                    'PG_V1_NAME': 'source',
-                    'PG_V1_USER': 'source-user',
-                    'PG_V1_PASS': 'secret-source',
-                    'PG_V2_HOST': 'target-db',
-                    'PG_V2_PASS': 'secret-target',
-                    'FB_V1_PASS': 'secret-firebird',
+                connections={
+                    'sources': {'v1': {'adapter': 'postgres', 'host': 'source-db', 'name': 'source'}},
+                    'target': {'adapter': 'postgres', 'host': 'target-db'},
                 },
             )
 
@@ -66,11 +60,9 @@ class ArtifactManagerTest(unittest.TestCase):
             self.assertEqual(manifest['client'], 'Acme')
             self.assertEqual(manifest['status'], 'running')
             self.assertEqual(manifest['debug'], {'enabled': True, 'limit': 100})
-            self.assertEqual(manifest['databases']['pg_v1']['host'], 'source-db')
-            self.assertNotIn('pass', json.dumps(manifest).lower())
-            self.assertNotIn('secret-source', json.dumps(manifest))
-            self.assertNotIn('secret-target', json.dumps(manifest))
-            self.assertNotIn('secret-firebird', json.dumps(manifest))
+            self.assertEqual(manifest['sources']['v1']['host'], 'source-db')
+            self.assertEqual(manifest['target']['adapter'], 'postgres')
+            self.assertNotIn('databases', manifest)
 
 
 if __name__ == '__main__':

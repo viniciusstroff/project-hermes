@@ -14,15 +14,19 @@ from core.apply.cli import (
     libpq_target,
     run_application,
 )
+from core.adapters.registry import AdapterResolutionError
+from core.connections import ConnectionConfigError
 from tests.apply_fakes import Clock, FakeConnection, make_run
 
 TARGET = {'host': 'target-db', 'port': '5432', 'database': 'tenant', 'user': 'tenant'}
 CONFIG = {
-    'PG_V2_HOST': 'target-db',
-    'PG_V2_PORT': '5432',
-    'PG_V2_NAME': 'tenant',
-    'PG_V2_USER': 'tenant',
-    'PG_V2_PASS': 'segredo',
+    'SOURCE_V1_ADAPTER': 'postgres',
+    'TARGET_ADAPTER': 'postgres',
+    'TARGET_HOST': 'target-db',
+    'TARGET_PORT': '5432',
+    'TARGET_NAME': 'tenant',
+    'TARGET_USER': 'tenant',
+    'TARGET_PASS': 'segredo',
 }
 
 
@@ -194,8 +198,25 @@ class MigracaoArgumentsTest(unittest.TestCase):
         self.assertIn('Arquivo de migração não encontrado', printed.call_args.args[0])
 
 
+    def test_connection_config_error_exits_without_traceback(self):
+        error = ConnectionConfigError('Conexão SOURCE_V1 (postgres) sem os parâmetros obrigatórios: SOURCE_V1_NAME')
+        with patch.object(Migracao, 'load_migration', side_effect=error), patch('builtins.print') as printed:
+            code = Migracao.main(['AcmeEdu'])
+
+        self.assertEqual(code, 1)
+        printed.assert_called_once_with(f'[ERRO] {error}')
+
+    def test_unknown_adapter_exits_without_traceback(self):
+        error = AdapterResolutionError("Adapter 'oracle' desconhecido.")
+        with patch.object(Migracao, 'load_migration', side_effect=error), patch('builtins.print') as printed:
+            code = Migracao.main(['AcmeEdu'])
+
+        self.assertEqual(code, 1)
+        printed.assert_called_once_with(f'[ERRO] {error}')
+
+
 class MigracaoApplyTest(unittest.TestCase):
-    def test_closes_generation_before_applying_with_pg_v2_connection(self):
+    def test_closes_generation_before_applying_with_target_connection(self):
         events = []
         connection = FakeConnection()
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -206,7 +227,7 @@ class MigracaoApplyTest(unittest.TestCase):
             )
 
             def connect_factory(config):
-                events.append(('factory', config['PG_V2_HOST']))
+                events.append(('factory', config['TARGET_HOST']))
 
                 def connect():
                     events.append('connect')

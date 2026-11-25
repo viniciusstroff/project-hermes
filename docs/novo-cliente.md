@@ -38,40 +38,37 @@ Copie de um Acme existente e ajuste:
 cp Acme/.env.example NomeAcme/.env
 ```
 
-Variáveis obrigatórias:
+Cada conexão tem nome e adapter. Uma origem é um grupo `SOURCE_<NOME>_*` com `SOURCE_<NOME>_ADAPTER`. O nome em minúsculas é o que a migração pede em `self.context.source('<nome>')`. O destino é `TARGET_ADAPTER` com as chaves `TARGET_*`. Os adapters `postgres` e `firebird` exigem `HOST`, `NAME` e `USER`.
 
 ```dotenv
-# Base legada PostgreSQL V1
-PG_V1_HOST=
-PG_V1_PORT=
-PG_V1_NAME=
-PG_V1_USER=
-PG_V1_PASS=
+# Origem v1: base legada PostgreSQL
+SOURCE_V1_ADAPTER=postgres
+SOURCE_V1_HOST=
+SOURCE_V1_PORT=5432
+SOURCE_V1_NAME=
+SOURCE_V1_USER=
+SOURCE_V1_PASS=
 
-# Contrato generico do banco de destino
-TARGET_DB_ADAPTER=postgres
-TARGET_DB_HOST=target-db
-TARGET_DB_PORT=5432
-TARGET_DB_NAME=tenant
-TARGET_DB_USER=tenant
-TARGET_DB_PASS=tenant
-TARGET_DB_PUBLISHED_PORT=5432
+# Origem fb: Firebird legado. Opcional: sem estas chaves a origem não existe
+# e o Hermes não tenta conectar.
+SOURCE_FB_ADAPTER=firebird
+SOURCE_FB_HOST=
+SOURCE_FB_PORT=3050
+SOURCE_FB_NAME=
+SOURCE_FB_USER=
+SOURCE_FB_PASS=
+SOURCE_FB_CHARSET=ISO8859_1
 
-# Base destino PostgreSQL V2, mantida enquanto o core ainda usa PG_V2_*
-PG_V2_HOST=target-db
-PG_V2_PORT=5432
-PG_V2_NAME=tenant
-PG_V2_USER=tenant
-PG_V2_PASS=tenant
-
-# Firebird V1. Opcional: sem FB_V1_HOST, o Hermes não tenta conectar e a origem fb_v1 não existe.
-FB_V1_HOST=
-FB_V1_PORT=3050
-FB_V1_NAME=
-FB_V1_USER=
-FB_V1_PASS=
-FB_V1_CHARSET=ISO8859_1
+# Destino
+TARGET_ADAPTER=postgres
+TARGET_HOST=target-db
+TARGET_PORT=5432
+TARGET_NAME=tenant
+TARGET_USER=tenant
+TARGET_PASS=tenant
 ```
+
+Uma chave `SOURCE_` que não pertence a nenhuma origem declarada interrompe a execução antes de conectar. Isso pega erro de digitação, como `SOURCE_V2_HOST` sem `SOURCE_V2_ADAPTER`.
 
 ---
 
@@ -168,7 +165,7 @@ class Migracao(BaseMigration):
                 Copy('f_id'),
                 Copy('f_name'),
             ],
-        ).run(self.context.engine('pg_v1'))
+        ).run(self.context.source('v1'))
 
 
 # ------------------------------------------------------------------

@@ -8,7 +8,7 @@
 pip install -r requirements.txt
 ```
 
-Pacotes: `firebirdsql`, `psycopg2-binary`, `python-dotenv`.
+Pacotes: `firebirdsql`, `psycopg2-binary`, `python-dotenv`. O driver de cada banco só é importado quando uma conexão daquele adapter abre, então o `firebirdsql` só faz falta para quem tem origem Firebird.
 
 ### Conectividade SSH
 
@@ -23,7 +23,7 @@ ssh -L 172.17.0.1:3050:10.0.2.XXX:3050 \
 - Porta `3050` → Firebird V1
 - `3396` (ou a configurada no `.env`) → PostgreSQL V1
 
-O Firebird é opcional. Se o cliente não usa, deixe `FB_V1_HOST` fora do `.env` ou vazio. O Hermes não tenta conectar e o túnel da porta 3050 deixa de ser necessário. Pedir `context.engine('fb_v1')` sem Firebird configurado gera um erro dizendo que a origem não está configurada.
+O Hermes só abre as conexões declaradas no `.env` do cliente. Um cliente sem origem Firebird não declara nenhum `SOURCE_<NOME>_ADAPTER=firebird`. O túnel da porta 3050 deixa de ser necessário. Pedir `context.source('fb')` sem essa origem declarada gera um erro com o nome pedido e a lista das origens que existem.
 
 ---
 
@@ -48,7 +48,7 @@ python3 Migracao.py Acme --dry-run
 python3 Migracao.py Acme --apply
 ```
 
-Com `--apply` ou `--dry-run`, o `Migracao.py` aplica a execução que acabou de gerar no banco das chaves `PG_V2_*` do `.env`, o mesmo que a geração consulta. A aplicação só começa se a geração terminou com status `success`. Ela funciona como o `Aplicar.py`, descrito em [Aplicando os SQLs no destino](#aplicando-os-sqls-no-destino). O `--on-error` também vale aqui.
+Com `--apply` ou `--dry-run`, o `Migracao.py` aplica a execução que acabou de gerar no banco das chaves `TARGET_*` do `.env`, o mesmo que a geração consulta. A aplicação só começa se a geração terminou com status `success`. Ela funciona como o `Aplicar.py`, descrito em [Aplicando os SQLs no destino](#aplicando-os-sqls-no-destino). O `--on-error` também vale aqui.
 
 ### Via Docker
 

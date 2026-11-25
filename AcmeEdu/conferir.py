@@ -6,7 +6,7 @@ Uso, dentro do container project-hermes:
 
 Fora do Docker, sobrescreva o host e a porta pelas variáveis de ambiente:
 
-    PG_V1_HOST=localhost PG_V1_PORT=5441 PG_V2_HOST=localhost PG_V2_PORT=5442 python3 AcmeEdu/conferir.py
+    SOURCE_V1_HOST=localhost SOURCE_V1_PORT=5441 TARGET_HOST=localhost TARGET_PORT=5442 python3 AcmeEdu/conferir.py
 
 O esperado é calculado a partir da V1, com as mesmas funções de limpeza do
 AcmeEdu.py. Cada verificação mostra o esperado e o encontrado. O script sai com
@@ -209,8 +209,8 @@ def index_checks(v2):
 
 
 def main():
-    v1 = connect('PG_V1')
-    v2 = connect('PG_V2')
+    v1 = connect('SOURCE_V1')
+    v2 = connect('TARGET')
     people, phones, teacher_person = expected_people_and_phones(v1)
 
     checks = [

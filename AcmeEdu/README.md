@@ -32,7 +32,7 @@ docker exec -e PGHOST=acmeedu-v2 -e PGDATABASE=acmeedu_v2 -e PGUSER=acmeedu -e P
 No host, as bases ficam em `localhost:5441` (V1) e `localhost:5442` (V2), com usuário e senha `acmeedu`. A conferência roda fora do Docker com as variáveis sobrescritas:
 
 ```bash
-PG_V1_HOST=localhost PG_V1_PORT=5441 PG_V2_HOST=localhost PG_V2_PORT=5442 python3 AcmeEdu/conferir.py
+SOURCE_V1_HOST=localhost SOURCE_V1_PORT=5441 TARGET_HOST=localhost TARGET_PORT=5442 python3 AcmeEdu/conferir.py
 ```
 
 Os scripts de `banco/` só rodam na primeira subida, com o volume vazio. Para recriar as bases:
@@ -42,7 +42,7 @@ docker compose -f AcmeEdu/docker-compose.yml down -v
 docker compose -f AcmeEdu/docker-compose.yml up -d
 ```
 
-A AcmeEdu não usa Firebird. Sem `FB_V1_HOST` no `.env`, o Hermes não tenta essa conexão.
+A AcmeEdu declara o destino e uma origem só, `v1`. Ela não usa Firebird, então o Hermes não tenta essa conexão nem importa o `firebirdsql`.
 
 ## As bases
 

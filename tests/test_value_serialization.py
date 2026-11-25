@@ -171,7 +171,7 @@ class RunnerFailureTest(unittest.TestCase):
 
             def run_inserts(self):
                 TableMigration('SELECT {fields} FROM notas {limit}', 'public.notes',
-                               [Copy('f_text')]).run(self.context.engine('pg_v1'))
+                               [Copy('f_text')]).run(self.context.source('v1'))
 
         with tempfile.TemporaryDirectory() as tmpdir:
             clientdir = os.path.join(tmpdir, 'Acme')
@@ -184,7 +184,7 @@ class RunnerFailureTest(unittest.TestCase):
                 clientdir=clientdir,
                 config={},
                 artifacts=artifacts,
-                sources={'pg_v1': FakeSource([{'f_text': SECRET + '\x00'}])},
+                sources={'v1': FakeSource([{'f_text': SECRET + '\x00'}])},
                 target=PostgresTargetAdapter(),
                 metadata=None,
                 output=ListOutput(),

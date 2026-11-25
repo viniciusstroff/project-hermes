@@ -84,24 +84,27 @@ class FakeConnection:
 
 
 POSTGRES_ENV = [
-    'PG_V1_HOST=source-db',
-    'PG_V1_PORT=5432',
-    'PG_V1_NAME=source',
-    'PG_V1_USER=source-user',
-    'PG_V1_PASS=source-pass',
-    'PG_V2_HOST=target-db',
-    'PG_V2_PORT=5432',
-    'PG_V2_NAME=target',
-    'PG_V2_USER=target-user',
-    'PG_V2_PASS=target-pass',
+    'SOURCE_V1_ADAPTER=postgres',
+    'SOURCE_V1_HOST=source-db',
+    'SOURCE_V1_PORT=5432',
+    'SOURCE_V1_NAME=source',
+    'SOURCE_V1_USER=source-user',
+    'SOURCE_V1_PASS=source-pass',
+    'TARGET_ADAPTER=postgres',
+    'TARGET_HOST=target-db',
+    'TARGET_PORT=5432',
+    'TARGET_NAME=target',
+    'TARGET_USER=target-user',
+    'TARGET_PASS=target-pass',
 ]
 FIREBIRD_ENV = [
-    'FB_V1_HOST=firebird-db',
-    'FB_V1_PORT=3050',
-    'FB_V1_NAME=firebird',
-    'FB_V1_USER=firebird-user',
-    'FB_V1_PASS=firebird-pass',
-    'FB_V1_CHARSET=ISO8859_1',
+    'SOURCE_FB_ADAPTER=firebird',
+    'SOURCE_FB_HOST=firebird-db',
+    'SOURCE_FB_PORT=3050',
+    'SOURCE_FB_NAME=firebird',
+    'SOURCE_FB_USER=firebird-user',
+    'SOURCE_FB_PASS=firebird-pass',
+    'SOURCE_FB_CHARSET=ISO8859_1',
 ]
 
 
@@ -116,32 +119,31 @@ class AdapterContextMetadataTest(unittest.TestCase):
         self._write_env(clientdir, [*POSTGRES_ENV, *extra_lines])
         pg_v1 = FakeConnection()
         pg_v2 = FakeConnection()
-        with patch('core.context.psycopg2.connect', side_effect=[pg_v1, pg_v2]), \
-             patch('core.context.firebirdsql.connect') as firebird_connect:
+        with patch('psycopg2.connect', side_effect=[pg_v1, pg_v2]), \
+             patch('firebirdsql.connect') as firebird_connect:
             with redirect_stdout(StringIO()):
                 context = DefaultMigrationContextFactory.from_clientdir(clientdir)
         return context, firebird_connect
 
-    def test_context_without_firebird_keys_does_not_connect_to_firebird(self):
-        for extra_lines in ((), ('FB_V1_HOST=', 'FB_V1_PORT=3050')):
-            with self.subTest(extra_lines=extra_lines), tempfile.TemporaryDirectory() as tmpdir:
-                context, firebird_connect = self._context_without_firebird(tmpdir, extra_lines)
+    def test_context_without_firebird_source_does_not_connect_to_firebird(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            context, firebird_connect = self._context_without_firebird(tmpdir)
 
-                firebird_connect.assert_not_called()
-                self.assertIn('pg_v1', context.sources)
-                self.assertNotIn('fb_v1', context.sources)
-                self.assertIsNone(context.legacy_connections['fb_v1_conn'])
-                context.close()
+            firebird_connect.assert_not_called()
+            self.assertEqual(list(context.sources), ['v1'])
+            self.assertFalse(hasattr(context, 'legacy_connections'))
+            context.close()
 
-    def test_engine_for_missing_source_names_the_source(self):
+    def test_missing_source_names_the_source(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             context, _ = self._context_without_firebird(tmpdir)
 
             with self.assertRaises(SourceNotConfiguredError) as raised:
-                context.engine('fb_v1')
+                context.source('fb')
 
-            self.assertIn("'fb_v1'", str(raised.exception))
-            self.assertIn('pg_v1', str(raised.exception))
+            self.assertIn("'fb'", str(raised.exception))
+            self.assertIn('v1', str(raised.exception))
+            self.assertFalse(hasattr(context, 'engine'))
             context.close()
 
     def test_postgres_source_adapter_owns_cursor_and_scalar_behavior(self):
@@ -236,21 +238,20 @@ class AdapterContextMetadataTest(unittest.TestCase):
             pg_v2 = FakeConnection()
             fb_v1 = FakeConnection()
 
-            with patch('core.context.psycopg2.connect', side_effect=[pg_v1, pg_v2]), \
-                 patch('core.context.firebirdsql.connect', return_value=fb_v1):
+            with patch('psycopg2.connect', side_effect=[pg_v1, pg_v2]), \
+                 patch('firebirdsql.connect', return_value=fb_v1):
                 with redirect_stdout(StringIO()):
                     context = DefaultMigrationContextFactory.from_clientdir(clientdir)
 
-            self.assertIn('pg_v1', context.sources)
-            self.assertIn('fb_v1', context.sources)
-            self.assertIs(context.legacy_connections['pg_v1_conn'], pg_v1)
-            self.assertIs(context.legacy_connections['pg_v2_conn'], pg_v2)
-            self.assertIs(context.legacy_connections['fb_v1_conn'], fb_v1)
+            self.assertEqual(sorted(context.sources), ['fb', 'v1'])
+            self.assertIs(context.sources['v1'].connection, pg_v1)
+            self.assertIs(context.sources['fb'].connection, fb_v1)
+            self.assertIs(context.target.connection, pg_v2)
             self.assertIsInstance(context.target, PostgresTargetAdapter)
             self.assertIsInstance(context.metadata, PostgresMetadataProvider)
 
-            engine = context.engine('pg_v1')
-            self.assertIs(engine.source_adapter, context.sources['pg_v1'])
+            engine = context.source('v1')
+            self.assertIs(engine.source_adapter, context.sources['v1'])
             self.assertIs(engine.target_adapter, context.target)
 
             context.close()
@@ -283,8 +284,8 @@ class AdapterContextMetadataTest(unittest.TestCase):
                 def reset_sequences(self):
                     self.context.output.write(self.context.metadata.reset_sequence_sql('demo'))
 
-            with patch('core.context.psycopg2.connect', side_effect=[pg_v1, pg_v2]), \
-                 patch('core.context.firebirdsql.connect', return_value=fb_v1):
+            with patch('psycopg2.connect', side_effect=[pg_v1, pg_v2]), \
+                 patch('firebirdsql.connect', return_value=fb_v1):
                 with redirect_stdout(StringIO()):
                     context = DefaultMigrationContextFactory.from_clientdir(clientdir)
                     MigrationRunner(context, ComposedMigration(context)).run()
