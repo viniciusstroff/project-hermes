@@ -14,10 +14,10 @@
 
 ## 3. Neutral Reading
 
-- [ ] 3.1 Add `SourceQuery`, `NativeQuery` and `NativeField`, and the `read`/`count` source contract.
-- [ ] 3.2 Port the PostgreSQL and Firebird source adapters, including the integer limit and the refusal of native queries for other adapters.
-- [ ] 3.3 Replace `source_sql` with `source=` in `TableMigration`, `ExpandMigration` and `MultiTargetMigration`, and the string debug limit with an integer limit applied by the context.
-- [ ] 3.4 Add tests per adapter for field lists, equality filters, ordering, limits and native query refusal.
+- [x] 3.1 Add `SourceQuery`, `NativeQuery` and `NativeField`, and the `read`/`count` source contract.
+- [x] 3.2 Port the PostgreSQL and Firebird source adapters, including the integer limit and the refusal of native queries for other adapters.
+- [x] 3.3 Replace `source_sql` with `source=` in `TableMigration`, `ExpandMigration` and `MultiTargetMigration`, and the string debug limit with an integer limit applied by the context.
+- [x] 3.4 Add tests per adapter for field lists, equality filters, ordering, limits and native query refusal.
 
 ## 4. Write Operations and Artifacts
 

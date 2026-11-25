@@ -19,7 +19,7 @@ BUILTIN_ADAPTERS = {
 }
 
 ROLE_METHODS = {
-    'source': ('connect', 'cursor', 'scalar', 'limit_clause', 'close'),
+    'source': ('connect', 'read', 'count', 'close'),
     'target': ('connect', 'serialize_value', 'insert_statement', 'close'),
 }
 

@@ -7,14 +7,14 @@ class ExpandMigration(TableMigration):
 
     def __init__(
         self,
-        source_sql: str,
+        source,
         target: str,
         fields: list,
         expand_col: str,
         expand_values,
         first_fields: list = None,
     ):
-        super().__init__(source_sql, target, fields)
+        super().__init__(source, target, fields)
         self._validate_fields(first_fields or [])
         self.expand_col = expand_col
         self.expand_values = list(expand_values)
@@ -25,28 +25,17 @@ class ExpandMigration(TableMigration):
             return list(self.fields)
         return [*self.first_fields, *self.fields]
 
-    def source_select_columns(self):
-        select_cols = []
-        for field in self.source_fields():
-            for col in field.select_columns:
-                if col not in select_cols:
-                    select_cols.append(col)
-        return select_cols
-
     def _expanded_fields(self, value, base_fields):
         return [*base_fields, Fixed(self.expand_col, value)]
 
     def run(self, engine):
-        sql = self.build_source_sql(engine)
-        base_total = self.total_rows(engine)
+        query = self.source_query()
+        base_total = engine.total_rows(query)
         total = None if base_total is None else base_total * len(self.expand_values)
         engine.report_progress(self.target, 0, total)
 
-        cur = engine.v1_cursor()
-        cur.execute(sql)
-
         processed = 0
-        for row in cur:
+        for row in engine.read(query):
             for index, value in enumerate(self.expand_values):
                 base_fields = self.first_fields if index == 0 and self.first_fields is not None else self.fields
                 self.run_row(row, engine, self._expanded_fields(value, base_fields))

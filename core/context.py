@@ -37,15 +37,14 @@ class MigrationContext:
     logger: MigrationLogger
     progress: MigrationProgress
     connections: dict = field(default_factory=dict)
-    limit: str = ''
+    # Debug mode: row limit applied to every source query.
     debug_limit: int | None = None
     _loaded_reference_maps: dict = field(default_factory=dict)
     _warnings_logged: set = field(default_factory=set)
     _closed: bool = False
 
     def enable_debug(self, quantidade: int = 100):
-        self.limit = f'LIMIT {quantidade}'
-        self.debug_limit = quantidade
+        self.debug_limit = int(quantidade)
         self.write_manifest('running')
 
     def write_manifest(self, status: str, error: str = None):
@@ -66,7 +65,7 @@ class MigrationContext:
             self.sources[source_name],
             self.target,
             self.output.write,
-            self.limit,
+            self.debug_limit,
             progress_fn=self.progress.log_table_progress,
             warn_fn=self.warn_once,
         )

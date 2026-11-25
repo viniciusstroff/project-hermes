@@ -39,6 +39,7 @@ sys.modules.setdefault('dotenv', dotenv)
 from core.adapters.postgres import PostgresTargetAdapter
 from core.base_migration import BaseMigration
 from core.migration_engine import MigrationEngine
+from tests.source_fakes import FakeSqlSource
 
 acmeedu = importlib.import_module('AcmeEdu.AcmeEdu')
 
@@ -119,33 +120,22 @@ class TransformationTest(unittest.TestCase):
         self.assertIsNone(acmeedu.attendance_pct(None))
 
 
-class FakeSource:
-    """Origem que devolve linhas fixas conforme a tabela da consulta."""
+class FakeSource(FakeSqlSource):
+    """Origem PostgreSQL que devolve linhas fixas conforme a tabela da consulta."""
 
     def __init__(self, rows_by_table):
+        super().__init__('postgres')
         self.rows_by_table = rows_by_table
-        self.queries = []
-
-    def limit_clause(self, limit):
-        return limit or ''
-
-    def scalar(self, sql):
-        return len(self._rows(sql))
-
-    def cursor(self):
-        source = self
-
-        class Cursor:
-            def execute(self, sql):
-                source.queries.append(sql)
-                self.rows = source._rows(sql)
-
-            def __iter__(self):
-                return iter(self.rows)
-
-        return Cursor()
 
     def _rows(self, sql):
+        self.queries.append(sql)
+        return iter(self._rows_for(sql))
+
+    def _scalar(self, sql):
+        self.queries.append(sql)
+        return len(self._rows_for(sql))
+
+    def _rows_for(self, sql):
         for table, rows in self.rows_by_table.items():
             if f'public.{table}' in sql.split('JOIN')[0]:
                 return rows
@@ -192,9 +182,16 @@ STUDENT = {
 class GeneratedSqlTest(unittest.TestCase):
     def test_student_becomes_person_student_phone_and_guardian(self):
         no_extras = dict(STUDENT, cod_aluno=301, fone='', nome_resp='', dt_nasc='31/02/2001', cpf='', obs=None, sexo='')
-        migration, written, _ = make_migration({'tb_aluno': [STUDENT, no_extras]})
+        migration, written, source = make_migration({'tb_aluno': [STUDENT, no_extras]})
 
         migration.insert_students()
+
+        # Os campos saem das estratégias dos quatro destinos, sem SQL no script.
+        self.assertEqual(
+            source.queries[-1],
+            'SELECT cod_aluno, nome_aluno, cpf, dt_nasc, email_contato, sexo, dt_cadastro, cod_curso, situacao, '
+            'obs, fone, nome_resp, fone_resp, parentesco FROM public.tb_aluno ORDER BY cod_aluno',
+        )
 
         self.assertEqual(written, [
             "INSERT INTO public.people (id, name, cpf, birth_date, email, gender, created_at) VALUES "

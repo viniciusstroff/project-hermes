@@ -1,6 +1,6 @@
 from importlib import import_module
 
-from core.adapters import SourceAdapter, SourceCursor, TargetAdapter
+from core.adapters import SourceAdapter, TargetAdapter
 from core.dialects import Dialect, FirebirdDialect, PostgresDialect
 from core.metadata import MetadataProvider, PostgresMetadataProvider
 from core.outputs import MirrorOutput, OutputAdapter, SqlFileOutput
@@ -11,15 +11,17 @@ _LAZY_EXPORTS = {
     'DefaultMigrationContextFactory': ('core.context', 'DefaultMigrationContextFactory'),
     'ExpandMigration': ('core.expand_migration', 'ExpandMigration'),
     'FirebirdSourceAdapter': ('core.adapters', 'FirebirdSourceAdapter'),
-    'FirebirdCursorAdapter': ('core.adapters', 'FirebirdCursorAdapter'),
     'MigrationContext': ('core.context', 'MigrationContext'),
     'MigrationEngine': ('core.migration_engine', 'MigrationEngine'),
     'MigrationLogger': ('core.runtime', 'MigrationLogger'),
     'MigrationProgress': ('core.runtime', 'MigrationProgress'),
     'MigrationRunner': ('core.runner', 'MigrationRunner'),
     'MultiTargetMigration': ('core.multi_target_migration', 'MultiTargetMigration'),
+    'NativeField': ('core.queries', 'NativeField'),
+    'NativeQuery': ('core.queries', 'NativeQuery'),
     'PostgresSourceAdapter': ('core.adapters', 'PostgresSourceAdapter'),
     'PostgresTargetAdapter': ('core.adapters', 'PostgresTargetAdapter'),
+    'SourceQuery': ('core.queries', 'SourceQuery'),
     'SqlLiteral': ('core.sql', 'SqlLiteral'),
     'TableMigration': ('core.table_migration', 'TableMigration'),
     'TargetMigration': ('core.multi_target_migration', 'TargetMigration'),
@@ -31,7 +33,6 @@ __all__ = [
     'DefaultMigrationContextFactory',
     'Dialect',
     'ExpandMigration',
-    'FirebirdCursorAdapter',
     'FirebirdDialect',
     'FirebirdSourceAdapter',
     'MetadataProvider',
@@ -42,6 +43,8 @@ __all__ = [
     'MigrationRunner',
     'MirrorOutput',
     'MultiTargetMigration',
+    'NativeField',
+    'NativeQuery',
     'OutputAdapter',
     'PostgresDialect',
     'PostgresMetadataProvider',
@@ -50,7 +53,7 @@ __all__ = [
     'SqlFileOutput',
     'SqlLiteral',
     'SourceAdapter',
-    'SourceCursor',
+    'SourceQuery',
     'TableMigration',
     'TargetAdapter',
     'TargetMigration',

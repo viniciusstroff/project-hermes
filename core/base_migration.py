@@ -44,14 +44,6 @@ class BaseMigration:
         return getattr(self.context.output, 'file', None)
 
     @property
-    def limit(self):
-        return self.context.limit
-
-    @limit.setter
-    def limit(self, value):
-        self.context.limit = value
-
-    @property
     def debug_limit(self):
         return self.context.debug_limit
 

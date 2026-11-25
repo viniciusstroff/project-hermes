@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(_clientdir))
 
 from core.base_migration import BaseMigration
 from core.multi_target_migration import MultiTargetMigration, TargetMigration
+from core.queries import NativeQuery, SourceQuery
 from core.references import ReferenceMap
 from core.strategies import DateConvert, Fixed, Lookup, Rename, Transform
 from core.table_migration import TableMigration
@@ -180,15 +181,9 @@ TARGET_TABLES = [
     'enrollments',
 ]
 
-STUDENTS_SQL = """
-SELECT cod_aluno, nome_aluno, dt_nasc, cpf, fone, email_contato, sexo, situacao, cod_curso,
-       nome_resp, fone_resp, parentesco, obs, dt_cadastro
-FROM public.tb_aluno
-ORDER BY cod_aluno {limit}
-"""
-
 # person_id: o cod_aluno de um aluno com o mesmo CPF (só dígitos) ou
 # 100000 + cod_prof. is_student diz se a pessoa já veio pelos alunos.
+# A junção não cabe num SourceQuery, por isso a consulta é nativa do PostgreSQL.
 TEACHERS_SQL = r"""
 SELECT p.cod_prof, p.nome_prof, p.cpf, p.email, p.titulacao, p.fone1, p.fone2,
        COALESCE(a.cod_aluno, {offset} + p.cod_prof) AS person_id,
@@ -203,7 +198,7 @@ LEFT JOIN LATERAL (
     ORDER BY al.cod_aluno
     LIMIT 1
 ) a ON true
-ORDER BY p.cod_prof {limit}
+ORDER BY p.cod_prof
 """
 
 
@@ -273,7 +268,7 @@ class Migracao(BaseMigration):
         self.print_log('Inserindo cursos')
         self.print_comment('COURSES')
         TableMigration(
-            source_sql='SELECT {fields} FROM public.tb_curso ORDER BY cod_curso {limit}',
+            source=SourceQuery('public.tb_curso', order_by='cod_curso'),
             target='public.courses',
             fields=[
                 Rename('cod_curso', 'id'),
@@ -291,7 +286,7 @@ class Migracao(BaseMigration):
         self.print_log('Inserindo alunos, pessoas, telefones e responsáveis')
         self.print_comment('PEOPLE, STUDENTS, PHONES E GUARDIANS (ALUNOS)')
         MultiTargetMigration(
-            source_sql=STUDENTS_SQL,
+            source=SourceQuery('public.tb_aluno', order_by='cod_aluno'),
             label='public.students',
             targets=[
                 TargetMigration('public.people', self._student_person_fields()),
@@ -322,7 +317,7 @@ class Migracao(BaseMigration):
         self.print_log('Inserindo professores')
         self.print_comment('PEOPLE, TEACHERS E PHONES (PROFESSORES)')
         MultiTargetMigration(
-            source_sql=TEACHERS_SQL.replace('{offset}', str(TEACHER_PERSON_OFFSET)),
+            source=NativeQuery('postgres', TEACHERS_SQL.replace('{offset}', str(TEACHER_PERSON_OFFSET))),
             label='public.teachers',
             targets=[
                 TargetMigration('public.people', [
@@ -353,7 +348,7 @@ class Migracao(BaseMigration):
         self.print_log('Inserindo disciplinas')
         self.print_comment('SUBJECTS')
         TableMigration(
-            source_sql='SELECT {fields} FROM public.tb_disciplina ORDER BY cod_disc {limit}',
+            source=SourceQuery('public.tb_disciplina', order_by='cod_disc'),
             target='public.subjects',
             fields=[
                 Rename('cod_disc', 'id'),
@@ -368,7 +363,7 @@ class Migracao(BaseMigration):
         self.print_log('Inserindo turmas')
         self.print_comment('CLASSES')
         TableMigration(
-            source_sql='SELECT {fields} FROM public.tb_turma ORDER BY cod_turma {limit}',
+            source=SourceQuery('public.tb_turma', order_by='cod_turma'),
             target='public.classes',
             fields=[
                 Rename('cod_turma', 'id'),
@@ -383,7 +378,7 @@ class Migracao(BaseMigration):
         self.print_log('Inserindo matrículas')
         self.print_comment('ENROLLMENTS')
         TableMigration(
-            source_sql='SELECT {fields} FROM public.tb_matricula ORDER BY cod_matricula {limit}',
+            source=SourceQuery('public.tb_matricula', order_by='cod_matricula'),
             target='public.enrollments',
             fields=[
                 Rename('cod_matricula', 'id'),

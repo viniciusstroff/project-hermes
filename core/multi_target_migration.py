@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
-from core.strategies import validate_field_strategies, check_source_dialect
+from core.queries import check_source, with_default_fields
+from core.strategies import validate_field_strategies
 
 
 @dataclass
@@ -14,10 +15,14 @@ class TargetMigration:
 
 
 class MultiTargetMigration:
-    """Uma linha V1 -> N inserts em targets diferentes."""
+    """Uma linha V1 -> N inserts em targets diferentes.
 
-    def __init__(self, source_sql: str, targets: list, label: str = None):
-        self.source_sql = source_sql
+    ``source`` é um ``SourceQuery`` ou um ``NativeQuery``. Um ``SourceQuery``
+    sem campos lê os campos que as estratégias de todos os targets pedem.
+    """
+
+    def __init__(self, source, targets: list, label: str = None):
+        self.source = check_source(source)
         self.targets = targets
         self.label = label or (targets[0].target if targets else 'multi_target')
         self._validate_targets()
@@ -28,10 +33,6 @@ class MultiTargetMigration:
                 raise TypeError(f'Invalid target migration {target!r}: target is required')
             validate_field_strategies(target.fields)
 
-    def source_fields(self):
-        """Strategies of every target that contribute to the source query."""
-        return [field for target in self.targets for field in target.fields]
-
     def source_select_columns(self):
         select_cols = []
         for target in self.targets:
@@ -41,23 +42,8 @@ class MultiTargetMigration:
                         select_cols.append(col)
         return select_cols
 
-    def build_source_sql(self, engine):
-        check_source_dialect(self.source_fields(), engine.source_adapter)
-        select_cols = self.source_select_columns()
-        return self.source_sql.format(
-            fields=', '.join(select_cols) if select_cols else '*',
-            limit=engine.limit_clause,
-        )
-
-    def count_sql(self, engine):
-        return f'SELECT COUNT(*) FROM ({self.build_source_sql(engine)}) progress_src'
-
-    def total_rows(self, engine):
-        try:
-            total = engine.scalar(self.count_sql(engine))
-        except Exception:
-            return None
-        return int(total) if total is not None else 0
+    def source_query(self):
+        return with_default_fields(self.source, self.source_select_columns())
 
     def insert_sql(self, row: dict, target: TargetMigration, engine):
         insert_cols = [field.insert_col for field in target.fields]
@@ -79,15 +65,12 @@ class MultiTargetMigration:
             engine.write_sql(self.insert_sql(row, target, engine))
 
     def run(self, engine):
-        sql = self.build_source_sql(engine)
-        total = self.total_rows(engine)
+        query = self.source_query()
+        total = engine.total_rows(query)
         engine.report_progress(self.label, 0, total)
 
-        cur = engine.v1_cursor()
-        cur.execute(sql)
-
         processed = 0
-        for row in cur:
+        for row in engine.read(query):
             self.run_row(row, engine)
             processed += 1
             if processed % engine.progress_every == 0:

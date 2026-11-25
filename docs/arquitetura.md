@@ -39,12 +39,16 @@ Componentes principais:
   nomeadas do `.env`, conectando cada uma pelo registro de adapters. O manifesto
   registra o adapter e os parâmetros de cada conexão, sem senha nem URI.
 - `MigrationRunner`: orquestra as fases padrão da execução.
-- `SourceAdapter`: lê linhas e escalares da origem, incluindo diferenças como
-  `LIMIT` no PostgreSQL e `ROWS` no Firebird.
+- `SourceAdapter`: lê a origem por `read(query)` e conta as linhas por
+  `count(query)`. A consulta é um `SourceQuery` (entidade, campos, filtros de
+  igualdade, ordenação e limite inteiro) ou um `NativeQuery`, presa a um adapter.
+  O adapter traduz para a linguagem dele, como `LIMIT` no PostgreSQL e `ROWS`
+  no Firebird. Ele recusa consulta ou campo nativo de outro adapter antes de ler.
+  Os adapters SQL partem de `SqlSourceAdapter` (`core/adapters/sql_source.py`).
 - `TargetAdapter` e `Dialect`: renderizam `INSERT`s e valores SQL para o destino.
 - Estratégias de campo (`core/strategies.py`): devolvem valores Python pelo `raw_value()` e não geram SQL.
-  O adapter de destino é o único ponto de serialização. SQL de um banco específico entra só por
-  `SourceSqlExpression`, com o dialeto da origem declarado e conferido antes da consulta, ou por
+  O adapter de destino é o único ponto de serialização. Código de um banco específico entra só por
+  `NativeField` e `NativeQuery`, presos ao adapter de origem e conferidos antes da consulta, ou por
   `SqlLiteral`, copiado sem mudança para o destino. O catálogo está em [estrategias.md](estrategias.md).
 - `MetadataProvider`: concentra operações auxiliares do destino, como triggers,
   índices, mapas de referência e sequences.

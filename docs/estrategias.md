@@ -8,16 +8,16 @@ Toda estratégia expõe três membros:
 
 | Membro | Tipo | Descrição |
 |---|---|---|
-| `select_columns` | `list[str]` | Colunas a incluir no `SELECT` da V1. `Fixed` retorna `[]`. |
+| `select_columns` | `list` | Campos a ler da origem, por nome ou como `NativeField`. `Fixed` retorna `[]`. |
 | `insert_col` | `str` | Nome da coluna no `INSERT` da V2. |
 | `raw_value(row)` | qualquer valor Python | Valor que vai para a coluna de destino. |
 
-Nenhuma estratégia gera SQL. O `TableMigration`, o `ExpandMigration` e o `MultiTargetMigration` montam o `SELECT`, pedem o `raw_value()` de cada estratégia e entregam os valores ao adapter de destino, que serializa no formato do banco. Um objeto de campo sem `select_columns`, `insert_col` ou `raw_value` é recusado com `TypeError` quando a migração é criada.
+Nenhuma estratégia gera SQL. O `TableMigration`, o `ExpandMigration` e o `MultiTargetMigration` montam a consulta da origem com os campos das estratégias, pedem o `raw_value()` de cada estratégia e entregam os valores ao adapter de destino, que serializa no formato do banco. Um objeto de campo sem `select_columns`, `insert_col` ou `raw_value` é recusado com `TypeError` quando a migração é criada.
 
 As estratégias se dividem em dois grupos:
 
 - **portáveis**: a regra roda em Python e a mesma migração funciona com qualquer origem;
-- **dependentes de dialeto**: carregam SQL de um banco específico e só funcionam com ele.
+- **presas a um banco**: carregam código de um banco específico e só funcionam com ele.
 
 ---
 
@@ -220,26 +220,28 @@ A regra em Python não é idêntica à função SQL em alguns casos:
 - o `str.upper()` troca `ß` por `SS`; o `upper()` do PostgreSQL depende da collation;
 - o `Truncate` conta caracteres, como o `substring` do PostgreSQL em UTF-8.
 
-Quando o comportamento exato do banco importa, use `SourceSqlExpression`.
+Quando o comportamento exato do banco importa, use `NativeField`.
 
 ---
 
-## Estratégias dependentes de dialeto
+## Estratégias presas a um banco
 
-### `SourceSqlExpression`: expressão SQL no `SELECT` da origem
+### `NativeField`: campo calculado na origem
 
-Injeta uma expressão no `SELECT`, escrita para um banco declarado em `dialect`, que é obrigatório.
+Fica em `core/queries.py`. Lê uma expressão na linguagem de um adapter de origem com o nome `alias` e grava o valor na coluna de destino de mesmo nome. O adapter é o primeiro argumento e é obrigatório.
 
 ```python
-SourceSqlExpression("regexp_replace(f_doc, '[^0-9]', '', 'g')", 'f_doc', dialect='postgres')
-SourceSqlExpression("COALESCE(f_type, 1)", 'f_type', dialect='firebird')
+from core.queries import NativeField
+
+NativeField('postgres', "regexp_replace(f_doc, '[^0-9]', '', 'g')", 'f_doc')
+NativeField('firebird', 'COALESCE(f_type, 1)', 'f_type')
 ```
 
-Antes de qualquer consulta, inclusive a contagem de progresso, a migração compara o `dialect` com o dialeto do adapter de origem (`postgres` ou `firebird`). Se não bater, ela levanta `ValueError` com a coluna, o dialeto esperado e o encontrado. Nada chega à origem.
+Antes de qualquer consulta, inclusive a contagem de progresso, o adapter de origem compara o adapter declarado com o próprio nome. Se não bater, ele levanta `NativeAdapterMismatchError` (um `ValueError`) com o campo e os dois adapters. Nada chega à origem.
 
-O antigo `SqlExpression` saiu. Os usos documentados dele (`COALESCE`, `NULLIF`, `substring`) têm equivalentes portáveis acima.
+O `SourceSqlExpression` saiu. O `NativeField` faz o mesmo papel, preso ao adapter e não ao dialeto.
 
-**Use quando:** a regra só existe no banco de origem ou precisa do comportamento exato dele.
+**Use quando:** a regra só existe no banco de origem ou precisa do comportamento exato dele. Uma consulta inteira que não cabe num `SourceQuery`, como uma junção, vai em `NativeQuery` (ver [Combinando estratégias](#combinando-estratégias)).
 
 ### `Fixed` com `SqlLiteral`: SQL no destino
 
@@ -272,7 +274,7 @@ Todas as estratégias funcionam juntas na mesma `TableMigration`:
 
 ```python
 TableMigration(
-    source_sql='SELECT {fields} FROM public.acme_v1_customers {limit}',
+    source=SourceQuery('public.acme_v1_customers'),
     target='public.acme_customers_demo',
     fields=[
         Copy('f_id'),
@@ -288,7 +290,19 @@ TableMigration(
 ).run(self.context.source('v1'))
 ```
 
-O `{fields}` no `source_sql` é substituído automaticamente pelas colunas de `select_columns` de cada estratégia (exceto `Fixed`, que não contribui).
+O `source` é um `SourceQuery` ou um `NativeQuery`, os dois de `core/queries.py`:
+
+- `SourceQuery(entity, fields=(), where={}, order_by=(), limit=None)` lê uma tabela ou coleção. Sem `fields`, lê os campos de `select_columns` de cada estratégia (o `Fixed` não contribui). O `where` só tem igualdade, combinada com E. Um valor `None` vira `IS NULL`. O adapter de origem traduz tudo para a linguagem dele e põe aspas nos nomes que precisam, como palavras reservadas.
+  Uma `condition` de `TargetMigration` que lê um campo que nenhuma estratégia pede não recebe esse campo. Nesse caso, liste em `fields` todos os campos da leitura.
+- `NativeQuery(adapter, query, limit=None)` leva uma consulta inteira na linguagem de um adapter, para o que não cabe no `SourceQuery`, como uma junção. O texto não tem marcador de limite: no modo debug, o adapter envolve a consulta com o limite dele. Uma `NativeQuery` de outro adapter é recusada antes de qualquer leitura.
+
+```python
+SourceQuery('public.tb_curso', order_by='cod_curso')
+SourceQuery('public.pedidos', where={'f_status': 1, 'f_excluido': None})
+NativeQuery('postgres', 'SELECT p.cod_prof, a.cod_aluno FROM tb_professor p LEFT JOIN tb_aluno a ON a.cpf = p.cpf')
+```
+
+O modo debug (`--debug 100`) é um limite inteiro que o contexto aplica a toda consulta. Quando a consulta já tem um limite menor, vale o menor.
 
 ---
 

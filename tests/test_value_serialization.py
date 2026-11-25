@@ -41,39 +41,16 @@ sys.modules.setdefault('dotenv', dotenv)
 from core.adapters.postgres import PostgresTargetAdapter
 from core.artifacts import ArtifactManager
 from core.context import MigrationContext
-from core.dialects import PostgresDialect
 from core.migration_engine import MigrationEngine, ValueSerializationError
 from core.multi_target_migration import MultiTargetMigration, TargetMigration
+from core.queries import SourceQuery
 from core.runner import MigrationRunner
 from core.runtime import MigrationLogger, MigrationProgress
 from core.strategies import Copy, Rename
 from core.table_migration import TableMigration
+from tests.source_fakes import FakeSqlSource
 
 SECRET = 'cpf 123.456.789-00'
-
-
-class FakeSource:
-    def __init__(self, rows):
-        self.dialect = PostgresDialect()
-        self.rows = rows
-
-    def limit_clause(self, limit):
-        return limit or ''
-
-    def scalar(self, sql):
-        return len(self.rows)
-
-    def cursor(self):
-        source = self
-
-        class Cursor:
-            def execute(self, sql):
-                pass
-
-            def __iter__(self):
-                return iter(source.rows)
-
-        return Cursor()
 
 
 class ListOutput:
@@ -104,14 +81,14 @@ class ListOutput:
 
 def engine_for(rows, warn_fn=None):
     writes = []
-    engine = MigrationEngine(FakeSource(rows), PostgresTargetAdapter(), writes.append, warn_fn=warn_fn)
+    engine = MigrationEngine(FakeSqlSource('postgres', rows), PostgresTargetAdapter(), writes.append, warn_fn=warn_fn)
     return engine, writes
 
 
 class SerializationErrorTest(unittest.TestCase):
     def test_nul_error_names_table_column_and_position_without_the_value(self):
         engine, writes = engine_for([{'f_id': 1, 'f_text': SECRET + '\x00'}])
-        migration = TableMigration('SELECT {fields} FROM notas {limit}', 'public.notes', [Copy('f_id'), Copy('f_text')])
+        migration = TableMigration(SourceQuery('notas'), 'public.notes', [Copy('f_id'), Copy('f_text')])
 
         with self.assertRaises(ValueSerializationError) as raised:
             migration.run(engine)
@@ -126,7 +103,7 @@ class SerializationErrorTest(unittest.TestCase):
 
     def test_unsupported_type_in_multi_target_names_target_and_type(self):
         engine, _ = engine_for([{'f_id': 1, 'f_tags': ['a', 'b']}])
-        migration = MultiTargetMigration('SELECT {fields} FROM t {limit}', [
+        migration = MultiTargetMigration(SourceQuery('t'), [
             TargetMigration('public.items', [Copy('f_id')]),
             TargetMigration('public.item_tags', [Rename('f_id', 'f_item'), Copy('f_tags')]),
         ])
@@ -151,7 +128,7 @@ class BinaryWarningTest(unittest.TestCase):
         rows = [{'f_id': number, 'f_content': bytes([number])} for number in range(1, 4)]
         engine, writes = engine_for(rows, warn_fn=warn_once)
 
-        TableMigration('SELECT {fields} FROM docs {limit}', 'public.documents',
+        TableMigration(SourceQuery('docs'), 'public.documents',
                        [Copy('f_id'), Copy('f_content')]).run(engine)
 
         self.assertEqual(len(writes), 3)
@@ -170,7 +147,7 @@ class RunnerFailureTest(unittest.TestCase):
                 self.disable_triggers = self.enable_triggers = ''
 
             def run_inserts(self):
-                TableMigration('SELECT {fields} FROM notas {limit}', 'public.notes',
+                TableMigration(SourceQuery('notas'), 'public.notes',
                                [Copy('f_text')]).run(self.context.source('v1'))
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -184,7 +161,7 @@ class RunnerFailureTest(unittest.TestCase):
                 clientdir=clientdir,
                 config={},
                 artifacts=artifacts,
-                sources={'v1': FakeSource([{'f_text': SECRET + '\x00'}])},
+                sources={'v1': FakeSqlSource('postgres', [{'f_text': SECRET + '\x00'}])},
                 target=PostgresTargetAdapter(),
                 metadata=None,
                 output=ListOutput(),

@@ -1,22 +1,19 @@
 from importlib import import_module
 
-from core.adapters.source_adapter import SourceAdapter, SourceCursor
+from core.adapters.source_adapter import SourceAdapter
 from core.adapters.target_adapter import TargetAdapter
 
 _LAZY_EXPORTS = {
-    'FirebirdCursorAdapter': ('core.adapters.firebird', 'FirebirdCursorAdapter'),
     'FirebirdSourceAdapter': ('core.adapters.firebird', 'FirebirdSourceAdapter'),
     'PostgresSourceAdapter': ('core.adapters.postgres', 'PostgresSourceAdapter'),
     'PostgresTargetAdapter': ('core.adapters.postgres', 'PostgresTargetAdapter'),
 }
 
 __all__ = [
-    'FirebirdCursorAdapter',
     'FirebirdSourceAdapter',
     'PostgresSourceAdapter',
     'PostgresTargetAdapter',
     'SourceAdapter',
-    'SourceCursor',
     'TargetAdapter',
 ]
 
