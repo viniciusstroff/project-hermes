@@ -2,7 +2,7 @@
 
 CLI em Python que gera os scripts SQL para migrar os dados de um cliente da plataforma V1 para a V2. A origem principal é um PostgreSQL legado, complementado por uma base Firebird. O destino é PostgreSQL.
 
-O Hermes não grava nada no banco de destino. Cada execução produz um diretório com o SQL de cada fase, um log e um manifesto. A carga é feita depois com `psql`, normalmente pelo `rodar2.sh`. Com a geração separada da aplicação dá para revisar o SQL antes de tocar no destino e reaplicar os arquivos sem consultar a origem de novo.
+A geração não grava nada no banco de destino. Cada execução produz um diretório com o SQL de cada fase, um log e um manifesto. A carga vem depois, pelo `Aplicar.py`, que aplica esses arquivos numa única transação e tem um modo de dry run. Com a geração separada da aplicação dá para revisar o SQL antes de tocar no destino, validar contra o banco sem alterá-lo e reaplicar os arquivos sem consultar a origem de novo.
 
 ## Como funciona
 
@@ -24,7 +24,7 @@ O núcleo em `core/` trabalha com contratos em vez de drivers. A origem é lida 
 
 - Python 3.12 (a versão da imagem Docker)
 - `pg_dump` compatível com a versão do PostgreSQL da V1 (a imagem instala o cliente 9.6)
-- `psql` para aplicar os arquivos no destino
+- `psql`, só se for aplicar os arquivos pelo `rodar2.sh`
 - acesso de rede aos bancos de origem, em geral por túnel SSH
 - Docker e Docker Compose, se quiser rodar em container ou subir um destino local
 
@@ -81,12 +81,20 @@ O segundo arquivo de compose sobe um PostgreSQL 16 como destino. Dentro da rede 
 ### Aplicando o SQL no destino
 
 ```bash
-RUN_DIR=runs/Acme/20261120-153000 ./rodar2.sh
+export PGHOST=localhost PGPORT=5432 PGDATABASE=tenant PGUSER=tenant PGPASSWORD=tenant
+
+# dry run: executa tudo e termina em ROLLBACK
+python3 Aplicar.py runs/Acme/20261120-153000 --dry-run
+
+# carga: termina em COMMIT, ou em ROLLBACK no primeiro erro
+python3 Aplicar.py runs/Acme/20261120-153000
 ```
 
-O script lê a conexão de `PGHOST`, `PGPORT`, `PGDATABASE` e `PGUSER` (padrão `localhost:4003`, base e usuário `tenant-demo`). Os logs do `psql` vão para `$RUN_DIR/logs/` e os erros com contexto para `$RUN_DIR/erros/`. Se não houve erro, os arquivos de `erros/` ficam vazios.
+O `Aplicar.py` roda os arquivos de `sql/` na ordem das fases, numa única transação. Se algo falha, nada da carga fica no destino. O dry run usa `--on-error continue` por padrão e lista todos os erros de uma vez. Cada aplicação grava `relatorio.json` e `erros.txt` em `aplicacoes/<timestamp>-<modo>/`, dentro da pasta da execução.
 
-Cada arquivo roda em autocommit e um erro não interrompe a carga. Quando algo falha, o destino fica carregado pela metade. Antes de reexecutar, recrie a base a partir do dump de homologação, como descrito em [docs/execucao.md](docs/execucao.md#resetar-o-banco-v2-local-antes-de-reexecutar).
+Para gerar e aplicar de uma vez no destino das chaves `PG_V2_*`, use `python3 Migracao.py Acme --dry-run` ou `--apply`. Os modos, as políticas de erro e os cuidados estão em [docs/execucao.md](docs/execucao.md#aplicando-os-sqls-no-destino).
+
+O `rodar2.sh` continua disponível para quem aplica com `psql`. Ele roda cada arquivo em autocommit e não para no erro, então uma falha deixa o destino carregado pela metade.
 
 ### Depuração
 
@@ -111,10 +119,12 @@ Cada cliente é um diretório `<Cliente>/` com um `<Cliente>.py` de mesmo nome, 
 ## Estrutura
 
 ```text
-Migracao.py      ponto de entrada da CLI
+Migracao.py      ponto de entrada da geração
+Aplicar.py       aplica no destino os arquivos de uma execução
 Acme/            cliente de exemplo
 core/            runner, contexto, migrations e estratégias de campo
   adapters/      leitura da origem e renderização para o destino
+  apply/         separador de comandos, aplicador e relatório
   dialects/      diferenças de sintaxe entre bancos
   metadata/      triggers, índices, sequences e mapas de referência do destino
   outputs/       para onde vai o SQL gerado
@@ -122,7 +132,7 @@ common/          utilitários de data e regex
 tests/           testes unitários
 docs/            documentação técnica
 openspec/        specs e changes do fluxo OpenSpec
-rodar2.sh        aplica no destino os arquivos de uma execução
+rodar2.sh        alternativa ao Aplicar.py, com psql
 ```
 
 ## Documentação
@@ -136,23 +146,19 @@ rodar2.sh        aplica no destino os arquivos de uma execução
 
 ## Planos futuros
 
-Os contratos de adapters e o `OutputAdapter`, com `SqlFileOutput` e `MirrorOutput`, já estão implementados. O plano completo, com a justificativa de cada item, está em [docs/melhorias-futuras.md](docs/melhorias-futuras.md).
+Os contratos de adapters, o `OutputAdapter` (com `SqlFileOutput` e `MirrorOutput`) e a aplicação no destino com dry run já estão implementados. O plano completo, com a justificativa de cada item, está em [docs/melhorias-futuras.md](docs/melhorias-futuras.md).
 
 ### Próximo passo
 
-O próximo output é o `DirectDatabaseOutput`, que executa os comandos direto no destino com commit por lote. Ele terá um modo de dry run que roda todas as fases numa transação e termina em `ROLLBACK`. A ideia é ver os erros antes da carga real, em vez de descobrir com o destino já carregado pela metade. Combinado com o `MirrorOutput`, uma única execução grava os arquivos para auditoria e valida contra o banco.
+Pela ordem de `melhorias-futuras.md`, o próximo item é levar os demais clientes para o `core/` e reduzir o SQL montado à mão nos scripts de cliente.
 
-Junto vem a escolha do output pela linha de comando. A sintaxe abaixo é proposta e ainda não existe:
-
-```bash
-python3 Migracao.py Acme --output direct-db --dry-run
-```
+O `DirectDatabaseOutput`, que executaria os comandos durante a geração em vez de depois, ficou adiado. Hoje a geração lê o destino no meio da carga para montar mapas de referência. Executar os comandos ao mesmo tempo mudaria o que essa leitura enxerga. Ele volta à fila quando os lookups forem carregados antes da primeira fase (melhoria 7).
 
 ### Depois
 
 A ordem segue a recomendada em `melhorias-futuras.md`:
 
-1. Levar os demais clientes para o `core/` e reduzir o SQL montado à mão nos scripts de cliente.
+1. Padronizar os lookups de referência e então implementar o `DirectDatabaseOutput`, com a escolha do output pela linha de comando.
 2. Definir um formato declarativo de plano de migração em YAML ou JSON, interpretado pelo mesmo core.
 3. Criar um `ExecutionAdapter` que separe a orquestração da execução pesada.
 4. Logs estruturados em JSON Lines e relatório por execução com contagem de linhas e tempo por tabela.

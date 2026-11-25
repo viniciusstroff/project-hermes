@@ -158,7 +158,9 @@ O output adapter v1 foi implementado pela change `introduzir-output-adapter-sql-
 
 A change `introduzir-mirror-output` fez a Fase 2. O contrato ganhou `finish(success)`, chamado pelo `MigrationRunner` uma vez por execução, e `describe()`, cuja saída o manifesto grava na chave `output`. O `MirrorOutput` entrega os mesmos comandos para mais de um output.
 
-O próximo output é o `DirectDatabaseOutput`, com um modo de dry run avaliado mais abaixo. Ainda não existe forma de escolher o output pelo CLI ou pelo `.env`.
+A change `aplicar-artefatos-sql-no-destino` entregou a transação única e o dry run sem criar um output novo. O `SqlArtifactApplier`, em `core/apply/`, aplica os arquivos de uma execução depois da geração, com os modos `apply` e `dry-run` e as políticas de erro `stop` e `continue`. Ele roda pelo `Aplicar.py` ou pelo `Migracao.py` com `--apply` ou `--dry-run`. O uso está em [execucao.md](execucao.md#aplicando-os-sqls-no-destino) e o desenho em [arquitetura.md](arquitetura.md#aplicação-no-destino).
+
+O `DirectDatabaseOutput` ficou adiado, pelo motivo explicado mais abaixo. Ainda não existe forma de escolher o output pelo CLI ou pelo `.env`.
 
 ### Objetivo
 
@@ -205,14 +207,18 @@ Comportamento atual, em `core/outputs/mirror.py`:
 - `finish` e `close` chegam a todos os outputs mesmo que um falhe e relançam o primeiro erro
 - combinações previstas: arquivo + banco, arquivo + stdout
 
-#### `DirectDatabaseOutput` (próximo output)
+#### `DirectDatabaseOutput` (adiado)
 
-Executa direto no destino:
+Executaria direto no destino, durante a geração:
 - recebe SQL ou operação estruturada
 - controla transações
 - pode fazer commit por lote
 - exige estratégia de rollback e observabilidade
 - deve oferecer um modo de dry run (ver avaliação abaixo)
+
+Ao detalhar o desenho apareceu um conflito com a geração atual. O `load_reference_map()` lê o destino enquanto os inserts são gerados. Com os comandos executados durante a geração, essa leitura veria uma tabela já truncada, se usasse a mesma conexão do output. Numa conexão separada, ficaria esperando o lock do `TRUNCATE` da própria transação. Além disso, o `02_dump_compatible_tables.sql` não passa pelo output, porque o `pg_dump` grava o arquivo direto.
+
+O `DirectDatabaseOutput` volta a fazer sentido quando a geração parar de ler o destino no meio da carga. O item 7 pode resolver isso carregando os mapas de referência antes da primeira fase. Até lá, a aplicação no destino é feita pelo `SqlArtifactApplier`, sobre os arquivos gerados.
 
 #### `ManifestOutput`
 
@@ -227,6 +233,8 @@ Além dos comandos, gera um manifesto:
 
 A ideia é rodar a migração contra o destino e descobrir o que falharia antes da execução de fato, sem deixar alteração no banco.
 
+Esta avaliação foi escrita antes da implementação. A opção 1 foi implementada no `SqlArtifactApplier`, que aplica os arquivos depois da geração em vez de executar dentro de um output. O resultado está em [O que foi implementado](#o-que-foi-implementado).
+
 Hoje o `rodar2.sh` aplica cada arquivo com `psql` em autocommit e sem `ON_ERROR_STOP`. Um erro não interrompe a carga: o comando que falhou é pulado, o resto é aplicado e os erros são filtrados do log depois. Quando algo dá errado, o destino fica carregado pela metade e a saída é recriar a base a partir do dump de homologação, como descrito em [execucao.md](execucao.md). O dry run resolve exatamente isso: mostrar os erros antes de tocar no destino real.
 
 #### Opção 1: transação com rollback
@@ -235,7 +243,7 @@ O output abre uma transação, executa todas as fases e termina com `ROLLBACK`. 
 
 - Sequences não voltam no rollback. O `setval` da fase `finalize_target`, os `setval` que o `pg_dump` grava em `02_dump_compatible_tables.sql` e o `nextval` de colunas com default ficariam aplicados. No dry run o output deve pular `setval` ou trocá-lo por uma checagem de que a sequence existe.
 - O `TRUNCATE` segura `ACCESS EXCLUSIVE` até o fim da transação. As tabelas ficam bloqueadas durante todo o dry run, então ele só serve para destino sem uso concorrente.
-- O primeiro erro aborta a transação. Para listar todos os erros, como o log do `psql` faz hoje, é preciso `SAVEPOINT`. Um savepoint por comando (o que o `psql` faz com `ON_ERROR_ROLLBACK`) gera milhões de subtransações na fase de carga. Acima de 64 subtransações numa mesma transação o PostgreSQL perde o cache de subtransações, o que deixa outras sessões e réplicas mais lentas. O caminho mais seguro é um savepoint por lote: se o lote falhar, o output volta ao savepoint e reexecuta aquele lote comando a comando para achar as linhas com erro.
+- O primeiro erro aborta a transação. Para listar todos os erros, como o log do `psql` faz hoje, é preciso `SAVEPOINT`. Um savepoint por comando (o que o `psql` faz com `ON_ERROR_ROLLBACK`) gera milhões de subtransações na fase de carga. Acima de 64 subtransações numa mesma transação o PostgreSQL perde o cache de subtransações, o que deixa outras sessões e réplicas mais lentas. Um savepoint por lote reduz o número de subtransações, mas não mantém a transação abaixo desse limite: uma subtransação que gravou dados continua na lista até o fim, mesmo depois do `RELEASE SAVEPOINT`. Uma carga de 1 milhão de comandos em lotes de 1000 cria 1000 subtransações. O aplicador usa savepoint por lote só na política `continue`: se o lote falhar, ele volta ao savepoint e reexecuta o lote comando a comando para achar as linhas com erro. O efeito no cache precisa ser medido numa carga real antes de usar `continue` num banco com réplica.
 - O dry run faz o mesmo I/O e gera o mesmo WAL da carga real para jogar tudo fora no fim.
 - A fase `02_dump_compatible_tables.sql` não passa pelo output, porque o `pg_dump` grava o arquivo direto. Se ela ficar fora da transação, a carga roda sobre um destino sem os dados do dump e o resultado diverge da execução real.
 
@@ -253,7 +261,7 @@ Vale ter dry run, implementado como modo do próprio output, por exemplo `Direct
 
 Com o `MirrorOutput` já implementado, a combinação natural é `MirrorOutput(SqlFileOutput, DirectDatabaseOutput(mode='rollback'))`: uma única execução grava os arquivos para auditoria e valida contra o banco.
 
-Passar no dry run não garante a execução real. A transação única do dry run difere dos commits por lote do modo normal. O destino também pode mudar entre as duas execuções.
+Passar no dry run não garante a execução real. O destino pode mudar entre as duas execuções. No desenho original, a transação única do dry run também diferia dos commits por lote do modo normal. No aplicador, os dois modos usam a mesma transação única.
 
 Os dois pontos de contrato que o dry run exigia já foram resolvidos na Fase 2:
 
@@ -261,6 +269,14 @@ Os dois pontos de contrato que o dry run exigia já foram resolvidos na Fase 2:
 - O manifesto grava `describe()` na chave `output`. O `DirectDatabaseOutput` deve incluir o modo na descrição, por exemplo `{"type": "direct-db", "mode": "rollback"}`, para que uma execução validada não seja confundida com uma aplicada.
 
 Se o item 11 (`ExecutionAdapter`) avançar, esse modo vira a implementação de `dry_run()` para a estratégia `direct-db`.
+
+#### O que foi implementado
+
+A recomendação foi seguida com uma diferença: o modo `rollback` virou o modo `dry-run` de um aplicador que roda depois da geração, no lugar de um output. O `SqlArtifactApplier` aplica os arquivos de `sql/` numa transação única, pula `setval` no dry run e grava o relatório em `aplicacoes/<timestamp>-<modo>/`, fora do manifesto da geração. Assim uma validação não se confunde com uma carga. A mesma execução pode receber um dry run e depois o `apply`.
+
+O teste contra um PostgreSQL 16 mostrou um limite que a avaliação não previa: num `apply` que falha, os `setval` que já rodaram continuam valendo depois do `ROLLBACK`. Adiar os `setval` para o fim não resolve, porque os inserts do `03` que usam o default da coluna pegariam ids já usados pelo dump. O efeito ficou aceito: a próxima carga roda os mesmos `setval`. Uma sequence adiantada só deixa buraco na numeração.
+
+A combinação `MirrorOutput(SqlFileOutput, DirectDatabaseOutput(mode='rollback'))` deixou de ser o caminho para validar uma execução. Ela continua como trabalho futuro para aplicar em streaming, sem esperar a geração terminar. Depende do item 7.
 
 ### O que já mudou na v1
 
@@ -278,8 +294,10 @@ Se o item 11 (`ExecutionAdapter`) avançar, esse modo vira a implementação de 
 
 ### O que ainda precisa mudar
 
-- implementar `DirectDatabaseOutput` com modo de dry run (próximo passo)
+- implementar o `DirectDatabaseOutput` para aplicar durante a geração, depois que o item 7 tirar a leitura do destino do meio da carga
 - permitir que a factory ou o CLI escolham o output
+- medir a política `continue` numa carga real antes de usá-la num banco com réplica
+- decidir se o `rodar2.sh` sai, o que depende de o servidor de carga ter Python com `psycopg2`
 
 ### Possível configuração futura
 
@@ -298,8 +316,9 @@ ou:
 python3 Migracao.py Acme --output sql-file
 python3 Migracao.py Acme --output direct-db
 python3 Migracao.py Acme --output hybrid
-python3 Migracao.py Acme --output direct-db --dry-run
 ```
+
+As opções `--apply` e `--dry-run` já existem e aplicam a execução depois da geração. Se o `--output` vier, o dry run de um output direto precisa de outro nome para não se confundir com elas.
 
 ### Riscos
 
@@ -317,8 +336,12 @@ Fase 2 (implementada):
 - adicionar `MirrorOutput`
 - incluir no contrato o resultado da execução
 
-Fase 3 (próximo passo):
-- adicionar `DirectDatabaseOutput` para ambientes controlados, com modo de dry run
+Fase 3 (implementada pela change `aplicar-artefatos-sql-no-destino`):
+- aplicar os arquivos de uma execução no destino em transação única, com dry run e relatório
+- `Aplicar.py` e as opções `--apply` e `--dry-run` no `Migracao.py`
+
+Fase 4 (depende do item 7):
+- adicionar `DirectDatabaseOutput` para aplicar durante a geração
 - permitir escolher o output pela factory ou pelo CLI
 
 ---
@@ -435,6 +458,10 @@ self.reference_map(
 - menos SQL repetido
 - menor acoplamento com o banco alvo
 - mesma interface para qualquer `MetadataProvider`
+
+### Relação com a saída direta
+
+Hoje os mapas são carregados sob demanda, no meio da geração, pela conexão com o destino. Carregar todos antes da primeira fase tira essa leitura do meio da carga. É o que falta para o `DirectDatabaseOutput` do item 2 executar os comandos durante a geração.
 
 ---
 
@@ -792,7 +819,7 @@ Para evoluir com segurança, a ordem sugerida é:
 3. Manter `SqlFileOutput` como padrão e extrair o buffer atual para ele (feito)
 4. Migrar Acmes restantes para o `core/`
 5. Reduzir SQL manual residual
-6. Adicionar `MirrorOutput` (feito) e depois `DirectDatabaseOutput` com dry run
+6. Adicionar `MirrorOutput` (feito) e a aplicação dos arquivos com dry run (feito). O `DirectDatabaseOutput` espera a padronização dos lookups (melhoria 7)
 7. Definir um formato declarativo para planos de migração
 8. Criar `ExecutionAdapter` para separar orquestração de execução pesada
 9. Adicionar logs estruturados, métricas e relatórios

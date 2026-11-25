@@ -35,9 +35,9 @@
 
 ## 5. Documentation
 
-- [ ] 5.1 Document `Aplicar.py`, the modes, the error policies and the report in `docs/execucao.md`, keeping `rodar2.sh` as the alternative.
-- [ ] 5.2 Document the applier in `docs/arquitetura.md`.
-- [ ] 5.3 Update item 2 of `docs/melhorias-futuras.md`: replace the `DirectDatabaseOutput` next step with the applier, keep the streaming output as future work tied to item 7 and correct the savepoint-per-batch claim about the 64-subtransaction cache.
+- [x] 5.1 Document `Aplicar.py`, the modes, the error policies and the report in `docs/execucao.md`, keeping `rodar2.sh` as the alternative.
+- [x] 5.2 Document the applier in `docs/arquitetura.md`.
+- [x] 5.3 Update item 2 of `docs/melhorias-futuras.md`: replace the `DirectDatabaseOutput` next step with the applier, keep the streaming output as future work tied to item 7 and correct the savepoint-per-batch claim about the 64-subtransaction cache.
 
 ## 6. Verification
 
@@ -45,5 +45,5 @@
 - [x] 6.2 Add applier tests with a fake connection for order, commit and rollback by mode, both error policies, skipped statements, `RESET ALL` and refusal of incomplete runs.
 - [x] 6.3 Add report tests, including absence of the password.
 - [ ] 6.4 Run a dry run and an apply against the Docker `target-db` with a generated run and record the result.
-- [ ] 6.5 Run `python3 -m unittest discover -s tests` and `python3 -m compileall core Acme tests`.
-- [ ] 6.6 Run `openspec validate aplicar-artefatos-sql-no-destino` and `openspec status --change "aplicar-artefatos-sql-no-destino"`.
+- [x] 6.5 Run `python3 -m unittest discover -s tests` and `python3 -m compileall core Acme tests`.
+- [x] 6.6 Run `openspec validate aplicar-artefatos-sql-no-destino` and `openspec status --change "aplicar-artefatos-sql-no-destino"`.

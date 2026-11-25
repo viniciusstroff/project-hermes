@@ -2,12 +2,13 @@
 
 ## Sequência real de execução
 
-No bloco `main`, o script faz:
+No `main()` do `Migracao.py`, o script faz:
 
 1. instancia `Migracao()`;
 2. aplica `enable_debug(<quantidade>)` apenas quando `--debug` é informado;
 3. em modo completo, executa `dump_tables()`;
-4. executa `run()`.
+4. executa `run()`;
+5. com `--apply` ou `--dry-run`, fecha os arquivos gerados e aplica a execução no destino das chaves `PG_V2_*`.
 
 Isso significa que o fluxo padrão já gera:
 
@@ -128,8 +129,7 @@ Objetivo:
 
 - não cria banco;
 - não sobe containers;
-- não executa automaticamente os `.sql` gerados;
-- não valida o resultado funcional da aplicação;
-- não trata rollback completo da operação.
+- não executa os `.sql` gerados, a não ser com `--apply` ou `--dry-run`;
+- não valida o resultado funcional da aplicação.
 
-Por isso a migração real depende da execução manual dos SQLs e da análise dos logs.
+A aplicação dos SQLs é um passo separado, pelo `Aplicar.py` ou pelas opções `--apply` e `--dry-run`. Ela roda numa única transação: se um comando falha, o `ROLLBACK` desfaz a carga inteira. Os detalhes estão em [execucao.md](execucao.md#aplicando-os-sqls-no-destino).
