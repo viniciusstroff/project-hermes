@@ -13,7 +13,7 @@
 ## 3. Verification
 
 - [x] 3.1 Against PostgreSQL 16, select each rendered literal with `standard_conforming_strings` on and off and compare with the original value.
-- [ ] 3.2 Generate a run for a client with backslashes in transformed tables and diff its SQL with a previous run: only literals with backslash change.
+- [x] 3.2 Generate a run for a client with backslashes in transformed tables and diff its SQL with a previous run: only literals with backslash change. Done in 2026-11-25 with the fictitious client `AcmeEdu`: `01`, `02` and `04` were identical; in `03` exactly 210 lines changed, all `students` inserts with backslashes. A dry run of the run generated without the fix failed with 58 errors, because a note ending in backslash absorbed the following statements; the run with the fix applied with 0 errors.
 - [x] 3.3 Run `openspec validate preservar-barra-invertida-nos-literais`.
 
 ## 4. Documentation

@@ -39,7 +39,7 @@ cp Acme/.env.example Acme/.env
 | Prefixo | Uso |
 |---|---|
 | `PG_V1_*` | PostgreSQL da V1, fonte dos `SELECT`s e do `pg_dump` |
-| `FB_V1_*` | Firebird da V1. A conexão é sempre tentada, então preencha mesmo que o cliente não use |
+| `FB_V1_*` | Firebird da V1. Opcional: sem `FB_V1_HOST`, o Hermes não tenta essa conexão |
 | `PG_V2_*` | PostgreSQL de destino, lido pelo core para metadados como tabelas e triggers |
 | `TARGET_DB_*` | Contrato genérico do destino. Deve espelhar `PG_V2_*` até o core deixar de ler essas chaves |
 
@@ -116,12 +116,15 @@ Os testes trocam `psycopg2` e `firebirdsql` por módulos falsos. Não precisam d
 
 Cada cliente é um diretório `<Cliente>/` com um `<Cliente>.py` de mesmo nome, que define a classe `Migracao` herdando de `BaseMigration`. O script declara as tabelas fora do `pg_dump` e a ordem das cargas. As transformações de campo usam as estratégias do core (`Copy`, `Rename`, `Lookup`, `DateConvert` e outras). O passo a passo está em [docs/novo-cliente.md](docs/novo-cliente.md) e o catálogo de estratégias em [docs/estrategias.md](docs/estrategias.md).
 
+Para ver um cliente completo rodando, use a [AcmeEdu](AcmeEdu/README.md), uma instituição de ensino fictícia com V1 e V2 em Docker. Ela gera, aplica e confere a migração de ponta a ponta, com renomeação de tabelas e dados agrupados e separados.
+
 ## Estrutura
 
 ```text
 Migracao.py      ponto de entrada da geração
 Aplicar.py       aplica no destino os arquivos de uma execução
-Acme/            cliente de exemplo
+Acme/            cliente modelo, sem banco
+AcmeEdu/         cliente fictício com V1 e V2 em Docker, para rodar de ponta a ponta
 core/            runner, contexto, migrations e estratégias de campo
   adapters/      leitura da origem e renderização para o destino
   apply/         separador de comandos, aplicador e relatório
