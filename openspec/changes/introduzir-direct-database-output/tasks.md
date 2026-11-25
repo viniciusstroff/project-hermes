@@ -34,7 +34,7 @@
 
 ## 6. Documentation
 
-- [ ] 6.1 Document `--output`, the meaning of `--apply` and `--dry-run` with each output, the lock duration and the `pg_v2_conn` limitation in `docs/execucao.md`.
+- [ ] 6.1 Document `--output`, the meaning of `--apply` and `--dry-run` with each output, the lock duration and the limitation of reads through `context.target.connection` in `docs/execucao.md`.
 - [ ] 6.2 Document `DirectDatabaseOutput`, `include_file()` and the shared execution in `docs/arquitetura.md`.
 - [ ] 6.3 Mark Fase 4 of item 2 of `docs/melhorias-futuras.md` as implemented and update `README.md`.
 

@@ -143,22 +143,25 @@ class BaseMigrationArtifactsTest(unittest.TestCase):
         with open(os.path.join(clientdir, '.env'), 'w', encoding='utf-8') as env_file:
             env_file.write(
                 '\n'.join([
-                    'PG_V1_HOST=source-db',
-                    'PG_V1_PORT=5432',
-                    'PG_V1_NAME=source',
-                    'PG_V1_USER=source-user',
-                    'PG_V1_PASS=source-pass',
-                    'PG_V2_HOST=target-db',
-                    'PG_V2_PORT=5432',
-                    'PG_V2_NAME=target',
-                    'PG_V2_USER=target-user',
-                    'PG_V2_PASS=target-pass',
-                    'FB_V1_HOST=firebird-db',
-                    'FB_V1_PORT=3050',
-                    'FB_V1_NAME=firebird',
-                    'FB_V1_USER=firebird-user',
-                    'FB_V1_PASS=firebird-pass',
-                    'FB_V1_CHARSET=ISO8859_1',
+                    'SOURCE_V1_ADAPTER=postgres',
+                    'SOURCE_V1_HOST=source-db',
+                    'SOURCE_V1_PORT=5432',
+                    'SOURCE_V1_NAME=source',
+                    'SOURCE_V1_USER=source-user',
+                    'SOURCE_V1_PASS=source-pass',
+                    'TARGET_ADAPTER=postgres',
+                    'TARGET_HOST=target-db',
+                    'TARGET_PORT=5432',
+                    'TARGET_NAME=target',
+                    'TARGET_USER=target-user',
+                    'TARGET_PASS=target-pass',
+                    'SOURCE_FB_ADAPTER=firebird',
+                    'SOURCE_FB_HOST=firebird-db',
+                    'SOURCE_FB_PORT=3050',
+                    'SOURCE_FB_NAME=firebird',
+                    'SOURCE_FB_USER=firebird-user',
+                    'SOURCE_FB_PASS=firebird-pass',
+                    'SOURCE_FB_CHARSET=ISO8859_1',
                 ])
             )
 
@@ -168,8 +171,8 @@ class BaseMigrationArtifactsTest(unittest.TestCase):
             os.makedirs(clientdir)
             self._write_env(clientdir)
 
-            with patch('core.context.psycopg2.connect', return_value=FakeConnection()), \
-                 patch('core.context.firebirdsql.connect', return_value=FakeConnection()):
+            with patch('psycopg2.connect', return_value=FakeConnection()), \
+                 patch('firebirdsql.connect', return_value=FakeConnection()):
                 with redirect_stdout(StringIO()):
                     migration = ArtifactMigration(clientdir)
                 self.assertEqual(migration.file.name, migration.artifacts.sql_path('setup'))
@@ -200,8 +203,8 @@ class BaseMigrationArtifactsTest(unittest.TestCase):
             os.makedirs(clientdir)
             self._write_env(clientdir)
 
-            with patch('core.context.psycopg2.connect', return_value=FakeConnection()), \
-                 patch('core.context.firebirdsql.connect', return_value=FakeConnection()), \
+            with patch('psycopg2.connect', return_value=FakeConnection()), \
+                 patch('firebirdsql.connect', return_value=FakeConnection()), \
                  patch('core.base_migration.subprocess.call', return_value=0) as subprocess_call:
                 with redirect_stdout(StringIO()):
                     migration = ArtifactMigration(clientdir)
@@ -217,8 +220,8 @@ class BaseMigrationArtifactsTest(unittest.TestCase):
             os.makedirs(clientdir)
             self._write_env(clientdir)
 
-            with patch('core.context.psycopg2.connect', return_value=FakeConnection()), \
-                 patch('core.context.firebirdsql.connect', return_value=FakeConnection()), \
+            with patch('psycopg2.connect', return_value=FakeConnection()), \
+                 patch('firebirdsql.connect', return_value=FakeConnection()), \
                  patch('core.base_migration.subprocess.call', return_value=0) as subprocess_call:
                 with redirect_stdout(StringIO()):
                     migration = ArtifactMigration(clientdir)
@@ -235,8 +238,8 @@ class BaseMigrationArtifactsTest(unittest.TestCase):
             os.makedirs(clientdir)
             self._write_env(clientdir)
 
-            with patch('core.context.psycopg2.connect', return_value=FakeConnection()), \
-                 patch('core.context.firebirdsql.connect', return_value=FakeConnection()):
+            with patch('psycopg2.connect', return_value=FakeConnection()), \
+                 patch('firebirdsql.connect', return_value=FakeConnection()):
                 with redirect_stdout(StringIO()):
                     migration = ArtifactMigration(clientdir)
                     migration.enable_debug(25)
@@ -256,9 +259,9 @@ class BaseMigrationArtifactsTest(unittest.TestCase):
             os.makedirs(clientdir)
             self._write_env(clientdir)
 
-            with patch('core.context.psycopg2.connect',
+            with patch('psycopg2.connect',
                        side_effect=[FakeConnection(), FakeConnection(trigger_rows)]), \
-                 patch('core.context.firebirdsql.connect', return_value=FakeConnection()):
+                 patch('firebirdsql.connect', return_value=FakeConnection()):
                 with redirect_stdout(StringIO()):
                     migration = FullArtifactMigration(clientdir)
                     migration.write_sql('-- setup\n')
@@ -298,7 +301,6 @@ class BaseMigrationArtifactsTest(unittest.TestCase):
         context = types.SimpleNamespace(
             config={},
             artifacts=None,
-            legacy_connections={},
             output=output,
             close=lambda: None,
         )

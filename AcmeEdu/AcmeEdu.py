@@ -283,7 +283,7 @@ class Migracao(BaseMigration):
                 Rename('carga_horaria', 'workload_hours'),
                 Transform('ativo', _column(is_active), v2_name='active'),
             ],
-        ).run(self.context.engine('pg_v1'))
+        ).run(self.context.source('v1'))
 
     def insert_students(self):
         """Cada aluno vira uma pessoa, um aluno, um telefone e um responsável."""
@@ -314,7 +314,7 @@ class Migracao(BaseMigration):
                     Transform('parentesco', _column(relationship_of), v2_name='relationship'),
                 ], condition=lambda row: normalize_name(row['nome_resp']) is not None),
             ],
-        ).run(self.context.engine('pg_v1'))
+        ).run(self.context.source('v1'))
 
     def insert_teachers(self):
         """Professores que já são alunos reaproveitam a pessoa do aluno."""
@@ -347,7 +347,7 @@ class Migracao(BaseMigration):
                     Fixed('source', 'teacher'),
                 ], condition=_teacher_phone_is_new('fone2')),
             ],
-        ).run(self.context.engine('pg_v1'))
+        ).run(self.context.source('v1'))
 
     def insert_subjects(self):
         self.print_log('Inserindo disciplinas')
@@ -362,7 +362,7 @@ class Migracao(BaseMigration):
                 Rename('cod_prof', 'teacher_id'),
                 Rename('carga_horaria', 'workload_hours'),
             ],
-        ).run(self.context.engine('pg_v1'))
+        ).run(self.context.source('v1'))
 
     def insert_classes(self):
         self.print_log('Inserindo turmas')
@@ -377,7 +377,7 @@ class Migracao(BaseMigration):
                 Transform('ano_semestre', _column(term_number), v2_name='term'),
                 Transform('sala', _column(clean_text), v2_name='room'),
             ],
-        ).run(self.context.engine('pg_v1'))
+        ).run(self.context.source('v1'))
 
     def insert_enrollments(self):
         self.print_log('Inserindo matrículas')
@@ -394,7 +394,7 @@ class Migracao(BaseMigration):
                 Transform('frequencia', _column(attendance_pct), v2_name='attendance_pct'),
                 Lookup('status', ENROLLMENT_STATUSES, key_normalizer=_upper_key),
             ],
-        ).run(self.context.engine('pg_v1'))
+        ).run(self.context.source('v1'))
 
     # Fase final (04_finalize_target.sql) -------------------------------------
 

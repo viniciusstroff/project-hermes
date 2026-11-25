@@ -3,7 +3,7 @@
 Both entry points show the target and the mode, run the applier and turn
 the report into an exit code. They differ only in where the connection
 comes from: libpq environment variables in ``Aplicar.py`` and the
-``PG_V2_*`` keys of the client ``.env`` in ``Migracao.py``.
+``TARGET_*`` keys of the client ``.env`` in ``Migracao.py``.
 """
 
 import getpass
@@ -13,6 +13,7 @@ from typing import Callable
 
 from core.apply.applier import COMMITTED, FAILED, ROLLED_BACK, SqlArtifactApplier
 from core.apply.run import IncompleteRunError
+from core.connections import parse_connections
 
 # libpq reads these when psycopg2.connect() gets no host or database.
 REQUIRED_LIBPQ_VARIABLES = ('PGHOST', 'PGDATABASE')
@@ -52,23 +53,38 @@ def libpq_connect():
     return _connect()
 
 
+def _target_config(config: dict):
+    """Target connection of the client .env. The applier only handles PostgreSQL for now."""
+
+    _, target = parse_connections(config)
+    if target.adapter != 'postgres':
+        raise TargetConnectionError(
+            f"O destino usa o adapter '{target.adapter}'. A aplicação de artefatos ainda só trata PostgreSQL."
+        )
+    target.require('host', 'name', 'user')
+    return target
+
+
 def config_target(config: dict) -> dict:
+    target = _target_config(config)
     return {
-        'host': config['PG_V2_HOST'],
-        'port': config['PG_V2_PORT'],
-        'database': config['PG_V2_NAME'],
-        'user': config['PG_V2_USER'],
+        'host': target.get('host'),
+        'port': target.get('port', '5432'),
+        'database': target.get('name'),
+        'user': target.get('user'),
     }
 
 
 def config_connect(config: dict) -> Callable:
+    target = _target_config(config)
+
     def connect():
         return _connect(
-            host=config['PG_V2_HOST'],
-            port=config['PG_V2_PORT'],
-            dbname=config['PG_V2_NAME'],
-            user=config['PG_V2_USER'],
-            password=config['PG_V2_PASS'],
+            host=target.get('host'),
+            port=target.get('port', '5432'),
+            dbname=target.get('name'),
+            user=target.get('user'),
+            password=target.get('pass'),
         )
 
     return connect

@@ -8,7 +8,7 @@ No `main()` do `Migracao.py`, o script faz:
 2. aplica `enable_debug(<quantidade>)` apenas quando `--debug` é informado;
 3. em modo completo, executa `dump_tables()`;
 4. executa `run()`;
-5. com `--apply` ou `--dry-run`, fecha os arquivos gerados e aplica a execução no destino das chaves `PG_V2_*`.
+5. com `--apply` ou `--dry-run`, fecha os arquivos gerados e aplica a execução no destino das chaves `TARGET_*`.
 
 Isso significa que o fluxo padrão já gera:
 

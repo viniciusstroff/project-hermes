@@ -8,7 +8,7 @@
 ## 2. Context, Engine and Runner
 
 - [ ] 2.1 Create the collector in `DefaultMigrationContextFactory` and expose it as `context.metrics`.
-- [ ] 2.2 Pass the collector and the source name to `MigrationEngine` in `context.engine(source_name)`.
+- [ ] 2.2 Pass the collector and the source name to `MigrationEngine` in `context.source(source_name)`.
 - [ ] 2.3 Record each `open_phase` in the runner, closing the previous phase.
 - [ ] 2.4 Write the generation report after `finish(True)` and before the `success` manifest, and in the error path before the `failed` manifest, marking the running unit as `interrupted`.
 - [ ] 2.5 Record the `dump_compatible_tables` phase in `BaseMigration.dump_tables()` with duration, `pg_dump` exit code and file size.

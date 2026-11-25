@@ -1,16 +1,16 @@
 ## 1. Preconditions
 
-- [ ] 1.1 Archive `aplicar-artefatos-sql-no-destino`, `preservar-barra-invertida-nos-literais` and `criar-cliente-ficticio-educacional`, so the capabilities modified here exist in `openspec/specs/`.
-- [ ] 1.2 Implement `revisar-estrategias-dependentes-de-dialeto` and `padronizar-lookups-de-referencia`.
-- [ ] 1.3 Revise `introduzir-direct-database-output` so the direct output executes operations through the adapter session.
+- [x] 1.1 Archive `aplicar-artefatos-sql-no-destino`, `preservar-barra-invertida-nos-literais` and `criar-cliente-ficticio-educacional`, so the capabilities modified here exist in `openspec/specs/`.
+- [x] 1.2 Implement `revisar-estrategias-dependentes-de-dialeto` and `padronizar-lookups-de-referencia`.
+- [ ] 1.3 Revise `introduzir-direct-database-output` so the direct output executes operations through the adapter session. (Phase 2 recorded the dependency and switched it to `TARGET_*`; the rewrite on top of `TargetSession` waits for phase 6, when that contract exists.)
 
 ## 2. Named Connections and Adapter Registry
 
-- [ ] 2.1 Parse `SOURCE_<NAME>_*` and `TARGET_*` groups from the client `.env` into named connection configs.
-- [ ] 2.2 Create `core/adapters/registry.py` with `postgres`, `firebird` and `mongodb`, plus `package.module:Class` paths checked against the contracts.
-- [ ] 2.3 Move every driver import into the adapter modules, imported only on connect; remove the imports from `core/context.py` and `core/base_migration.py`.
-- [ ] 2.4 Replace `PG_V1_*`, `PG_V2_*` and `FB_V1_*` in the context factory, the manifest and `.env.example` files; expose `context.source(name)`.
-- [ ] 2.5 Add tests for parsing, unknown and missing keys, third-party paths and imports without drivers.
+- [x] 2.1 Parse `SOURCE_<NAME>_*` and `TARGET_*` groups from the client `.env` into named connection configs.
+- [x] 2.2 Create `core/adapters/registry.py` with `postgres`, `firebird` and `mongodb`, plus `package.module:Class` paths checked against the contracts. (The `mongodb` entry is added with its adapter in phase 8.)
+- [x] 2.3 Move every driver import into the adapter modules, imported only on connect; remove the imports from `core/context.py` and `core/base_migration.py`.
+- [x] 2.4 Replace `PG_V1_*`, `PG_V2_*` and `FB_V1_*` in the context factory, the manifest and `.env.example` files; expose `context.source(name)`.
+- [x] 2.5 Add tests for parsing, unknown and missing keys, third-party paths and imports without drivers.
 
 ## 3. Neutral Reading
 
@@ -23,7 +23,7 @@
 
 - [ ] 4.1 Add the operation types and the target contract with `render`, `read`, `session`, `capabilities` and `artifact_format`.
 - [ ] 4.2 Port the PostgreSQL target: inserts through the dialect with identifiers quoted by `quote_identifier`, `Clear`, `SuspendConstraints` from the catalog, `ResetIdentity` with `pg_get_serial_sequence`.
-- [ ] 4.3 Remove `MetadataProvider`, `set_index_commands_for` and the legacy connection attributes; add the facade shortcuts and `emit()`.
+- [ ] 4.3 Remove `MetadataProvider`, `set_index_commands_for` and the legacy connection attributes; add the facade shortcuts and `emit()`. (The legacy connection attributes already left in phase 2, together with the fixed `.env` keys.)
 - [ ] 4.4 Replace `SqlFileOutput` with `FileOutput` writing `comandos/<NN>_<phase>.<extension>`, and make `OutputAdapter.write` receive operations.
 - [ ] 4.5 Record sources, target, server versions and the artifact list in the manifest.
 - [ ] 4.6 Port `Acme` to the new API and update the tests that use the removed helpers.

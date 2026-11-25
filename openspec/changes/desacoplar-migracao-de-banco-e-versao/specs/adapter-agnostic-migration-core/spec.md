@@ -76,6 +76,36 @@ The target adapter, through its dialect when it has one, SHALL serialize Python 
 - **WHEN** the `.env` declares no Firebird connection
 - **THEN** no Firebird connection is attempted and the `firebirdsql` driver is not imported
 
+### Requirement: Core exposes no compatibility leftovers
+The core package SHALL NOT keep modules or `BaseMigration` helpers whose only role is to forward to the current API, and migration code SHALL obtain source engines only through `context.source(name)`.
+
+#### Scenario: Legacy engine module removed
+- **WHEN** code imports `core.engine`
+- **THEN** the import fails because the module does not exist
+- **AND** `TableMigration`, `ExpandMigration`, `MultiTargetMigration`, `TargetMigration` and `MigrationEngine` are importable from `core` and from their own modules
+
+#### Scenario: Core exports resolve to current modules
+- **WHEN** code reads each name listed in `core.__all__`
+- **THEN** every name resolves without importing a compatibility module
+
+#### Scenario: Facade has no private engine or progress helpers
+- **WHEN** migration code looks for `_engine`, `_fb_engine`, `_v1_cursor`, `_log_table_progress`, `_setup_tui`, `_teardown_tui`, `_footer_lines`, `_render_progress_footer`, `_reset_progress`, `_finish_progress`, `_log_file` or `_tui_active` on a `BaseMigration`
+- **THEN** none of these attributes exists
+- **AND** `self.context.source('v1')` returns the engine for the source declared as `SOURCE_V1_ADAPTER`
+
+#### Scenario: Context has no engine by fixed name
+- **WHEN** migration code calls `context.engine('pg_v1')`
+- **THEN** the call fails because the context exposes sources only through `source(name)`
+
+#### Scenario: Facade keeps its writing helpers
+- **WHEN** migration code calls `write_sql()`, `print_comment()`, `_open_sql_file()` or `_flush_writes()` on a `BaseMigration`
+- **THEN** the call is delegated to the configured output adapter as before
+
+#### Scenario: Database drivers are imported where connections open
+- **WHEN** the default context opens the source and target connections
+- **THEN** each adapter imports its driver inside its `connect`
+- **AND** neither `core.context` nor `core.base_migration` imports `psycopg2` or `firebirdsql`
+
 ## ADDED Requirements
 
 ### Requirement: Target maintenance is expressed as operations
@@ -99,3 +129,7 @@ The core SHALL offer `Clear`, `SuspendConstraints`, `ResumeConstraints` and `Res
 ### Requirement: Direct driver access is transitional only
 **Reason**: The fixed connections `pg_v1_conn`, `pg_v2_conn` and `fb_v1_conn` are removed together with the fixed `.env` keys.
 **Migration**: Request sources by name with `context.source(name)` and use `NativeQuery` or `Native` operations when a database-specific statement is needed.
+
+### Requirement: Firebird source is optional
+**Reason**: With named connections a source exists only when the `.env` declares it, whatever the database. The rule that turned Firebird on by `FB_V1_HOST` has no reason to exist, and the case without Firebird is covered by the scenario "Client without Firebird" of "Base migration exposes adapter-based context".
+**Migration**: Declare `SOURCE_<NAME>_ADAPTER=firebird` with its `SOURCE_<NAME>_*` parameters to use a Firebird source, and request it with `context.source('<name>')`.

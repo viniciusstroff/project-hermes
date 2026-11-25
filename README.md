@@ -36,12 +36,25 @@ As conexões de cada cliente ficam em `<cliente>/.env`:
 cp Acme/.env.example Acme/.env
 ```
 
-| Prefixo | Uso |
-|---|---|
-| `PG_V1_*` | PostgreSQL da V1, fonte dos `SELECT`s e do `pg_dump` |
-| `FB_V1_*` | Firebird da V1. Opcional: sem `FB_V1_HOST`, o Hermes não tenta essa conexão |
-| `PG_V2_*` | PostgreSQL de destino, lido pelo core para metadados como tabelas e triggers |
-| `TARGET_DB_*` | Contrato genérico do destino. Deve espelhar `PG_V2_*` até o core deixar de ler essas chaves |
+Cada conexão tem nome e adapter. Uma origem é um grupo `SOURCE_<NOME>_*` com a chave `SOURCE_<NOME>_ADAPTER`. O destino usa `TARGET_ADAPTER` e as demais chaves `TARGET_*`. O resto do nome de cada chave, em minúsculas, vira parâmetro do adapter:
+
+```bash
+SOURCE_V1_ADAPTER=postgres
+SOURCE_V1_HOST=acmeedu-v1
+SOURCE_V1_PORT=5432
+SOURCE_V1_NAME=acmeedu_v1
+SOURCE_V1_USER=acmeedu
+SOURCE_V1_PASS=acmeedu
+
+TARGET_ADAPTER=postgres
+TARGET_HOST=target-db
+TARGET_PORT=5432
+TARGET_NAME=tenant
+TARGET_USER=tenant
+TARGET_PASS=tenant
+```
+
+A migração pede a origem pelo nome: `self.context.source('v1')`. Os adapters embutidos são `postgres` (origem e destino) e `firebird` (só origem). Cada um exige `HOST`, `NAME` e `USER`. Um adapter de fora do core entra pelo caminho `pacote.modulo:Classe` no lugar do nome. O driver de cada banco só é importado quando uma conexão daquele adapter abre, então um cliente só com PostgreSQL não precisa do `firebirdsql`.
 
 O `.env` da raiz (copiado de `.env.example`) só é lido pelo Docker Compose. Nele fica `TARGET_DB_PUBLISHED_PORT`, a porta em que o PostgreSQL local aparece no host.
 
@@ -76,7 +89,7 @@ docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
 docker exec -it project-hermes python3 Migracao.py Acme
 ```
 
-O segundo arquivo de compose sobe um PostgreSQL 16 como destino. Dentro da rede `hermes-net` ele responde em `target-db:5432`. No host, aparece na porta definida em `TARGET_DB_PUBLISHED_PORT`. Para usar outro destino basta não incluir esse arquivo e apontar `PG_V2_*` e `TARGET_DB_*` para o banco desejado.
+O segundo arquivo de compose sobe um PostgreSQL 16 como destino. Dentro da rede `hermes-net` ele responde em `target-db:5432`. No host, aparece na porta definida em `TARGET_DB_PUBLISHED_PORT`. Para usar outro destino basta não incluir esse arquivo e apontar as chaves `TARGET_*` do `.env` do cliente para o banco desejado.
 
 ### Aplicando o SQL no destino
 
@@ -92,7 +105,7 @@ python3 Aplicar.py runs/Acme/20261120-153000
 
 O `Aplicar.py` roda os arquivos de `sql/` na ordem das fases, numa única transação. Se algo falha, nada da carga fica no destino. O dry run usa `--on-error continue` por padrão e lista todos os erros de uma vez. Cada aplicação grava `relatorio.json` e `erros.txt` em `aplicacoes/<timestamp>-<modo>/`, dentro da pasta da execução.
 
-Para gerar e aplicar de uma vez no destino das chaves `PG_V2_*`, use `python3 Migracao.py Acme --dry-run` ou `--apply`. Os modos, as políticas de erro e os cuidados estão em [docs/execucao.md](docs/execucao.md#aplicando-os-sqls-no-destino).
+Para gerar e aplicar de uma vez no destino das chaves `TARGET_*`, use `python3 Migracao.py Acme --dry-run` ou `--apply`. Os modos, as políticas de erro e os cuidados estão em [docs/execucao.md](docs/execucao.md#aplicando-os-sqls-no-destino).
 
 O `rodar2.sh` continua disponível para quem aplica com `psql`. Ele roda cada arquivo em autocommit e não para no erro, então uma falha deixa o destino carregado pela metade.
 

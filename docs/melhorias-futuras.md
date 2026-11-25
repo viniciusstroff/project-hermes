@@ -41,8 +41,7 @@ Também inclui um plano para desacoplar a forma de saída da migração. Hoje o 
 O projeto já separa o runtime de migração por adapters e providers, mas essa
 camada ainda pode evoluir para novos bancos e novos tipos de saída:
 
-- `DefaultMigrationContextFactory` ainda monta o contexto padrão com PostgreSQL e Firebird
-- `BaseMigration` ainda expõe `pg_v1_conn`, `pg_v2_conn` e `fb_v1_conn` como compatibilidade transitória
+- o `.env` já declara as conexões por nome e adapter, mas só existem adapters de PostgreSQL e Firebird
 - a saída padrão ainda é SQL PostgreSQL em arquivos
 - novos bancos ainda exigem adapters, dialects e providers concretos
 
@@ -93,7 +92,6 @@ A estrutura e os contratos que já existem estão em [arquitetura.md](arquitetur
 ### O que precisa mudar
 
 - adicionar adapters concretos para outros bancos quando houver demanda real
-- remover atributos legados `pg_v1_conn`, `pg_v2_conn` e `fb_v1_conn` depois que os Acmes privados migrarem
 - evoluir a saída para outros targets além de SQL PostgreSQL em arquivo
 - manter novos Acmes usando adapters, providers e helpers do core em vez de cursores diretos
 
@@ -435,7 +433,7 @@ Feito pela change `limpar-codigo-legado`. Saíram:
 
 - `common/`, com `dateutil.py` e `regexutil.py`, que não tinham uso e tinham defeito;
 - `core/engine.py`, que só reexportava classes dos módulos atuais. O `core/__init__.py` ficou como estava;
-- os doze helpers privados de engine, progresso e TUI do `BaseMigration`. O engine vem só de `self.context.engine(nome)`;
+- os doze helpers privados de engine, progresso e TUI do `BaseMigration`. O engine vem só do contexto, hoje por `self.context.source(nome)`;
 - os imports de `psycopg2` e `firebirdsql` do `core/base_migration.py`, que não eram usados;
 - `queries_duplicidade_dados.sql`, que atualizava tabelas que o `Acme` não migra.
 

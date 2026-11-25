@@ -158,7 +158,7 @@ class LegacyLoaderRemovedTest(unittest.TestCase):
         self.assertFalse(hasattr(BaseMigration, 'load_reference_map'))
         self.assertFalse(hasattr(PostgresMetadataProvider, 'load_reference_map'))
         migration = BaseMigration('Acme', context=types.SimpleNamespace(
-            config={}, artifacts=None, legacy_connections={}, close=lambda: None))
+            config={}, artifacts=None, close=lambda: None))
         self.assertFalse(hasattr(migration, '_reference_maps'))
         self.assertEqual(migration.declare_reference_maps(), [])
 

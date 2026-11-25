@@ -29,6 +29,24 @@ class FirebirdSourceAdapter:
         self.connection = connection
         self.dialect = dialect or FirebirdDialect()
 
+    @classmethod
+    def connect(cls, config):
+        """Open a Firebird connection from a ConnectionConfig. The driver is imported only here."""
+
+        import firebirdsql
+
+        config.require('host', 'name', 'user')
+        options = {
+            'host': config.get('host'),
+            'port': int(config.get('port', '3050')),
+            'database': config.get('name'),
+            'user': config.get('user'),
+            'password': config.get('pass'),
+        }
+        if config.get('charset'):
+            options['charset'] = config.get('charset')
+        return cls(firebirdsql.connect(**options))
+
     def cursor(self):
         return FirebirdCursorAdapter(self.connection.cursor())
 

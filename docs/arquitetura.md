@@ -5,29 +5,24 @@
 O script `Migracao.py` é uma aplicação CLI que:
 
 1. Lê a configuração do Acme em `Acme/.env`.
-2. Abre conexão com três bancos.
+2. Abre as conexões declaradas no `.env` do cliente: uma ou mais origens e um destino.
 3. Gera arquivos `.sql` com `DELETE`, `UPDATE`, `INSERT`, `ALTER TABLE` e `setval`.
 4. Não aplica os dados na V2 durante a geração.
 5. Deixa a aplicação para depois, sobre os arquivos gerados em `runs/<cliente>/<timestamp>/sql/`. Quem aplica é o `Aplicar.py` (ou o próprio `Migracao.py` com `--apply` ou `--dry-run`), numa única transação. O `rodar2.sh` com `psql` continua como alternativa.
 
 ## Bancos envolvidos
 
-O script usa três conexões independentes:
+O `core/connections.py` lê as conexões que o `.env` do cliente declara por nome:
 
-- `PG_V1_*`: PostgreSQL da base legada V1.
-- `PG_V2_*`: PostgreSQL da base destino V2.
-- `FB_V1_*`: Firebird legado, usado para complementar parte das informações migradas.
+- cada origem é um grupo `SOURCE_<NOME>_*` com a chave `SOURCE_<NOME>_ADAPTER`;
+- o destino é `TARGET_ADAPTER` com as demais chaves `TARGET_*`;
+- o resto do nome de cada chave, em minúsculas, é parâmetro do adapter (`SOURCE_V1_HOST` vira `host` da origem `v1`).
 
-O contrato novo de ambiente para o destino usa `TARGET_DB_*` e o hostname Docker
-`target-db`. As variáveis `PG_V2_*` ainda são necessárias porque o core atual
-abre conexões PostgreSQL diretamente; elas devem espelhar `TARGET_DB_*` até a
-introdução dos adapters.
+Quando dois nomes de origem começam igual, a chave fica com o nome declarado mais longo: `SOURCE_V1_LEGACY_HOST` é da origem `v1_legacy`, não da `v1`. Uma chave `SOURCE_` sem dono interrompe a execução antes de conectar.
 
-Resumo do papel de cada origem:
+O registro em `core/adapters/registry.py` resolve o nome do adapter para a classe de origem ou de destino. Os embutidos são `postgres` (origem e destino) e `firebird` (só origem). Qualquer outro valor no formato `pacote.modulo:Classe` é importado e conferido contra o contrato do papel (`connect`, `cursor`, `scalar`, `limit_clause` e `close` na origem; `connect`, `serialize_value`, `insert_statement` e `close` no destino). Cada adapter importa o driver dentro do próprio `connect`, então um cliente só com PostgreSQL roda sem `firebirdsql`.
 
-- `PG_V1`: principal fonte dos `SELECT`s e do `pg_dump`.
-- `PG_V2`: fonte de metadados do ambiente destino, especialmente para listar tabelas e gerar comandos de trigger.
-- `Firebird V1`: fonte auxiliar para algumas rotinas específicas do Acme.
+Na AcmeEdu e no Acme, a origem principal se chama `v1`. Ela é a fonte dos `SELECT`s e do `pg_dump`, enquanto a fase de dump existir (`dump_source` no `BaseMigration`, que exige o adapter `postgres`). O destino é lido para metadados como tabelas, triggers e mapas de referência. O Acme declara ainda a origem opcional `fb`, de Firebird, para algumas rotinas específicas.
 
 ## Estrutura lógica do script
 
@@ -40,8 +35,9 @@ Componentes principais:
 
 - `MigrationContext`: agrupa configuração, artefatos, adapters de origem,
   adapter de destino, provider de metadados, output, logger e progresso.
-- `DefaultMigrationContextFactory`: cria o contexto padrão a partir das chaves
-  `.env` atuais (`PG_V1_*`, `PG_V2_*`, `FB_V1_*`).
+- `DefaultMigrationContextFactory`: cria o contexto padrão a partir das conexões
+  nomeadas do `.env`, conectando cada uma pelo registro de adapters. O manifesto
+  registra o adapter e os parâmetros de cada conexão, sem senha nem URI.
 - `MigrationRunner`: orquestra as fases padrão da execução.
 - `SourceAdapter`: lê linhas e escalares da origem, incluindo diferenças como
   `LIMIT` no PostgreSQL e `ROWS` no Firebird.
@@ -72,8 +68,9 @@ recorrentes de infraestrutura devem passar por adapter, dialect ou provider.
 ## API de composição e compatibilidade
 
 O caminho preferido para novas integrações é receber um `MigrationContext` por
-composição e usar `context.engine('pg_v1')`, `context.engine('fb_v1')`,
-`context.output` e `context.metadata`. Para escrever SQL fora de um engine, use
+composição e usar `context.source('v1')`, `context.source('fb')`,
+`context.output` e `context.metadata`. Pedir uma origem que o `.env` não declara
+gera um erro com o nome pedido e a lista das origens declaradas. Para escrever SQL fora de um engine, use
 `context.output.write(...)` e `context.output.comment(...)`. O `BaseMigration`
 usa esse mesmo contexto por baixo, então os scripts antigos podem continuar
 herdando da base durante a transição.
@@ -88,9 +85,8 @@ Na fachada por herança, `BaseMigration.write_sql()`, `print_comment()`,
 `file` devolve o arquivo aberto pelo `SqlFileOutput` ou `None` quando o output
 não grava em arquivo.
 
-Os atributos `pg_v1_conn`, `pg_v2_conn` e `fb_v1_conn` permanecem disponíveis
-na fachada por compatibilidade. Código novo deve preferir adapters, providers e
-helpers como `reference_map()`, `set_index_commands_for()` e
+A fachada não expõe conexões de driver. Código de cliente deve usar adapters,
+providers e helpers como `reference_map()`, `set_index_commands_for()` e
 `write_reset_sequences()`.
 
 ## Mapas de referência
@@ -112,8 +108,8 @@ Logo depois da carga, o runner chama `close_reads()`. A partir daí o provider
 recusa consultar o destino (`TargetReadClosedError`). A transação de leitura
 termina em `ROLLBACK`, sem segurar lock nas tabelas. Os comandos de trigger
 continuam disponíveis porque ficaram em cache. A garantia não cobre consultas
-que o cliente faz direto por `pg_v2_conn`, que continua na fachada até os
-clientes privados migrarem.
+que o cliente faça direto pela conexão do adapter de destino
+(`context.target.connection`).
 
 ## Saída da migração
 
@@ -135,7 +131,7 @@ As fases são chaves lógicas: `setup`, `prepare_target`, `load_transformed_data
 e `finalize_target`. A `DefaultMigrationContextFactory` abre `setup` ao montar o
 contexto. O `MigrationRunner` abre as outras três na ordem padrão, escreve os
 comandos finais de índices e triggers e chama `flush()`. Os engines criados por
-`context.engine()` escrevem pelo mesmo `output.write`.
+`context.source()` escrevem pelo mesmo `output.write`.
 
 O output fica sabendo do resultado pelo `finish(success)`, que o runner chama
 uma vez por execução. Na execução que termina bem, `finish(True)` vem depois do

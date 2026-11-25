@@ -2,13 +2,11 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
-import firebirdsql
-import psycopg2
 from dotenv import dotenv_values
 
-from core.adapters import FirebirdSourceAdapter, PostgresSourceAdapter, PostgresTargetAdapter
+from core.adapters.registry import connect_adapter
 from core.artifacts import ArtifactManager
-from core.metadata import PostgresMetadataProvider
+from core.connections import parse_connections
 from core.migration_engine import MigrationEngine
 from core.outputs import OutputAdapter, SqlFileOutput
 from core.references import ReferenceMap, ReferenceMapError, build_reference_map
@@ -38,7 +36,7 @@ class MigrationContext:
     output: OutputAdapter
     logger: MigrationLogger
     progress: MigrationProgress
-    legacy_connections: dict[str, Any] = field(default_factory=dict)
+    connections: dict = field(default_factory=dict)
     limit: str = ''
     debug_limit: int | None = None
     _loaded_reference_maps: dict = field(default_factory=dict)
@@ -53,13 +51,15 @@ class MigrationContext:
     def write_manifest(self, status: str, error: str = None):
         self.artifacts.write_manifest(
             status=status,
-            config=self.config,
+            connections=self.connections,
             debug_limit=self.debug_limit,
             error=error,
             output=self.output.describe(),
         )
 
-    def engine(self, source_name: str = 'pg_v1') -> MigrationEngine:
+    def source(self, source_name: str) -> MigrationEngine:
+        """Engine that reads the source declared as SOURCE_<NAME>_* and writes to the target."""
+
         if source_name not in self.sources:
             raise SourceNotConfiguredError(source_name, self.sources)
         return MigrationEngine(
@@ -117,19 +117,13 @@ class MigrationContext:
             return
 
         self.output.close()
-        seen = set()
-        for connection in self.legacy_connections.values():
-            if connection is None or id(connection) in seen:
-                continue
-            seen.add(id(connection))
-            if hasattr(connection, 'close'):
-                connection.close()
+        _close_adapters([*self.sources.values(), self.target])
         self.logger.close()
         self._closed = True
 
 
 class DefaultMigrationContextFactory:
-    """Builds the default PostgreSQL/Firebird context from the existing .env keys."""
+    """Builds the default context from the named connections of the client .env."""
 
     @classmethod
     def from_clientdir(cls, clientdir: str) -> MigrationContext:
@@ -141,49 +135,35 @@ class DefaultMigrationContextFactory:
         logger.progress = progress
         output.open_phase('setup')
 
-        artifacts.write_manifest(status='running', config=config, debug_limit=None, output=output.describe())
-
-        pg_v1_conn = None
-        pg_v2_conn = None
-        fb_v1_conn = None
-
+        connections = {}
+        opened = []
         try:
+            source_configs, target_config = parse_connections(config)
+            connections = {
+                'sources': {name: source.describe() for name, source in source_configs.items()},
+                'target': target_config.describe(),
+            }
+            artifacts.write_manifest(status='running', connections=connections, output=output.describe())
             logger.print_log('Artefatos da execução: ' + artifacts.run_dir)
-            logger.print_log('----- Conectando BD V1 -----')
-            pg_v1_conn = psycopg2.connect(
-                host=config['PG_V1_HOST'], port=config['PG_V1_PORT'],
-                dbname=config['PG_V1_NAME'],
-                user=config['PG_V1_USER'], password=config['PG_V1_PASS'])
 
-            logger.print_log('----- Conectando BD V2 -----')
-            pg_v2_conn = psycopg2.connect(
-                host=config['PG_V2_HOST'], port=config['PG_V2_PORT'],
-                dbname=config['PG_V2_NAME'],
-                user=config['PG_V2_USER'], password=config['PG_V2_PASS'])
+            sources = {}
+            for name, source_config in source_configs.items():
+                logger.print_log(f'----- Conectando origem {name} ({source_config.adapter}) -----')
+                sources[name] = connect_adapter(source_config, 'source')
+                opened.append(sources[name])
 
-            if _firebird_configured(config):
-                logger.print_log('----- Conectando BD Firebird V1 -----')
-                fb_v1_conn = firebirdsql.connect(
-                    host=config['FB_V1_HOST'],
-                    port=config['FB_V1_PORT'],
-                    database=config['FB_V1_NAME'],
-                    user=config['FB_V1_USER'],
-                    password=config['FB_V1_PASS'],
-                    charset=config['FB_V1_CHARSET'])
-            else:
-                logger.print_log('----- Firebird V1 não configurado (FB_V1_HOST vazio) -----')
+            logger.print_log(f'----- Conectando destino ({target_config.adapter}) -----')
+            target = connect_adapter(target_config, 'target')
+            opened.append(target)
         except Exception as exc:
             logger.print_log('[ERRO] ' + str(exc))
             artifacts.write_manifest(
                 status='failed',
-                config=config,
-                debug_limit=None,
+                connections=connections,
                 error=str(exc),
                 output=output.describe(),
             )
-            for connection in (pg_v1_conn, pg_v2_conn, fb_v1_conn):
-                if connection is not None and hasattr(connection, 'close'):
-                    connection.close()
+            _close_adapters(opened)
             output.close()
             logger.close()
             raise
@@ -192,26 +172,18 @@ class DefaultMigrationContextFactory:
             clientdir=clientdir,
             config=config,
             artifacts=artifacts,
-            sources=_sources(pg_v1_conn, fb_v1_conn),
-            target=PostgresTargetAdapter(),
-            metadata=PostgresMetadataProvider(pg_v2_conn),
+            sources=sources,
+            target=target,
+            metadata=getattr(target, 'metadata', None),
             output=output,
             logger=logger,
             progress=progress,
-            legacy_connections={
-                'pg_v1_conn': pg_v1_conn,
-                'pg_v2_conn': pg_v2_conn,
-                'fb_v1_conn': fb_v1_conn,
-            },
+            connections=connections,
         )
 
 
-def _firebird_configured(config: dict) -> bool:
-    return bool((config.get('FB_V1_HOST') or '').strip())
-
-
-def _sources(pg_v1_conn, fb_v1_conn) -> dict:
-    sources = {'pg_v1': PostgresSourceAdapter(pg_v1_conn)}
-    if fb_v1_conn is not None:
-        sources['fb_v1'] = FirebirdSourceAdapter(fb_v1_conn)
-    return sources
+def _close_adapters(adapters):
+    for adapter in adapters:
+        close = getattr(adapter, 'close', None)
+        if close is not None:
+            close()

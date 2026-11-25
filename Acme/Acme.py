@@ -92,7 +92,7 @@ class Migracao(BaseMigration):
                 Lookup('f_region_code', self.reference_map('regions_by_code'), v2_name='f_region'),
                 Fixed('f_status', 1),
             ],
-        ).run(self.context.engine('pg_v1'))
+        ).run(self.context.source('v1'))
 
     def insert_acme_orders(self):
         self.print_log('Inserindo pedidos ficticios da Acme')
@@ -108,7 +108,7 @@ class Migracao(BaseMigration):
                 Fixed('f_create_user', 1),
                 Fixed('f_status', 1),
             ],
-        ).run(self.context.engine('pg_v1'))
+        ).run(self.context.source('v1'))
 
     def reset_sequences(self):
         self.print_log('Gerando setval para sequences ficticias')

@@ -118,7 +118,7 @@ The direct output SHALL write its report to `aplicacoes/<YYYYmmdd-HHMMSS>-<mode>
 - **AND** it does not include the password
 
 ### Requirement: Write connection does not wait for read locks
-The direct output SHALL use its own connection to the target, opened from the `PG_V2_*` keys with UTF-8 client encoding and with `idle_in_transaction_session_timeout` disabled for the session. The direct output SHALL execute statements only after target reads are closed, which ends the read transaction of the metadata provider connection, so the write connection does not wait for locks taken by reference map and trigger catalog queries.
+The direct output SHALL use its own connection to the target, opened from the `TARGET_*` keys with UTF-8 client encoding and with `idle_in_transaction_session_timeout` disabled for the session. The direct output SHALL execute statements only after target reads are closed, which ends the read transaction of the metadata provider connection, so the write connection does not wait for locks taken by reference map and trigger catalog queries.
 
 #### Scenario: Prepare phase truncates a table read by a reference map
 - **WHEN** a reference map was loaded from a table that `prepare_target` truncates

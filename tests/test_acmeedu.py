@@ -158,10 +158,9 @@ def make_migration(rows_by_table):
     context = types.SimpleNamespace(
         config={},
         artifacts=None,
-        legacy_connections={},
         output=types.SimpleNamespace(write=written.append, comment=lambda text: None),
         logger=types.SimpleNamespace(print_log=lambda line: None),
-        engine=lambda name: MigrationEngine(source, PostgresTargetAdapter(), written.append),
+        source=lambda name: MigrationEngine(source, PostgresTargetAdapter(), written.append),
         reference_map=lambda name: {'active': 1, 'on_hold': 2, 'graduated': 3, 'cancelled': 4},
         close=lambda: None,
     )
