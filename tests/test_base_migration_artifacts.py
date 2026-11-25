@@ -168,8 +168,8 @@ class BaseMigrationArtifactsTest(unittest.TestCase):
             os.makedirs(clientdir)
             self._write_env(clientdir)
 
-            with patch('core.base_migration.psycopg2.connect', return_value=FakeConnection()), \
-                 patch('core.base_migration.firebirdsql.connect', return_value=FakeConnection()):
+            with patch('core.context.psycopg2.connect', return_value=FakeConnection()), \
+                 patch('core.context.firebirdsql.connect', return_value=FakeConnection()):
                 with redirect_stdout(StringIO()):
                     migration = ArtifactMigration(clientdir)
                 self.assertEqual(migration.file.name, migration.artifacts.sql_path('setup'))
@@ -200,8 +200,8 @@ class BaseMigrationArtifactsTest(unittest.TestCase):
             os.makedirs(clientdir)
             self._write_env(clientdir)
 
-            with patch('core.base_migration.psycopg2.connect', return_value=FakeConnection()), \
-                 patch('core.base_migration.firebirdsql.connect', return_value=FakeConnection()), \
+            with patch('core.context.psycopg2.connect', return_value=FakeConnection()), \
+                 patch('core.context.firebirdsql.connect', return_value=FakeConnection()), \
                  patch('core.base_migration.subprocess.call', return_value=0) as subprocess_call:
                 with redirect_stdout(StringIO()):
                     migration = ArtifactMigration(clientdir)
@@ -217,8 +217,8 @@ class BaseMigrationArtifactsTest(unittest.TestCase):
             os.makedirs(clientdir)
             self._write_env(clientdir)
 
-            with patch('core.base_migration.psycopg2.connect', return_value=FakeConnection()), \
-                 patch('core.base_migration.firebirdsql.connect', return_value=FakeConnection()), \
+            with patch('core.context.psycopg2.connect', return_value=FakeConnection()), \
+                 patch('core.context.firebirdsql.connect', return_value=FakeConnection()), \
                  patch('core.base_migration.subprocess.call', return_value=0) as subprocess_call:
                 with redirect_stdout(StringIO()):
                     migration = ArtifactMigration(clientdir)
@@ -235,8 +235,8 @@ class BaseMigrationArtifactsTest(unittest.TestCase):
             os.makedirs(clientdir)
             self._write_env(clientdir)
 
-            with patch('core.base_migration.psycopg2.connect', return_value=FakeConnection()), \
-                 patch('core.base_migration.firebirdsql.connect', return_value=FakeConnection()):
+            with patch('core.context.psycopg2.connect', return_value=FakeConnection()), \
+                 patch('core.context.firebirdsql.connect', return_value=FakeConnection()):
                 with redirect_stdout(StringIO()):
                     migration = ArtifactMigration(clientdir)
                     migration.enable_debug(25)
@@ -256,9 +256,9 @@ class BaseMigrationArtifactsTest(unittest.TestCase):
             os.makedirs(clientdir)
             self._write_env(clientdir)
 
-            with patch('core.base_migration.psycopg2.connect',
+            with patch('core.context.psycopg2.connect',
                        side_effect=[FakeConnection(), FakeConnection(trigger_rows)]), \
-                 patch('core.base_migration.firebirdsql.connect', return_value=FakeConnection()):
+                 patch('core.context.firebirdsql.connect', return_value=FakeConnection()):
                 with redirect_stdout(StringIO()):
                     migration = FullArtifactMigration(clientdir)
                     migration.write_sql('-- setup\n')

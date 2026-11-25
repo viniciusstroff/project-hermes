@@ -160,7 +160,7 @@ class Migracao(BaseMigration):
                 Copy('f_id'),
                 Copy('f_name'),
             ],
-        ).run(self._engine)
+        ).run(self.context.engine('pg_v1'))
 
 
 # ------------------------------------------------------------------

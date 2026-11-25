@@ -10,9 +10,6 @@ import os
 import shlex
 import subprocess
 
-import firebirdsql
-import psycopg2
-
 from core.context import DefaultMigrationContextFactory
 from core.runner import MigrationRunner
 
@@ -62,47 +59,8 @@ class BaseMigration:
     def debug_limit(self, value):
         self.context.debug_limit = value
 
-    @property
-    def _log_file(self):
-        return self.context.logger._log_file
-
-    @property
-    def _tui_active(self):
-        return self.context.progress.tui_active
-
     def enable_debug(self, quantidade=100):
         self.context.enable_debug(quantidade)
-
-    @property
-    def _engine(self):
-        """Compatibility helper for the default PostgreSQL V1 source."""
-        return self.context.engine('pg_v1')
-
-    @property
-    def _fb_engine(self):
-        """Compatibility helper for the default Firebird V1 source."""
-        return self.context.engine('fb_v1')
-
-    def _log_table_progress(self, table: str, count: int, total: int = None, done: bool = False):
-        self.context.progress.log_table_progress(table, count, total, done)
-
-    def _setup_tui(self):
-        self.context.progress._setup_tui()
-
-    def _teardown_tui(self):
-        self.context.progress.teardown_tui()
-
-    def _footer_lines(self):
-        return self.context.progress.footer_lines()
-
-    def _render_progress_footer(self):
-        self.context.progress.render_footer()
-
-    def _reset_progress(self):
-        self.context.progress.reset()
-
-    def _finish_progress(self):
-        self.context.progress.finish()
 
     def _open_sql_file(self, key: str):
         self.context.output.open_phase(key)
@@ -112,9 +70,6 @@ class BaseMigration:
 
     def _flush_writes(self):
         self.context.output.flush()
-
-    def _v1_cursor(self, factory=None):
-        return self.context.sources['pg_v1'].cursor()
 
     def print_log(self, line):
         self.context.logger.print_log(line)
