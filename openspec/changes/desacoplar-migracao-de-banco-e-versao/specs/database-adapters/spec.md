@@ -56,7 +56,7 @@ Each target adapter SHALL declare whether it supports transactions, savepoints a
 - **AND** when the MongoDB target is a standalone server, it declares transactions as unsupported
 
 ### Requirement: Compatible entities are copied through the adapters
-The migration SHALL list the entities that pass without transformation in `compatible_entities()`, optionally renamed, and the core SHALL copy them in the `copy_compatible_entities` phase by reading each one from the source adapter and emitting one `Insert` per row.
+The migration SHALL list the entities that pass without transformation in `compatible_entities()` as `CopyEntity(entity, source=..., target=None)`, each one bound to a named source and optionally renamed, and the core SHALL copy them in the `copy_compatible_entities` phase by reading each one from its source adapter and emitting one `Insert` per row.
 
 #### Scenario: Copy between different databases
 - **WHEN** `compatible_entities()` returns `holidays` with a PostgreSQL source and a MongoDB target
@@ -65,6 +65,14 @@ The migration SHALL list the entities that pass without transformation in `compa
 #### Scenario: Entity not listed
 - **WHEN** a source table exists but is not returned by `compatible_entities()` nor read by a migration
 - **THEN** nothing from it reaches the target
+
+#### Scenario: Renamed entity
+- **WHEN** `compatible_entities()` returns `CopyEntity('public.cidades_v1', source='v1', target='public.cidades')`
+- **THEN** every row of `public.cidades_v1` is written to `public.cidades`
+
+#### Scenario: Debug mode
+- **WHEN** debug mode sets a limit of 5
+- **THEN** each compatible entity is copied row by row with at most 5 rows, even when a native copy is enabled
 
 ### Requirement: PostgreSQL native copy is optional and version-checked
 The PostgreSQL source adapter SHALL offer `pg_dump` as an optional native copy for the same entity list when the target is also PostgreSQL, and SHALL refuse to run it when the major version of the `pg_dump` binary is older than the source server.
@@ -76,6 +84,15 @@ The PostgreSQL source adapter SHALL offer `pg_dump` as an optional native copy f
 #### Scenario: Binary older than the server
 - **WHEN** native copy is enabled with `pg_dump` 9.6 and the source server is PostgreSQL 17
 - **THEN** the run stops before generation with an error naming both versions
+
+#### Scenario: Native copy with another target
+- **WHEN** native copy is enabled and the target adapter is not `postgres`
+- **THEN** the run stops before generation with an error naming the `NATIVE_COPY` key and the target adapter
+
+#### Scenario: Renamed entity with native copy
+- **WHEN** native copy is enabled and one compatible entity of that source is renamed
+- **THEN** `pg_dump` copies the entities that keep their name
+- **AND** the renamed entity is copied row by row, before the included `pg_dump` output
 
 ### Requirement: MongoDB adapter reads and writes documents
 The MongoDB adapter SHALL act as source and target: it SHALL translate a `SourceQuery` into `find`, run a `NativeQuery` as an aggregation pipeline, write operations as Extended JSON lines and apply them in a session transaction.

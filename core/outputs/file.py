@@ -1,3 +1,6 @@
+import shutil
+
+
 class FileOutput:
     """Writes the commands of each operation into one artifact file per phase.
 
@@ -27,6 +30,11 @@ class FileOutput:
         self._write_buffer.extend(self.target.render(operation))
         if len(self._write_buffer) >= self.buffer_size:
             self.flush()
+
+    def include_file(self, path: str):
+        self.flush()
+        with open(path, encoding='utf-8') as source:
+            shutil.copyfileobj(source, self.file)
 
     def flush(self):
         if self._write_buffer:

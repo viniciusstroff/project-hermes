@@ -15,4 +15,4 @@ Ponto de entrada:
 
 Observação importante:
 
-- O modo debug só é ativado com `--debug <quantidade>`. Sem esse parâmetro, o entry point executa `pg_dump` e gera a migração completa.
+- O modo debug só é ativado com `--debug <quantidade>`. Sem esse parâmetro, o entry point gera a migração completa, com a cópia inteira das entidades compatíveis.

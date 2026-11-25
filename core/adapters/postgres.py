@@ -1,8 +1,10 @@
 import itertools
 from typing import Any
 
+from core.adapters.pg_dump import PgDumpCopy
 from core.adapters.sql_source import SqlSourceAdapter
 from core.artifacts import ArtifactFormat
+from core.connections import ConnectionConfigError
 from core.dialects import PostgresDialect
 from core.dialects.base import UnsupportedValueError
 from core.operations import (
@@ -61,10 +63,26 @@ class PostgresSourceAdapter(SqlSourceAdapter):
         self.cursor_prefix = cursor_prefix
         self.itersize = itersize
         self.dialect = dialect or PostgresDialect()
+        # Optional native copy of compatible entities (SOURCE_<NAME>_NATIVE_COPY).
+        self.native_copy = None
 
     @classmethod
     def connect(cls, config):
-        return cls(_connect(config))
+        tool = config.get('native_copy')
+        if tool not in (None, 'pg_dump'):
+            raise ConnectionConfigError(
+                f'{config.prefix}_NATIVE_COPY={tool} não existe no adapter postgres. Use pg_dump ou deixe vazio.'
+            )
+        adapter = cls(_connect(config))
+        if tool == 'pg_dump':
+            try:
+                native = PgDumpCopy(config, binary=config.get('pg_dump', 'pg_dump'))
+                native.check_version(adapter.connection.server_version, adapter.server_version)
+            except Exception:
+                adapter.close()
+                raise
+            adapter.native_copy = native
+        return adapter
 
     @property
     def server_version(self):

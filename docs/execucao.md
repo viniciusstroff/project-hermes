@@ -32,10 +32,10 @@ O Hermes só abre as conexões declaradas no `.env` do cliente. Um cliente sem o
 ### Via entry point unificado (recomendado)
 
 ```bash
-# Migração completa: pg_dump + geração de SQL
+# Migração completa
 python3 Migracao.py Acme
 
-# Modo debug: 100 registros por tabela, sem pg_dump
+# Modo debug: 100 registros por consulta, inclusive na cópia das entidades compatíveis
 python3 Migracao.py Acme --debug 100
 
 # Debug com quantidade diferente
@@ -82,7 +82,7 @@ Após a execução, os artefatos ficam em `runs/<cliente>/<YYYYmmdd-HHMMSS>/`:
 | `logs/migration.log` | Log da geração feita pelo Python |
 | `comandos/00_setup.sql` | Arquivo inicial da execução |
 | `comandos/01_prepare_target.sql` | Limpeza da V2 e desativação de triggers |
-| `comandos/02_dump_compatible_tables.sql` | `pg_dump` das tabelas compatíveis |
+| `comandos/02_copy_compatible_entities.sql` | Cópia das entidades de `compatible_entities()`, linha a linha ou pelo `pg_dump` |
 | `comandos/03_load_transformed_data.sql` | `INSERT`s principais |
 | `comandos/04_finalize_target.sql` | `setval` e reativação de triggers |
 | `aplicacoes/<YYYYmmdd-HHMMSS>-<modo>/` | Relatório de cada aplicação no destino, criado pelo `Aplicar.py` |
@@ -183,9 +183,9 @@ Um dry run com erros termina com código 0. Confira a linha `Comandos com erro` 
 ### Cuidados
 
 - O destino fica bloqueado durante toda a aplicação, porque o `TRUNCATE` segura o lock até o fim da transação. Rode só em janela sem uso concorrente, como já acontece com a carga.
-- O aplicador recusa execuções com status diferente de `success` ou sem algum arquivo de `comandos/`. No modo debug o `02_dump_compatible_tables.sql` não existe e não é exigido.
+- O aplicador recusa execuções com status diferente de `success` ou sem algum arquivo de `comandos/`. No modo debug o `02_copy_compatible_entities.sql` também existe, com no máximo o limite de linhas por entidade.
 - Num `apply` que falha, os `setval` que já rodaram continuam valendo, porque sequences não voltam no `ROLLBACK`. As tabelas voltam ao estado anterior e a próxima carga ajusta as sequences de novo.
-- No dry run, o `nextval` dos defaults de coluna avança as sequences. A carga real corrige isso pelos `setval` do dump e do `04`.
+- No dry run, o `nextval` dos defaults de coluna avança as sequences. A carga real corrige isso pelos `setval` do `04` e também pelos do `pg_dump` quando a cópia nativa está ligada.
 - Um erro perto do fim descarta a carga inteira. Em cargas longas, rode o dry run antes, de preferência numa cópia do destino.
 
 ### Alternativa: `rodar2.sh`
@@ -203,7 +203,7 @@ O script lê os SQLs de `$RUN_DIR/comandos/`, grava logs em `$RUN_DIR/logs/` e g
 ```bash
 date ; cat "$RUN_DIR/comandos/00_setup.sql" | psql -a -h target-db -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/00_setup.sql.log" 2>&1 ; date
 date ; cat "$RUN_DIR/comandos/01_prepare_target.sql" | psql -a -h target-db -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/01_prepare_target.sql.log" 2>&1 ; date
-date ; cat "$RUN_DIR/comandos/02_dump_compatible_tables.sql" | psql -a -h target-db -d tenant -p 5432 -U tenant tenant > "$RUN_DIR/logs/02_dump_compatible_tables.sql.log" 2>&1 ; date
+date ; cat "$RUN_DIR/comandos/02_copy_compatible_entities.sql" | psql -a -h target-db -d tenant -p 5432 -U tenant tenant > "$RUN_DIR/logs/02_copy_compatible_entities.sql.log" 2>&1 ; date
 date ; cat "$RUN_DIR/comandos/03_load_transformed_data.sql" | psql -a -h target-db -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/03_load_transformed_data.sql.log" 2>&1 ; date
 date ; cat "$RUN_DIR/comandos/04_finalize_target.sql" | psql -a -h target-db -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/04_finalize_target.sql.log" 2>&1 ; date
 ```
@@ -213,7 +213,7 @@ date ; cat "$RUN_DIR/comandos/04_finalize_target.sql" | psql -a -h target-db -d 
 ```bash
 grep "ERROR:\|WARNING:" -B 5 -A 5 "$RUN_DIR/logs/04_finalize_target.sql.log" > "$RUN_DIR/erros/04_finalize_target_contexto.txt"
 grep "ERROR:\|WARNING:" -B 15 -A 15 "$RUN_DIR/logs/03_load_transformed_data.sql.log" > "$RUN_DIR/erros/03_load_transformed_data_contexto.txt"
-grep "ERROR:\|WARNING:" -B 5 -A 5 "$RUN_DIR/logs/02_dump_compatible_tables.sql.log" > "$RUN_DIR/erros/02_dump_compatible_tables_contexto.txt"
+grep "ERROR:\|WARNING:" -B 5 -A 5 "$RUN_DIR/logs/02_copy_compatible_entities.sql.log" > "$RUN_DIR/erros/02_copy_compatible_entities_contexto.txt"
 grep "ERROR:\|WARNING:" -B 5 -A 5 "$RUN_DIR/logs/01_prepare_target.sql.log" > "$RUN_DIR/erros/01_prepare_target_contexto.txt"
 ```
 

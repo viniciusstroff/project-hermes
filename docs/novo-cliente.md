@@ -85,6 +85,7 @@ _clientdir = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.dirname(_clientdir))
 
 from core.base_migration import BaseMigration
+from core.compatible import CopyEntity
 from core.queries import NativeQuery, SourceQuery
 from core.references import ReferenceMap
 from core.table_migration import TableMigration
@@ -100,16 +101,12 @@ class Migracao(BaseMigration):
     # Hooks obrigatórios
     # ------------------------------------------------------------------
 
-    def dump_ignoring_tables(self) -> list:
+    def compatible_entities(self) -> list:
+        # Tabelas que passam da V1 para a V2 sem transformação. Só o que está
+        # aqui é copiado; uma tabela nova na V1 não entra sem ser listada.
         return [
-            # tabelas que existem na V1 mas não devem ir para a V2
-            # 'public.tabela_obsoleta',
-        ]
-
-    def dump_non_existing_tables(self) -> list:
-        return [
-            # tabelas referenciadas no schema mas ausentes no Acme
-            # 'public.tabela_que_nao_existe_aqui',
+            # CopyEntity('public.feriados', source='v1'),
+            # CopyEntity('public.cidades_v1', source='v1', target='public.cidades'),
         ]
 
     def declare_reference_maps(self) -> list:
@@ -196,7 +193,7 @@ Para cada tabela da V1 que precisa ser migrada, decida a estratégia:
 
 | Situação | Abordagem |
 |---|---|
-| Tabela idêntica ou quase idêntica em V1 e V2 | `pg_dump` (lista em `dump_ignoring_tables` apenas as que *não* devem ser incluídas) |
+| Tabela idêntica em V1 e V2, talvez com outro nome | `CopyEntity` em `compatible_entities()`. Com `SOURCE_<NOME>_NATIVE_COPY=pg_dump`, as que não mudam de nome vão pelo `pg_dump` |
 | Campos renomeados, FK diferente ou dados que precisam de limpeza | `TableMigration` com estratégias |
 | Lógica condicional por linha ou múltiplas fontes | método manual que lê com `self.context.source(...).read()` e emite `Insert` |
 
@@ -241,11 +238,10 @@ Veja o passo a passo completo em [execucao.md](execucao.md).
 - [ ] `.env` criado e configurado
 - [ ] `.env.example` criado sem valores reais
 - [ ] `NomeAcme/NomeAcme.py` criado herdando `BaseMigration`
-- [ ] `dump_ignoring_tables()` revisado
-- [ ] `dump_non_existing_tables()` revisado
+- [ ] `compatible_entities()` com as tabelas que passam sem transformação
 - [ ] `declare_reference_maps()` com os mapas lidos da V2, sem SQL solto no `run_inserts()`
 - [ ] `reset_sequences()` com todas as tabelas que têm sequence
-- [ ] `run_initial()` com truncates e disables
+- [ ] `run_initial()` com `clear()` e `suspend_constraints()`
 - [ ] `run_inserts()` com todos os métodos em ordem de FK
 - [ ] Teste com `--debug 100` sem erros
 - [ ] SQL gerado revisado

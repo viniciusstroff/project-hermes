@@ -18,7 +18,7 @@ from core.apply import (
 )
 from tests.apply_fakes import (
     DEFAULT_FILES,
-    DUMP,
+    COPY,
     FINALIZE,
     LOAD,
     PREPARE,
@@ -33,7 +33,7 @@ DUPLICATE = ('duplicate key value violates unique constraint "b_pkey"\nDETAIL:  
 
 def files_with(**overrides):
     files = dict(DEFAULT_FILES)
-    names = {'setup': SETUP, 'prepare': PREPARE, 'dump': DUMP, 'load': LOAD, 'finalize': FINALIZE}
+    names = {'setup': SETUP, 'prepare': PREPARE, 'copy': COPY, 'load': LOAD, 'finalize': FINALIZE}
     for key, content in overrides.items():
         files[names[key]] = content
     return files
@@ -86,18 +86,6 @@ class PhaseOrderTest(ApplierTestCase):
         )
         self.assertEqual(len(connection.committed), 6)
 
-    def test_debug_run_without_dump_applies_other_artifacts(self):
-        files = dict(DEFAULT_FILES)
-        del files[DUMP]
-        run_dir = make_run(self.tmpdir, files, debug=True)
-        connection = FakeConnection()
-
-        report = SqlArtifactApplier(run_dir, lambda: connection).apply()
-
-        self.assertEqual(report.result, COMMITTED)
-        self.assertEqual([entry['file'] for entry in report.as_dict()['files']], [SETUP, PREPARE, LOAD, FINALIZE])
-        self.assertEqual(connection.statements().count('RESET ALL'), 4)
-
 
 class IncompleteRunTest(ApplierTestCase):
     def test_refuses_unsuccessful_generation_without_connecting(self):
@@ -112,17 +100,20 @@ class IncompleteRunTest(ApplierTestCase):
                 self.assertIn(repr(status), str(raised.exception))
                 connect.assert_not_called()
 
-    def test_refuses_full_run_without_dump(self):
-        files = dict(DEFAULT_FILES)
-        del files[DUMP]
-        run_dir = make_run(self.tmpdir, files)
-        connect = Mock()
+    def test_refuses_run_without_copy_artifact_even_in_debug(self):
+        # The copy phase always has an artifact now: debug mode copies a limited number of rows.
+        for debug in (False, True):
+            with self.subTest(debug=debug), tempfile.TemporaryDirectory() as tmpdir:
+                files = dict(DEFAULT_FILES)
+                del files[COPY]
+                run_dir = make_run(tmpdir, files, debug=debug)
+                connect = Mock()
 
-        with self.assertRaises(IncompleteRunError) as raised:
-            SqlArtifactApplier(run_dir, connect).apply()
+                with self.assertRaises(IncompleteRunError) as raised:
+                    SqlArtifactApplier(run_dir, connect).apply()
 
-        self.assertIn(DUMP, str(raised.exception))
-        connect.assert_not_called()
+                self.assertIn(COPY, str(raised.exception))
+                connect.assert_not_called()
 
     def test_refuses_directory_without_manifest(self):
         connect = Mock()
@@ -255,7 +246,7 @@ class SkippedStatementTest(ApplierTestCase):
         )
         connection = FakeConnection()
 
-        report = self.apply(connection, files=files_with(dump=dump))
+        report = self.apply(connection, files=files_with(copy=dump))
 
         self.assertEqual(report.result, COMMITTED)
         executed = connection.statements()
@@ -277,11 +268,11 @@ class SkippedStatementTest(ApplierTestCase):
         dump = 'COPY public.a (id) FROM stdin;\n1\n\\.\n'
         connection = FakeConnection()
 
-        report = self.apply(connection, files=files_with(dump=dump), mode=DRY_RUN)
+        report = self.apply(connection, files=files_with(copy=dump), mode=DRY_RUN)
 
         self.assertEqual(report.result, FAILED)
         self.assertIn('COPY ... FROM stdin não é suportado', report.failure)
-        self.assertIn(f'{DUMP}, comando 1, linha 1', report.failure)
+        self.assertIn(f'{COPY}, comando 1, linha 1', report.failure)
         self.assertEqual(connection.log[-1], '<rollback>')
 
 

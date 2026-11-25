@@ -14,7 +14,7 @@ docker compose up -d
 docker compose -f AcmeEdu/docker-compose.yml up -d
 cp AcmeEdu/.env.example AcmeEdu/.env
 
-# Teste rápido: 100 linhas por consulta, sem pg_dump, terminando em ROLLBACK
+# Teste rápido: 100 linhas por consulta, terminando em ROLLBACK
 docker exec project-hermes python3 Migracao.py AcmeEdu --debug 100 --dry-run
 
 # Carga completa: gera, aplica e confere
@@ -52,7 +52,7 @@ A AcmeEdu declara o destino e uma origem só, `v1`. Ela não usa Firebird, entã
 | `banco/v1_dados.sql` | dados gerados por aritmética sobre o número da linha, sem `random()`, então a base sai sempre igual |
 | `banco/v2_esquema.sql` | V2, PostgreSQL 16, com a tabela de domínio `student_statuses` já preenchida e a extensão `amcheck` |
 
-A V1 roda no 9.6 porque o `pg_dump` da imagem do Hermes é dessa versão e não exporta de um servidor mais novo.
+A V1 roda no 9.6, a versão da V1 real. A cópia de `holidays` é linha a linha por padrão. Com `SOURCE_V1_NATIVE_COPY=pg_dump` no `.env`, ela vai pelo `pg_dump` 9.6 da imagem do Hermes, que não exporta de servidor mais novo e por isso é conferido ao conectar.
 
 A V1 tem sujeira proposital:
 
@@ -81,7 +81,7 @@ A V2 usa nomes em inglês, sem prefixo, com chave `id`. O script ajusta as seque
 | `subjects` | `tb_disciplina` | renomeação |
 | `classes` | `tb_turma` | `2024/1` vira `year` e `term` |
 | `enrollments` | `tb_matricula` | data `AAAAMMDD` vira `date`, `85%` vira `85.00`, status vira número |
-| `holidays` | `holidays` | nenhuma; vai pelo `pg_dump` para o `02_dump_compatible_tables.sql` |
+| `holidays` | `holidays` | nenhuma; está em `compatible_entities()` e vai para o `02_copy_compatible_entities.sql` |
 
 O id de cada pessoa sai da V1, porque a geração escreve SQL sem ler o destino:
 

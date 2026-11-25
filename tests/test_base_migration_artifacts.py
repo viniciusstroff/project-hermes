@@ -1,5 +1,6 @@
 import os
 import json
+import subprocess
 import sys
 import tempfile
 import types
@@ -40,6 +41,8 @@ dotenv.dotenv_values = dotenv_values
 sys.modules.setdefault('dotenv', dotenv)
 
 from core.base_migration import BaseMigration
+from core.compatible import CopyEntity
+from core.connections import ConnectionConfigError
 from core.operations import Clear, Comment, Insert, Native, ResetIdentity, SuspendConstraints
 from core.outputs import MirrorOutput
 class FakeCursor:
@@ -149,8 +152,14 @@ class ArtifactMigration(BaseMigration):
     def reset_sequences(self):
         self.emit(Native('postgres', '-- finalize\n'))
 
-    def dump_ignoring_tables(self):
-        return ['public.acme_ignore_demo']
+
+
+class CopyMigration(BaseMigration):
+    def compatible_entities(self):
+        return [
+            CopyEntity('public.feriados', source='v1'),
+            CopyEntity('public.cidades_v1', source='v1', target='public.cidades'),
+        ]
 
 
 class BaseMigrationArtifactsTest(unittest.TestCase):
@@ -180,7 +189,8 @@ class BaseMigrationArtifactsTest(unittest.TestCase):
             commands = os.path.join(migration.artifacts.run_dir, 'comandos')
             self.assertEqual(
                 sorted(os.listdir(commands)),
-                ['00_setup.sql', '01_prepare_target.sql', '03_load_transformed_data.sql', '04_finalize_target.sql'],
+                ['00_setup.sql', '01_prepare_target.sql', '02_copy_compatible_entities.sql',
+                 '03_load_transformed_data.sql', '04_finalize_target.sql'],
             )
             self.assertFalse(os.path.exists(os.path.join(migration.artifacts.run_dir, 'sql')))
             self.assertEqual(read_file(os.path.join(commands, '01_prepare_target.sql')), '-- prepare\n')
@@ -194,41 +204,105 @@ class BaseMigrationArtifactsTest(unittest.TestCase):
             self.assertEqual(manifest['output'], {'type': 'file', 'format': 'sql'})
             self.assertEqual(
                 [artifact['path'] for artifact in manifest['artifacts']],
-                ['comandos/00_setup.sql', 'comandos/01_prepare_target.sql',
+                ['comandos/00_setup.sql', 'comandos/01_prepare_target.sql', 'comandos/02_copy_compatible_entities.sql',
                  'comandos/03_load_transformed_data.sql', 'comandos/04_finalize_target.sql'],
             )
 
-    def test_dump_tables_writes_dump_to_contextual_file(self):
+    def _copy_run(self, tmpdir, extra_env=(), debug=None, run=None, server_version=160004):
+        clientdir = os.path.join(tmpdir, 'Acme')
+        os.makedirs(clientdir)
+        with open(os.path.join(clientdir, '.env'), 'w', encoding='utf-8') as env_file:
+            env_file.write('\n'.join([*ENV_LINES, *extra_env]))
+        source = FakeConnection([{'id': 1, 'nome': 'Natal'}])
+        source.server_version = server_version
+        with patch('psycopg2.connect', side_effect=[source, FakeConnection()]), \
+             patch('firebirdsql.connect', return_value=FakeConnection()), \
+             patch('core.adapters.pg_dump.subprocess.run', side_effect=run):
+            with redirect_stdout(StringIO()):
+                migration = CopyMigration(clientdir)
+                if debug is not None:
+                    migration.enable_debug(debug)
+                migration.run()
+        migration.context.close()
+        return migration, read_file(migration.artifacts.command_path('copy_compatible_entities', 'sql'))
+
+    def test_compatible_entities_are_copied_row_by_row(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            clientdir = self._clientdir(tmpdir)
+            migration, copy_sql = self._copy_run(tmpdir)
+            with open(migration.artifacts.manifest_path, encoding='utf-8') as manifest_file:
+                manifest = json.load(manifest_file)
 
-            with patch('psycopg2.connect', return_value=FakeConnection()), \
-                 patch('firebirdsql.connect', return_value=FakeConnection()), \
-                 patch('core.base_migration.subprocess.call', return_value=0) as subprocess_call:
-                with redirect_stdout(StringIO()):
-                    migration = ArtifactMigration(clientdir)
-                    migration.dump_tables()
+        self.assertEqual(
+            copy_sql,
+            "INSERT INTO public.feriados (id, nome) VALUES (1, 'Natal');\n"
+            "INSERT INTO public.cidades (id, nome) VALUES (1, 'Natal');\n",
+        )
+        self.assertEqual(manifest['status'], 'success')
 
-            command_args = subprocess_call.call_args.args[0]
-            self.assertIn(migration.artifacts.command_path('dump_compatible_tables', 'sql'), command_args)
-            self.assertIn('public.acme_ignore_demo', command_args)
-            self.assertIn('dump_compatible_tables', [artifact['phase'] for artifact in migration.artifacts.artifacts()])
+    def test_native_copy_includes_pg_dump_output_after_the_renamed_entities(self):
+        calls = []
 
-    def test_dump_tables_runs_with_output_without_file(self):
+        def fake_run(command, **kwargs):
+            calls.append((command, kwargs))
+            if command[-1] == '--version':
+                return subprocess.CompletedProcess(command, 0, stdout='pg_dump (PostgreSQL) 16.4\n', stderr='')
+            with open(command[command.index('-f') + 1], 'w', encoding='utf-8') as dump_file:
+                dump_file.write("SELECT pg_catalog.set_config('search_path', '', false);\nINSERT INTO public.feriados VALUES (1);\n")
+            return subprocess.CompletedProcess(command, 0, stdout='', stderr='')
+
         with tempfile.TemporaryDirectory() as tmpdir:
-            clientdir = self._clientdir(tmpdir)
+            migration, copy_sql = self._copy_run(tmpdir, ['SOURCE_V1_NATIVE_COPY=pg_dump'], run=fake_run)
+            leftovers = [name for name in os.listdir(migration.artifacts.run_dir) if name.endswith('.tmp')]
 
-            with patch('psycopg2.connect', return_value=FakeConnection()), \
-                 patch('firebirdsql.connect', return_value=FakeConnection()), \
-                 patch('core.base_migration.subprocess.call', return_value=0) as subprocess_call:
-                with redirect_stdout(StringIO()):
-                    migration = ArtifactMigration(clientdir)
-                    migration.context.output = MirrorOutput(migration.context.output, RecordingOutput())
-                    self.assertIsNone(migration.file)
-                    migration.dump_tables()
-                    migration.context.close()
+        self.assertEqual(
+            copy_sql,
+            "INSERT INTO public.cidades (id, nome) VALUES (1, 'Natal');\n"
+            "SELECT pg_catalog.set_config('search_path', '', false);\nINSERT INTO public.feriados VALUES (1);\n",
+        )
+        dump_command, dump_options = calls[1]
+        self.assertEqual(dump_command[dump_command.index('-t') + 1], 'public.feriados')
+        self.assertEqual(dump_command.count('-t'), 1)
+        self.assertIn('-w', dump_command)
+        self.assertEqual(dump_options['env']['PGPASSWORD'], 'source-pass')
+        self.assertNotIn('source-pass', dump_command)
+        self.assertEqual(leftovers, [])
 
-            subprocess_call.assert_called_once()
+    def test_debug_mode_copies_row_by_row_even_with_native_copy(self):
+        def fake_run(command, **kwargs):
+            if command[-1] == '--version':
+                return subprocess.CompletedProcess(command, 0, stdout='pg_dump (PostgreSQL) 16.4\n', stderr='')
+            raise AssertionError('pg_dump não deve rodar no modo debug')
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _, copy_sql = self._copy_run(tmpdir, ['SOURCE_V1_NATIVE_COPY=pg_dump'], debug=1, run=fake_run)
+
+        self.assertIn('INSERT INTO public.feriados (id, nome)', copy_sql)
+
+    def test_pg_dump_older_than_the_server_stops_before_generation(self):
+        def fake_run(command, **kwargs):
+            return subprocess.CompletedProcess(command, 0, stdout='pg_dump (PostgreSQL) 9.6.24\n', stderr='')
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(ConnectionConfigError) as raised:
+                self._copy_run(tmpdir, ['SOURCE_V1_NATIVE_COPY=pg_dump'], run=fake_run, server_version=170002)
+
+        message = str(raised.exception)
+        self.assertIn('9.6.24', message)
+        self.assertIn('17.2', message)
+        self.assertIn('SOURCE_V1_PG_DUMP', message)
+
+    def test_unknown_native_copy_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(ConnectionConfigError) as raised:
+                self._copy_run(tmpdir, ['SOURCE_V1_NATIVE_COPY=pg_dumpall'])
+
+        self.assertIn('SOURCE_V1_NATIVE_COPY=pg_dumpall', str(raised.exception))
+
+    def test_facade_has_no_dump_helpers(self):
+        for name in ('dump_tables', 'dump_ignoring_tables', 'dump_non_existing_tables', 'dump_source'):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(BaseMigration, name))
+        self.assertEqual(BaseMigration.compatible_entities(None), [])
 
     def test_debug_mode_is_recorded_in_manifest(self):
         with tempfile.TemporaryDirectory() as tmpdir:

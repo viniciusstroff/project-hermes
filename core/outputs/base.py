@@ -19,6 +19,14 @@ class OutputAdapter(Protocol):
         """Deliver one operation to the current phase."""
         ...
 
+    def include_file(self, path: str) -> None:
+        """Append to the current phase a file of commands made outside the output.
+
+        The file is already in the format of the target adapter: the output of
+        a native copy, such as pg_dump.
+        """
+        ...
+
     def flush(self) -> None:
         """Push any buffered commands to the destination."""
         ...

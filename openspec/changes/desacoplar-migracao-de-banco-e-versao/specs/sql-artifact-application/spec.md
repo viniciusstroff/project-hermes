@@ -7,9 +7,9 @@ The applier SHALL apply the artifacts listed in the run manifest in phase order,
 - **WHEN** the applier receives a run directory generated without debug mode
 - **THEN** it executes the commands of every listed artifact in phase order in one session and one transaction
 
-#### Scenario: Debug run has no copy artifact
-- **WHEN** the run manifest records debug mode and lists no `copy_compatible_entities` artifact
-- **THEN** the applier applies the other artifacts in phase order
+#### Scenario: Debug run with a limited copy
+- **WHEN** the run manifest records debug mode
+- **THEN** the `copy_compatible_entities` artifact, with at most the debug limit of rows per entity, is applied in phase order like the others
 
 #### Scenario: MongoDB artifacts
 - **WHEN** the manifest records a `mongodb` target with `jsonl` artifacts and the target is a replica set

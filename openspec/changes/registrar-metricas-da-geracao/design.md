@@ -7,7 +7,7 @@ A geração tem dois registros:
 
 O progresso das tabelas passa por `engine.report_progress(label, count, total, done)`. `TableMigration`, `ExpandMigration` e `MultiTargetMigration` chamam esse método no início, a cada `progress_every` linhas e no fim. O `MigrationProgress` usa os números para o rodapé do terminal e para a linha "Progresso geral". Ele zera tudo em `reset()` e não guarda duração por tabela. Na `ExpandMigration`, a contagem é de linhas expandidas, não de linhas lidas da origem.
 
-O `dump_tables()` roda antes do `MigrationRunner`, chamado pelo `Migracao.py` quando a execução não é debug. O `pg_dump` grava o `02_dump_compatible_tables.sql` direto, fora do output.
+A cópia das entidades compatíveis roda dentro do `MigrationRunner`, na fase `copy_compatible_entities`. A cópia linha a linha passa pelo engine como as outras migrações. A cópia nativa (`pg_dump`) grava um arquivo à parte, que o output inclui na fase.
 
 O aplicador já tem relatório próprio em `aplicacoes/<timestamp>-<modo>/relatorio.json`, um por aplicação.
 
@@ -56,7 +56,7 @@ A change `revisar-estrategias-dependentes-de-dialeto` faz cada strategy devolver
 
    O runner informa o coletor a cada `open_phase`. A fase guarda início, fim e duração e soma as unidades que rodaram dentro dela. Em geral todas caem em `load_transformed_data`, mas nada impede uma `TableMigration` dentro do `run_initial()`.
 
-   O `dump_tables()` registra a fase `dump_compatible_tables` com duração, código de saída do `pg_dump` e tamanho do arquivo gerado. Em execução debug a fase não aparece, porque o dump não roda.
+   A fase `copy_compatible_entities` é registrada como as outras. Quando ela usa a cópia nativa, o registro ganha a duração, o código de saída do `pg_dump` e o tamanho do arquivo incluído. Em execução debug a cópia é sempre linha a linha. Cada entidade vira uma unidade.
 
 3. A strategy informa a perda pelo valor que devolve.
 
@@ -133,7 +133,7 @@ A change `revisar-estrategias-dependentes-de-dialeto` faz cada strategy devolver
 2. Criar `core/metrics.py` com coletor, unidade, fase, `LostValue` e gravação do relatório, com testes.
 3. Ligar o coletor no contexto, no engine e nas três migrations.
 4. Implementar `resolve` em `Lookup`, `DateConvert` e `EmailExtract`.
-5. Registrar as fases no runner e o dump no `dump_tables()`.
+5. Registrar as fases no runner, com a cópia nativa dentro da fase `copy_compatible_entities`.
 6. Acrescentar o nível e o `migration.jsonl` ao logger.
 7. Rodar o `AcmeEdu` completo, conferir o relatório contra o `conferir.py` e medir o tempo de geração.
 8. Documentar.

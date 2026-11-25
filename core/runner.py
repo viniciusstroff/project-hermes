@@ -1,5 +1,6 @@
 import traceback
 
+from core.compatible import copy_compatible_entities
 from core.operations import Comment, ResumeConstraints
 
 
@@ -21,6 +22,9 @@ class MigrationRunner:
 
             output.open_phase('prepare_target')
             self._call_hook('run_initial')
+
+            output.open_phase('copy_compatible_entities')
+            self._copy_compatible_entities()
 
             output.open_phase('load_transformed_data')
             self.context.progress.reset()
@@ -62,6 +66,16 @@ class MigrationRunner:
         if declarations:
             self.context.load_reference_maps(declarations)
         self.context.close_target_reads()
+
+    def _copy_compatible_entities(self):
+        hook = getattr(self.migration, 'compatible_entities', None)
+        entities = list(hook()) if hook is not None else []
+        if not entities:
+            return
+        self.context.logger.print_log('Copiando entidades compatíveis')
+        self.context.progress.reset()
+        copy_compatible_entities(self.context, entities)
+        self.context.progress.finish()
 
     def _resume_constraints(self):
         """Resume, in the last phase, every suspension emitted during the run."""

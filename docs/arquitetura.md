@@ -20,9 +20,9 @@ O `core/connections.py` lê as conexões que o `.env` do cliente declara por nom
 
 Quando dois nomes de origem começam igual, a chave fica com o nome declarado mais longo: `SOURCE_V1_LEGACY_HOST` é da origem `v1_legacy`, não da `v1`. Uma chave `SOURCE_` sem dono interrompe a execução antes de conectar.
 
-O registro em `core/adapters/registry.py` resolve o nome do adapter para a classe de origem ou de destino. Os embutidos são `postgres` (origem e destino) e `firebird` (só origem). Qualquer outro valor no formato `pacote.modulo:Classe` é importado e conferido contra o contrato do papel (`connect`, `cursor`, `scalar`, `limit_clause` e `close` na origem; `connect`, `serialize_value`, `insert_statement` e `close` no destino). Cada adapter importa o driver dentro do próprio `connect`, então um cliente só com PostgreSQL roda sem `firebirdsql`.
+O registro em `core/adapters/registry.py` resolve o nome do adapter para a classe de origem ou de destino. Os embutidos são `postgres` (origem e destino) e `firebird` (só origem). Qualquer outro valor no formato `pacote.modulo:Classe` é importado e conferido contra o contrato do papel (`connect`, `read`, `count` e `close` na origem; `connect`, `render`, `read` e `close` no destino). Cada adapter importa o driver dentro do próprio `connect`, então um cliente só com PostgreSQL roda sem `firebirdsql`.
 
-Na AcmeEdu e no Acme, a origem principal se chama `v1`. Ela é a fonte dos `SELECT`s e do `pg_dump`, enquanto a fase de dump existir (`dump_source` no `BaseMigration`, que exige o adapter `postgres`). O destino é lido para metadados como tabelas, triggers e mapas de referência. O Acme declara ainda a origem opcional `fb`, de Firebird, para algumas rotinas específicas.
+Na AcmeEdu e no Acme, a origem principal se chama `v1`. Ela é a fonte das leituras e da cópia das entidades compatíveis. O destino é lido para os mapas de referência e para a lista de tabelas da suspensão de triggers. O Acme declara ainda a origem opcional `fb`, de Firebird, para algumas rotinas específicas.
 
 ## Estrutura lógica do script
 
@@ -67,7 +67,7 @@ Componentes principais:
 
 Responsabilidades do cliente:
 
-- listar tabelas ignoradas ou ausentes no `pg_dump`;
+- listar em `compatible_entities()` as tabelas que passam sem transformação;
 - declarar SQL bruto específico do cliente quando necessário;
 - declarar migrações de tabelas, transformações, inserts e updates;
 - limpar tabelas, suspender triggers e ajustar sequences pelos atalhos da
@@ -233,8 +233,8 @@ esperaria o lock do `TRUNCATE`, que só sai no fim da transação.
 
 Esse impedimento acabou: os mapas de referência são carregados antes da
 primeira fase e as leituras do destino ficam fechadas depois disso. Continua
-valendo o outro motivo: o `02_dump_compatible_tables.sql` é gravado pelo
-`pg_dump`, fora do output.
+valendo o outro motivo para a cópia nativa: a saída do `pg_dump` é gravada
+fora do output e entra no artefato pelo `include_file()`.
 
 Aplicando a pasta da execução depois, o dump entra pela ordem dos arquivos e a
 aplicação pode rodar em outra máquina. O `GeneratedRun` resolve os arquivos a
@@ -306,7 +306,7 @@ Os artefatos ficam em `runs/<cliente>/<YYYYmmdd-HHMMSS>/`:
 - `erros/*.txt`, gravados pelo `rodar2.sh`
 - `comandos/00_setup.sql`
 - `comandos/01_prepare_target.sql`
-- `comandos/02_dump_compatible_tables.sql`
+- `comandos/02_copy_compatible_entities.sql`
 - `comandos/03_load_transformed_data.sql`
 - `comandos/04_finalize_target.sql`
 - `aplicacoes/<YYYYmmdd-HHMMSS>-<apply|dry-run>/relatorio.json` e `erros.txt`, um par por aplicação
@@ -315,7 +315,7 @@ Responsabilidade de cada artefato:
 
 - `00_setup.sql`: arquivo inicial da execução.
 - `01_prepare_target.sql`: preparação da V2, com limpeza de dados e desabilitação de triggers.
-- `02_dump_compatible_tables.sql`: saída do `pg_dump` da V1 para tabelas que podem ser carregadas em bloco.
+- `02_copy_compatible_entities.sql`: cópia das entidades de `compatible_entities()`, linha a linha ou com a saída do `pg_dump` no fim.
 - `03_load_transformed_data.sql`: carga principal e ajustes intermediários.
 - `04_finalize_target.sql`: `setval` de sequences e reativação de triggers.
 
@@ -326,8 +326,8 @@ execução na chave `artifacts`, com fase, caminho relativo e formato.
 
 O processo mistura dois modelos:
 
-- `pg_dump --column-inserts` para copiar tabelas que podem ser migradas quase como espelho.
-- `INSERT INTO ... VALUES ...` gerado em Python para tabelas que exigem mapeamento, filtros, replace, defaults ou correções.
+- cópia das entidades compatíveis, linha a linha pelos adapters ou pelo `pg_dump` quando a cópia nativa está ligada, para tabelas que passam como espelho;
+- `INSERT`s gerados em Python para tabelas que exigem mapeamento, filtros, replace, defaults ou correções.
 
 Isso existe porque parte da base V1 não é compatível diretamente com a estrutura da V2.
 
@@ -335,8 +335,7 @@ Isso existe porque parte da base V1 não é compatível diretamente com a estrut
 
 O script já incorpora decisões de compatibilidade:
 
-- exclusão de tabelas problemáticas no `pg_dump`;
-- exclusão de tabelas inexistentes no ambiente do Acme;
+- lista de inclusão das entidades compatíveis: uma tabela nova na V1 só entra se for listada;
 - limpeza prévia de tabelas da V2 para evitar `duplicate key`;
 - correções posteriores, como prefixo de `document_files.f_file` e ajustes em datas;
 - atualização de usernames com encoding inválido em IDs específicos.
@@ -349,7 +348,7 @@ Para funcionar, o ambiente precisa ter:
 - `psycopg2`
 - `firebirdsql`
 - `python-dotenv`
-- `pg_dump`
+- `pg_dump`, só com a cópia nativa ligada
 - `psql`, só para aplicar com o `rodar2.sh`
 - acesso de rede aos bancos configurados
 

@@ -15,6 +15,7 @@ _clientdir = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.dirname(_clientdir))
 
 from core.base_migration import BaseMigration
+from core.compatible import CopyEntity
 from core.multi_target_migration import MultiTargetMigration, TargetMigration
 from core.queries import NativeQuery, SourceQuery
 from core.references import ReferenceMap
@@ -159,16 +160,6 @@ def _upper_key(value):
 # Migração
 # ---------------------------------------------------------------------------
 
-LEGACY_TABLES = ['tb_curso', 'tb_professor', 'tb_disciplina', 'tb_turma', 'tb_aluno', 'tb_matricula', 'tb_log_acesso']
-LEGACY_SEQUENCES = [
-    'tb_curso_cod_curso_seq',
-    'tb_professor_cod_prof_seq',
-    'tb_disciplina_cod_disc_seq',
-    'tb_turma_cod_turma_seq',
-    'tb_aluno_cod_aluno_seq',
-    'tb_matricula_cod_matricula_seq',
-    'tb_log_acesso_cod_log_seq',
-]
 TARGET_TABLES = [
     'courses',
     'people',
@@ -231,11 +222,9 @@ class Migracao(BaseMigration):
 
     # Fase de preparação (01_prepare_target) ------------------------------
 
-    def dump_ignoring_tables(self):
-        return [f'public.{name}' for name in (*LEGACY_TABLES, *LEGACY_SEQUENCES)]
-
-    def dump_non_existing_tables(self):
-        return []
+    def compatible_entities(self):
+        # Os feriados já estão no padrão da V2: passam sem transformação.
+        return [CopyEntity('public.holidays', source='v1', order_by='id')]
 
     def declare_reference_maps(self):
         # Lido da V2 antes da primeira fase, junto com os outros mapas.
@@ -389,7 +378,7 @@ class Migracao(BaseMigration):
 
     def reset_sequences(self):
         self.print_log('Ajustando sequences')
-        self.reset_identity([f'public.{name}' for name in TARGET_TABLES], column='id')
+        self.reset_identity([f'public.{name}' for name in [*TARGET_TABLES, 'holidays']], column='id')
 
     # Apoio -------------------------------------------------------------------
 

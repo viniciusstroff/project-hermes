@@ -38,6 +38,7 @@ sys.modules.setdefault('dotenv', dotenv)
 
 from core.adapters.postgres import PostgresTargetAdapter
 from core.base_migration import BaseMigration
+from core.compatible import CopyEntity
 from core.migration_engine import MigrationEngine
 from core.operations import Comment, Insert, ResetIdentity, SuspendConstraints
 from tests.source_fakes import FakeSqlSource
@@ -270,15 +271,14 @@ class GeneratedSqlTest(unittest.TestCase):
 
 
 class PhaseSqlTest(unittest.TestCase):
-    def test_dump_skips_every_legacy_table_and_sequence(self):
+    def test_only_holidays_pass_as_compatible(self):
         migration, _, _ = make_migration({})
 
-        ignored = migration.dump_ignoring_tables()
-
-        for name in acmeedu.LEGACY_TABLES + acmeedu.LEGACY_SEQUENCES:
-            self.assertIn(f'public.{name}', ignored)
-        self.assertNotIn('public.holidays', ignored)
-        self.assertNotIn('public.holidays_id_seq', ignored)
+        self.assertEqual(
+            migration.compatible_entities(),
+            [CopyEntity('public.holidays', source='v1', order_by='id')],
+        )
+        self.assertFalse(hasattr(migration, 'dump_ignoring_tables'))
 
     def test_initial_phase_clears_targets_and_suspends_constraints(self):
         migration, _, _ = make_migration({})
@@ -300,7 +300,7 @@ class PhaseSqlTest(unittest.TestCase):
 
         self.assertEqual(
             migration.context.operations,
-            [ResetIdentity(f'public.{table}', 'id') for table in acmeedu.TARGET_TABLES],
+            [ResetIdentity(f'public.{table}', 'id') for table in [*acmeedu.TARGET_TABLES, 'holidays']],
         )
 
 

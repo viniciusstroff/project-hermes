@@ -20,19 +20,19 @@ Each `TableMigration`, `ExpandMigration` and `MultiTargetMigration` run SHALL re
 - **THEN** the unit records 250 rows read with the state `interrupted`
 
 ### Requirement: Phases record their duration and totals
-The generation SHALL record each phase opened by the runner, in opening order, with its start time, end time, duration and the totals of the units that ran inside it. The `pg_dump` step SHALL be recorded as the `dump_compatible_tables` phase with its duration, exit code and the size of the generated file.
+The generation SHALL record each phase opened by the runner, in opening order, with its start time, end time, duration and the totals of the units that ran inside it. The copy of compatible entities SHALL be recorded as the `copy_compatible_entities` phase, and a native copy inside it SHALL record its duration and exit code.
 
 #### Scenario: Units belong to the open phase
 - **WHEN** two units run while `load_transformed_data` is the open phase
 - **THEN** that phase reports the sum of their rows read and statements
 
-#### Scenario: Dump phase in a full run
-- **WHEN** a run without debug mode executes `pg_dump`
-- **THEN** the `dump_compatible_tables` phase records its duration, the `pg_dump` exit code and the size of `02_dump_compatible_tables.sql`
+#### Scenario: Copy phase with native copy
+- **WHEN** a run without debug mode copies compatible entities with `pg_dump`
+- **THEN** the `copy_compatible_entities` phase records its duration, the `pg_dump` exit code and the size of its artifact
 
-#### Scenario: Debug run without dump
-- **WHEN** a run in debug mode skips `pg_dump`
-- **THEN** no `dump_compatible_tables` phase is recorded
+#### Scenario: Debug run copies row by row
+- **WHEN** a run in debug mode copies compatible entities
+- **THEN** the `copy_compatible_entities` phase records each entity as a unit, without a native copy
 
 ### Requirement: Strategies report data loss through their value
 A field strategy SHALL report a lost source value by returning a `LostValue` from `resolve(row)`, carrying the value to write, a loss reason and a sample of the original value. The default `resolve(row)` SHALL return `raw_value(row)`, and `raw_value(row)` SHALL keep returning the plain value.
