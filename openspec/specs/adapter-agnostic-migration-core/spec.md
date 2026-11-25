@@ -80,3 +80,49 @@ The core SHALL provide adapter-first helpers for Acmes so new migration code doe
 - **WHEN** existing Acme code still depends on legacy connection attributes
 - **THEN** the default migration context keeps compatible accessors until those Acmes are migrated
 
+### Requirement: PostgreSQL dialect preserves string content
+The PostgreSQL target dialect SHALL serialize Python strings so that the value stored in the target is identical to the original string, including backslashes, regardless of the `standard_conforming_strings` setting of the session that applies the generated SQL.
+
+#### Scenario: String with backslash
+- **WHEN** a field value is the string `a\b`
+- **THEN** the dialect renders `E'a\\b'`
+- **AND** the target stores `a\b`
+
+#### Scenario: String ending with backslash
+- **WHEN** a field value ends with a backslash
+- **THEN** the rendered literal is closed by its final quote
+- **AND** the statement that follows it in the artifact is not absorbed by the literal
+
+#### Scenario: Backslash next to a quote
+- **WHEN** a field value is `O\'Neil`
+- **THEN** the dialect renders `E'O\\''Neil'`
+- **AND** the target stores `O\'Neil`
+
+#### Scenario: Text that looks like an escape sequence
+- **WHEN** a field value contains `\n`, `\x41` or `\101` as plain text
+- **THEN** the target stores those characters literally, without turning them into a line break or into `A`
+
+#### Scenario: Session with standard_conforming_strings off
+- **WHEN** the generated SQL is applied in a session with `standard_conforming_strings = off`
+- **THEN** the target stores the same value as in a session with the setting on
+
+#### Scenario: String without backslash
+- **WHEN** a field value has no backslash
+- **THEN** the dialect renders a standard `'...'` literal with doubled single quotes, unchanged from the previous behavior
+
+### Requirement: Firebird source is optional
+The default migration context SHALL connect to the Firebird V1 source only when `FB_V1_HOST` is configured with a non-empty value.
+
+#### Scenario: Firebird not configured
+- **WHEN** the client `.env` has no `FB_V1_HOST` or an empty one
+- **THEN** the default context opens the PostgreSQL V1 and V2 connections without trying a Firebird connection
+- **AND** the context has no `fb_v1` source and the legacy `fb_v1_conn` attribute is `None`
+
+#### Scenario: Engine requested for a missing source
+- **WHEN** a client calls `context.engine('fb_v1')` and Firebird is not configured
+- **THEN** the context raises an error stating that the `fb_v1` source is not configured
+
+#### Scenario: Firebird configured
+- **WHEN** the client `.env` has the `FB_V1_*` keys filled in
+- **THEN** the default context connects to Firebird and registers the `fb_v1` source as before
+
