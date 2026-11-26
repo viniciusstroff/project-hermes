@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from core.adapters.registry import resolve_adapter
-from core.application import ArtifactReadError, CapabilityError, Command, check_capabilities
+from core.application import ArtifactReadError, CapabilityError, Command, DeferredCommandError, check_capabilities
 from core.apply.report import ApplicationReport
 from core.apply.run import GeneratedRun, IncompleteRunError
 
@@ -121,23 +121,45 @@ class _Item:
 
 
 class _StopPolicy:
-    """The first failing command ends the application."""
+    """The first failing command ends the application.
+
+    A session may defer commands to run them in batches (MongoDB). The policy
+    keeps the deferred items, so a failure reported later still names the
+    command of the artifact, and counts a command as executed only when the
+    session has run it.
+    """
 
     def __init__(self, session, report: ApplicationReport, batch_size: int):
         self._session = session
         self._report = report
+        self._pending = []
 
     def execute(self, item: _Item):
-        try:
-            self._session.execute(item.command)
-        except Exception as exc:
-            self._report.record_error(item.file, item.number, item.command, exc, self._session.error_code(exc))
-            message = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
-            raise StatementFailedError(f'{item.location()}: {message}') from exc
-        self._report.record_executed(item.file)
+        self._pending.append(item)
+        self._run(lambda: self._session.execute(item.command), item)
 
     def flush(self):
-        pass
+        self._run(self._session.flush, self._pending[0] if self._pending else None)
+
+    def _run(self, call, current: _Item):
+        try:
+            call()
+        except DeferredCommandError as exc:
+            self._fail(self._pending[exc.position], exc.cause)
+        except Exception as exc:
+            if current is None:
+                raise
+            self._fail(current, exc)
+        # What the session no longer holds has run.
+        still = len(self._pending) - getattr(self._session, 'pending', 0)
+        for done in self._pending[:still]:
+            self._report.record_executed(done.file)
+        self._pending = self._pending[still:]
+
+    def _fail(self, item: _Item, exc: BaseException):
+        self._report.record_error(item.file, item.number, item.command, exc, self._session.error_code(exc))
+        message = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
+        raise StatementFailedError(f'{item.location()}: {message}') from exc
 
 
 class _ContinuePolicy:
@@ -145,7 +167,8 @@ class _ContinuePolicy:
 
     Commands run inside a savepoint per batch. When one fails, the batch
     goes back to its savepoint and is replayed one command at a time, each
-    with its own savepoint. The next command opens a new batch.
+    with its own savepoint. The next command opens a new batch. It needs
+    savepoints, so its sessions run each command when ``execute`` is called.
     """
 
     BATCH_SAVEPOINT = 'hermes_lote'

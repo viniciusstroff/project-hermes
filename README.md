@@ -18,7 +18,7 @@ Cada cliente tem um diretório com o próprio script de migração e o `.env` de
 
 Os arquivos ficam em `runs/<cliente>/<AAAAmmdd-HHMMSS>/`, junto com `manifest.json` e `logs/migration.log`. A extensão vem do adapter de destino: `.sql` no PostgreSQL. O manifesto lista cada artefato com fase, caminho e formato. Ele também registra a versão de cada servidor. O diretório `runs/` é ignorado pelo Git.
 
-O núcleo em `core/` trabalha com contratos em vez de drivers. A origem é lida por um `SourceAdapter` com consultas neutras. A migração emite operações (`Insert`, `Clear`, `SuspendConstraints`, `ResetIdentity`...). O adapter de destino traduz cada uma para o formato dele. Hoje existem adapters para PostgreSQL e Firebird. Do lado da saída há o `FileOutput` (o padrão) e o `MirrorOutput`, que repassa as mesmas operações para mais de um output. Os detalhes estão em [docs/arquitetura.md](docs/arquitetura.md).
+O núcleo em `core/` trabalha com contratos em vez de drivers. A origem é lida por um `SourceAdapter` com consultas neutras. A migração emite operações (`Insert`, `Clear`, `SuspendConstraints`, `ResetIdentity`...). O adapter de destino traduz cada uma para o formato dele. Hoje existem adapters para PostgreSQL, Firebird e MongoDB. Do lado da saída há o `FileOutput` (o padrão) e o `MirrorOutput`, que repassa as mesmas operações para mais de um output. Os detalhes estão em [docs/arquitetura.md](docs/arquitetura.md).
 
 ## Requisitos
 
@@ -55,7 +55,7 @@ TARGET_USER=tenant
 TARGET_PASS=tenant
 ```
 
-A migração pede a origem pelo nome: `self.context.source('v1')`. Os adapters embutidos são `postgres` (origem e destino) e `firebird` (só origem). Cada um exige `HOST`, `NAME` e `USER`. Um adapter de fora do core entra pelo caminho `pacote.modulo:Classe` no lugar do nome. O driver de cada banco só é importado quando uma conexão daquele adapter abre, então um cliente só com PostgreSQL não precisa do `firebirdsql`.
+A migração pede a origem pelo nome: `self.context.source('v1')`. Os adapters embutidos são `postgres` (origem e destino), `firebird` (só origem) e `mongodb` (origem e destino). O PostgreSQL e o Firebird exigem `HOST`, `NAME` e `USER`. O MongoDB exige `URI`, que fica fora do manifesto. O banco vem de `NAME` ou da própria URI. Um adapter de fora do core entra pelo caminho `pacote.modulo:Classe` no lugar do nome. O driver de cada banco só é importado quando uma conexão daquele adapter abre, então um cliente só com PostgreSQL não precisa do `firebirdsql`.
 
 O `.env` da raiz (copiado de `.env.example`) só é lido pelo Docker Compose. Nele fica `TARGET_DB_PUBLISHED_PORT`, a porta em que o PostgreSQL local aparece no host.
 
@@ -73,7 +73,7 @@ ssh -L 172.17.0.1:3050:<ip-firebird>:3050 \
 
 ```bash
 # core e os drivers dos adapters que o cliente usa
-pip install -r requirements.txt -r requirements/postgres.txt -r requirements/firebird.txt
+pip install -r requirements.txt -r requirements/postgres.txt -r requirements/firebird.txt -r requirements/mongodb.txt
 
 # migração completa
 python3 Migracao.py Acme

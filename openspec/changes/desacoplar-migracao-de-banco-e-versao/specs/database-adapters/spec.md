@@ -135,6 +135,25 @@ The MongoDB adapter SHALL act as source and target: it SHALL translate a `Source
 - **WHEN** `SuspendConstraints`, `ResumeConstraints` or `ResetIdentity` reach the MongoDB target
 - **THEN** no command is written for them
 
+#### Scenario: Connection keys
+- **WHEN** a MongoDB connection declares `TARGET_URI` and `TARGET_NAME`
+- **THEN** the adapter connects with the URI and uses the named database, or the database of the URI when `TARGET_NAME` is empty
+- **AND** the manifest records the database without the URI
+
+#### Scenario: Nested field on MongoDB
+- **WHEN** a `SourceQuery` asks a MongoDB source for `endereco.cidade`
+- **THEN** each row has the value at that path under the key `endereco.cidade`
+
+#### Scenario: Batched inserts keep their command numbers
+- **WHEN** the third insert of a batch of consecutive inserts into one collection fails with a duplicate key
+- **THEN** the application ends with result `failed` naming that command and its line
+- **AND** the report records the MongoDB error code `11000`
+- **AND** nothing of the application stays in the target
+
+#### Scenario: Transaction time limit
+- **WHEN** a MongoDB session opens
+- **THEN** the report records the `transactionLifetimeLimitSeconds` of the server when the user can read it
+
 ### Requirement: The same migration runs on different adapters
 A migration that uses only `SourceQuery`, operations and strategies SHALL run without changes when its source or its target adapter is replaced in the `.env`.
 

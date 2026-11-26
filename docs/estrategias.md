@@ -305,6 +305,14 @@ SourceQuery('public.pedidos', where={'f_status': 1, 'f_excluido': None})
 NativeQuery('postgres', 'SELECT p.cod_prof, a.cod_aluno FROM tb_professor p LEFT JOIN tb_aluno a ON a.cpf = p.cpf')
 ```
 
+Numa origem MongoDB, a `NativeQuery` é um pipeline de agregação e o `NativeField` é uma expressão de agregação. Um campo com ponto (`endereco.cidade`) é lido pelo caminho e volta com a chave `endereco.cidade`. Numa origem relacional, o campo com ponto é recusado.
+
+```python
+NativeQuery('mongodb', {'collection': 'tb_aluno', 'pipeline': [{'$match': {'situacao': 'A'}}]})
+NativeField('mongodb', {'$toUpper': '$sigla'}, 'sigla')
+SourceQuery('tb_aluno', fields=('cod_aluno', 'endereco.cidade'))
+```
+
 O modo debug (`--debug 100`) é um limite inteiro que o contexto aplica a toda consulta. Quando a consulta já tem um limite menor, vale o menor.
 
 ---

@@ -16,6 +16,10 @@ BUILTIN_ADAPTERS = {
     'firebird': {
         'source': 'core.adapters.firebird:FirebirdSourceAdapter',
     },
+    'mongodb': {
+        'source': 'core.adapters.mongodb:MongoSourceAdapter',
+        'target': 'core.adapters.mongodb:MongoTargetAdapter',
+    },
 }
 
 ROLE_METHODS = {

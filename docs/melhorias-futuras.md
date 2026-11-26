@@ -41,7 +41,7 @@ Também inclui um plano para desacoplar a forma de saída da migração. Hoje o 
 O projeto já separa o runtime de migração por adapters e providers, mas essa
 camada ainda pode evoluir para novos bancos e novos tipos de saída:
 
-- o `.env` já declara as conexões por nome e adapter, mas só existem adapters de PostgreSQL e Firebird
+- o `.env` já declara as conexões por nome e adapter, com adapters de PostgreSQL, Firebird e MongoDB
 - a saída padrão grava arquivos no formato do adapter de destino, mas só existe o formato SQL
 - novos bancos ainda exigem adapters concretos
 
@@ -86,7 +86,7 @@ Criar quatro camadas explícitas:
 
 ### Estrutura atual
 
-A estrutura e os contratos que já existem estão em [arquitetura.md](arquitetura.md). Os adapters ficam em `core/adapters/`, os dialetos em `core/dialects/`, as consultas neutras em `core/queries.py`, as operações de escrita em `core/operations.py` e os outputs em `core/outputs/`. As migrações (`TableMigration`, `ExpandMigration` e `MultiTargetMigration`) ficam na raiz de `core/`. A leitura e a escrita já não trafegam SQL. A aplicação dos artefatos passa pela sessão do adapter de destino, guiada pelas capacidades dele, mas por enquanto só existe a sessão do PostgreSQL.
+A estrutura e os contratos que já existem estão em [arquitetura.md](arquitetura.md). Os adapters ficam em `core/adapters/`, os dialetos em `core/dialects/`, as consultas neutras em `core/queries.py`, as operações de escrita em `core/operations.py` e os outputs em `core/outputs/`. As migrações (`TableMigration`, `ExpandMigration` e `MultiTargetMigration`) ficam na raiz de `core/`. A leitura e a escrita já não trafegam SQL. A aplicação dos artefatos passa pela sessão do adapter de destino, guiada pelas capacidades dele, com sessões de PostgreSQL e de MongoDB.
 
 ### O que precisa mudar
 
