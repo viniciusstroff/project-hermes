@@ -231,6 +231,7 @@ A combinação `MirrorOutput(SqlFileOutput, DirectDatabaseOutput(mode='rollback'
 - medir a política `continue` numa carga real antes de usá-la num banco com réplica
 - medir se o túnel SSH até o destino derruba a conexão ociosa numa geração longa com `--output direct`
 - medir o output direto numa carga real e decidir se vale agrupar operações para reduzir o custo por comando
+- aplicar em paralelo, por várias conexões, depois que a aplicação tiver checkpoint por etapa (ver itens 12 e 13): sem isso, uma falha deixaria parte da carga confirmada sem saber qual
 
 ### Possível configuração futura
 
@@ -579,6 +580,8 @@ O Go não deve virar a camada de regra da migração. Ele deve executar trabalho
 
 ## 12 — Adicionar paralelismo e streaming controlados
 
+A parte de paralelismo está proposta na change `paralelizar-geracao-de-tarefas-independentes`. O script do cliente declara tarefas com `@task(nome, sequence=1)`: tarefas da mesma sequência rodam juntas, em threads ou processos. O processo principal junta o resultado delas ao arquivo da fase na ordem declarada, sem mudar os artefatos. O paralelismo fica na geração. A aplicação continua numa transação até existir checkpoint na aplicação. Antes, a change `preservar-quebras-de-linha-nos-artefatos` corrige a leitura dos artefatos, que hoje troca `\r\n` por `\n` dentro dos textos.
+
 Hoje a migração é pensada como uma sequência previsível de etapas. Isso favorece rastreabilidade, mas limita desempenho em bases grandes. Futuramente, o motor pode executar partes independentes em paralelo e processar dados em streaming, sem carregar tudo em memória.
 
 ### Objetivo
@@ -626,6 +629,8 @@ O streaming deve ser tratado como contrato do `SourceAdapter` e do `ExecutionAda
 ---
 
 ## 13 — Registrar checkpoints do estado atual da migração
+
+A parte da geração está proposta na change `registrar-checkpoints-da-geracao`, que depende da de paralelismo. O nome de cada tarefa vira a identidade do checkpoint. O `checkpoint.json` guarda a posição de cada tarefa no arquivo da fase. Com `--resume`, uma geração que falhou retoma na mesma pasta, pulando as tarefas concluídas, desde que a impressão digital da execução e a contagem da origem não tenham mudado. A aplicação continua tudo ou nada: checkpoint na aplicação fica para depois.
 
 Uma migração longa não deve precisar começar do zero depois de uma falha operacional. O projeto pode evoluir para registrar checkpoints confiáveis por fase, tabela e batch.
 
