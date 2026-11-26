@@ -23,7 +23,8 @@ O núcleo em `core/` trabalha com contratos em vez de drivers. A origem é lida 
 ## Requisitos
 
 - Python 3.12 (a versão da imagem Docker)
-- `pg_dump` da versão principal do PostgreSQL da V1 ou mais novo, só para quem liga a cópia nativa (`SOURCE_<NOME>_NATIVE_COPY=pg_dump`). A imagem instala o cliente 9.6
+- `pg_dump` da versão principal do PostgreSQL da V1 ou mais novo, só para quem liga a cópia nativa (`SOURCE_<NOME>_NATIVE_COPY=pg_dump`). A imagem só instala o cliente com o argumento de build `PG_CLIENT_VERSION`
+- servidores dentro da faixa de cada adapter: PostgreSQL 9.6 ou mais novo como origem e 12 ou mais novo como destino, Firebird 2.5 ou mais novo como origem
 - `psql`, só se for aplicar os arquivos pelo `rodar2.sh`
 - acesso de rede aos bancos de origem, em geral por túnel SSH
 - Docker e Docker Compose, se quiser rodar em container ou subir um destino local
@@ -71,7 +72,8 @@ ssh -L 172.17.0.1:3050:<ip-firebird>:3050 \
 ### Local
 
 ```bash
-pip install -r requirements.txt
+# core e os drivers dos adapters que o cliente usa
+pip install -r requirements.txt -r requirements/postgres.txt -r requirements/firebird.txt
 
 # migração completa
 python3 Migracao.py Acme
@@ -88,6 +90,8 @@ Sem número, `--debug` usa 100 linhas.
 docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
 docker exec -it project-hermes python3 Migracao.py Acme
 ```
+
+A imagem instala os drivers de todos os adapters e não traz `pg_dump` nem `psql`. Para a cópia nativa ou o `rodar2.sh`, construa com o cliente da versão que precisar, por exemplo `PG_CLIENT_VERSION=17 docker compose build`, ou ponha `PG_CLIENT_VERSION` no `.env` da raiz.
 
 O segundo arquivo de compose sobe um PostgreSQL 16 como destino. Dentro da rede `hermes-net` ele responde em `target-db:5432`. No host, aparece na porta definida em `TARGET_DB_PUBLISHED_PORT`. Para usar outro destino basta não incluir esse arquivo e apontar as chaves `TARGET_*` do `.env` do cliente para o banco desejado.
 

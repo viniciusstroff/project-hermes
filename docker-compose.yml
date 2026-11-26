@@ -6,6 +6,9 @@ services:
   app:
     build:
       context: ./
+      args:
+        # Vazio: imagem sem pg_dump nem psql. Veja o Dockerfile.
+        PG_CLIENT_VERSION: ${PG_CLIENT_VERSION:-}
     container_name: project-hermes
     volumes:
       - ./:/home/project-hermes

@@ -52,6 +52,10 @@ class FakeCursor:
     def execute(self, sql):
         self.executed_sql = sql
 
+    def fetchone(self):
+        # Only the version queries call it here; None means a server without version.
+        return None
+
     def __iter__(self):
         return iter(self.rows)
 

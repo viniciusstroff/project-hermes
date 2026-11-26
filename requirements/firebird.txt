@@ -1,0 +1,2 @@
+# Driver do adapter firebird (origem).
+firebirdsql==1.2.2

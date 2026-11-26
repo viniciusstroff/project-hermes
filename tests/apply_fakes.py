@@ -54,6 +54,14 @@ def session_of(connection):
     return lambda: PostgresSession(connection)
 
 
+# Parameters of a PostgreSQL 16 server that pg_dump sets in its header.
+SERVER_PARAMETERS = frozenset({
+    'check_function_bodies', 'client_encoding', 'client_min_messages', 'default_table_access_method',
+    'default_tablespace', 'idle_in_transaction_session_timeout', 'lock_timeout', 'row_security',
+    'search_path', 'standard_conforming_strings', 'statement_timeout', 'xmloption',
+})
+
+
 class FakeDatabaseError(Exception):
     def __init__(self, message, pgcode=None):
         super().__init__(message)
@@ -77,11 +85,14 @@ class FakeConnection:
         interrupt_on=None,
         commit_error=None,
         standard_conforming_strings='on',
+        parameters=None,
     ):
         self.failures = failures or {}
         self.interrupt_on = interrupt_on
         self.commit_error = commit_error
         self.standard_conforming_strings = standard_conforming_strings
+        # What SHOW ALL lists: the parameters of this server.
+        self.parameters = SERVER_PARAMETERS if parameters is None else parameters
         self.log = []
         self.pending = []
         self.committed = []
@@ -165,9 +176,14 @@ class FakeCursor:
         self.connection.execute(sql)
         if sql == 'SHOW standard_conforming_strings':
             self._row = (self.connection.standard_conforming_strings,)
+        elif sql == 'SHOW ALL':
+            self._rows = [(name, '', '') for name in sorted(self.connection.parameters)]
 
     def fetchone(self):
         return self._row
+
+    def fetchall(self):
+        return self._rows
 
 
 class Clock:

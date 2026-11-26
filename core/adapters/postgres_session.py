@@ -4,6 +4,11 @@ Everything the applier does that only makes sense in PostgreSQL lives here:
 splitting ``.sql`` artifacts with the server lexical rules, the statements
 that are counted instead of executed, ``RESET ALL`` between artifacts,
 savepoints and the ``SQLSTATE`` of an error.
+
+It is also where versions meet: a pg_dump newer than the target writes
+settings the target does not have, such as ``transaction_timeout`` (17) on a
+16 server. The session reads the parameters of the server once and skips a
+``SET`` or ``set_config`` of a parameter the server does not know.
 """
 
 import re
@@ -16,6 +21,10 @@ CAPABILITIES = Capabilities(transactions=True, savepoints=True, suspend_constrai
 _TRANSACTION_CONTROL = re.compile(r'(?:BEGIN|START\s+TRANSACTION|COMMIT|END|ROLLBACK|ABORT)\b', re.IGNORECASE)
 _SEQUENCE_CHANGE = re.compile(r'SELECT\s+(?:pg_catalog\s*\.\s*)?setval\s*\(', re.IGNORECASE)
 _COPY_FROM_STDIN = re.compile(r'COPY\b.*\bFROM\s+STDIN\b', re.IGNORECASE | re.DOTALL)
+# SET [SESSION | LOCAL] name = value / TO value. SET TIME ZONE, SET ROLE and
+# SET TRANSACTION do not match, because no "=" or TO follows the first word.
+_SET_PARAMETER = re.compile(r'SET\s+(?:SESSION\s+|LOCAL\s+)?([A-Za-z_][\w.]*)\s*(?:=|TO\b)', re.IGNORECASE)
+_SET_CONFIG = re.compile(r"SELECT\s+(?:pg_catalog\s*\.\s*)?set_config\s*\(\s*'([^']+)'", re.IGNORECASE)
 
 
 class PostgresSession:
@@ -27,6 +36,7 @@ class PostgresSession:
         self.connection = connection
         self._cursor = None
         self._standard_conforming_strings = None
+        self._parameters = None
 
     def describe(self) -> dict:
         # get_dsn_parameters() already leaves the password out. Picking the
@@ -50,10 +60,12 @@ class PostgresSession:
         self._cursor = self.connection.cursor()
         self._cursor.execute('SHOW standard_conforming_strings')
         self._standard_conforming_strings = self._cursor.fetchone()[0] == 'on'
+        self._cursor.execute('SHOW ALL')
+        self._parameters = {row[0].lower() for row in self._cursor.fetchall()}
 
     def commands(self, path: str, dry_run: bool):
         for statement in split_sql_file(path, standard_conforming_strings=self._standard_conforming_strings):
-            yield _command(statement, dry_run)
+            yield _command(statement, dry_run, self._parameters)
 
     def execute(self, command: Command):
         self._cursor.execute(command.text)
@@ -85,10 +97,14 @@ class PostgresSession:
         self.connection.close()
 
 
-def _command(statement, dry_run: bool) -> Command:
+def _command(statement, dry_run: bool, parameters) -> Command:
     text = statement.text
     if statement.kind == META_COMMAND:
         return Command(text, statement.line, skip='meta_command')
+    # A setting of a newer server version would fail the whole application.
+    parameter = _set_parameter(text)
+    if parameter is not None and parameters is not None and parameter.lower() not in parameters:
+        return Command(text, statement.line, skip='unknown_setting')
     # A COMMIT from pg_dump around large objects would end the transaction early.
     if _TRANSACTION_CONTROL.match(text):
         return Command(text, statement.line, skip='transaction_control')
@@ -103,3 +119,10 @@ def _command(statement, dry_run: bool) -> Command:
                   'Gere o dump com --column-inserts.',
         )
     return Command(text, statement.line)
+
+
+def _set_parameter(text: str):
+    """Parameter changed by a SET or set_config statement, or None for any other statement."""
+
+    match = _SET_PARAMETER.match(text) or _SET_CONFIG.match(text)
+    return match.group(1) if match else None

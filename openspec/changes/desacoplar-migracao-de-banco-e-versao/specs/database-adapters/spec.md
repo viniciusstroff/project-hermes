@@ -47,6 +47,31 @@ Each adapter SHALL read the server version when it connects, SHALL declare the r
 - **WHEN** a run starts
 - **THEN** `manifest.json` records, for each source and for the target, the adapter name and the server version, without passwords
 
+#### Scenario: Target older than its range
+- **WHEN** the target is PostgreSQL 11
+- **THEN** the run stops before generation stating that the `postgres` adapter accepts targets from version 12
+
+#### Scenario: Firebird version
+- **WHEN** a Firebird source connects
+- **THEN** the adapter reads `ENGINE_VERSION` and refuses a server older than 2.5
+- **AND** a server that cannot report its version is refused with the connection named in the message
+
+### Requirement: Drivers and client tools are installed per adapter
+The core requirements SHALL NOT include database drivers. Each adapter SHALL list its driver in `requirements/<adapter>.txt`, and the Hermes image SHALL install the PostgreSQL client tools only when the `PG_CLIENT_VERSION` build argument names a major version.
+
+#### Scenario: Client with PostgreSQL only
+- **WHEN** a client installs `requirements.txt` and `requirements/postgres.txt`
+- **THEN** generation and application run without `firebirdsql`
+
+#### Scenario: Image without client tools
+- **WHEN** the image is built without `PG_CLIENT_VERSION`
+- **THEN** it has the drivers of every adapter and no `pg_dump` nor `psql`
+- **AND** a source with `NATIVE_COPY=pg_dump` stops before generation stating that the binary does not run
+
+#### Scenario: Image with a newer client
+- **WHEN** the image is built with `PG_CLIENT_VERSION=17` and the source server is PostgreSQL 9.6
+- **THEN** the native copy runs, because a newer `pg_dump` exports from an older server
+
 ### Requirement: Adapters declare capabilities
 Each target adapter SHALL declare whether it supports transactions, savepoints and constraint suspension, and the core SHALL decide what it can do from these capabilities instead of from the adapter name.
 

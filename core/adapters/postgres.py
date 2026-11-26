@@ -21,6 +21,7 @@ from core.operations import (
 from core.queries import NativeAdapterMismatchError
 from core.references import TargetReadClosedError
 from core.sql import SqlLiteral
+from core.versions import check_server_version, postgres_version, version_text
 
 _cursor_counter = itertools.count(1)
 
@@ -48,6 +49,8 @@ class PostgresSourceAdapter(SqlSourceAdapter):
     """PostgreSQL source. Rows stream through a named (server-side) cursor."""
 
     name = 'postgres'
+    # The real V1 runs 9.6.
+    supported_versions = (9, 6)
 
     def __init__(
         self,
@@ -79,14 +82,18 @@ class PostgresSourceAdapter(SqlSourceAdapter):
                 f'{config.prefix}_NATIVE_COPY={tool} não existe no adapter postgres. Use pg_dump ou deixe vazio.'
             )
         adapter = cls(_connect(config))
-        if tool == 'pg_dump':
-            try:
+        try:
+            check_server_version(
+                config.prefix, cls.name, 'source', postgres_version(getattr(adapter.connection, 'server_version', None)),
+                cls.supported_versions,
+            )
+            if tool == 'pg_dump':
                 native = PgDumpCopy(config, binary=config.get('pg_dump', 'pg_dump'))
                 native.check_version(adapter.connection.server_version, adapter.server_version)
-            except Exception:
-                adapter.close()
-                raise
-            adapter.native_copy = native
+                adapter.native_copy = native
+        except Exception:
+            adapter.close()
+            raise
         return adapter
 
     @property
@@ -136,6 +143,8 @@ class PostgresTargetAdapter:
     artifact_format = ArtifactFormat('sql', 'sql')
     capabilities = CAPABILITIES
     required_parameters = REQUIRED_PARAMETERS
+    # pg_get_serial_sequence and the catalog queries of the target.
+    supported_versions = (12,)
 
     def __init__(self, dialect=None, connection=None):
         self.dialect = dialect or PostgresDialect()
@@ -146,7 +155,16 @@ class PostgresTargetAdapter:
 
     @classmethod
     def connect(cls, config):
-        return cls(connection=_connect(config))
+        adapter = cls(connection=_connect(config))
+        try:
+            check_server_version(
+                config.prefix, cls.name, 'target', postgres_version(getattr(adapter.connection, 'server_version', None)),
+                cls.supported_versions,
+            )
+        except Exception:
+            adapter.close()
+            raise
+        return adapter
 
     @property
     def server_version(self):
@@ -281,10 +299,5 @@ class PostgresTargetAdapter:
 def _server_version(connection):
     """Version text from the libpq number: 90624 is 9.6.24 and 160004 is 16.4."""
 
-    number = getattr(connection, 'server_version', None)
-    if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
-        return None
-    major = number // 10000
-    if major >= 10:
-        return f'{major}.{number % 10000}'
-    return f'{major}.{(number // 100) % 100}.{number % 100}'
+    version = postgres_version(getattr(connection, 'server_version', None))
+    return version_text(version) if version else None
