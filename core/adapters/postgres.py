@@ -174,9 +174,9 @@ class PostgresTargetAdapter:
         if self.connection is not None:
             self.connection.close()
 
-    def session(self):
+    def session(self, waits_between_commands: bool = False):
         """Application session over the target connection. Closing it closes the connection."""
-        return PostgresSession(self.connection)
+        return PostgresSession(self.connection, waits_between_commands=waits_between_commands)
 
     # Reading ---------------------------------------------------------------
 

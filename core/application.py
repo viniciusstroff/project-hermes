@@ -8,7 +8,7 @@ is) lives in the session of the adapter.
 """
 
 from dataclasses import dataclass
-from typing import Any, Iterator, Protocol
+from typing import Any, Iterable, Iterator, Protocol
 
 
 @dataclass(frozen=True)
@@ -76,8 +76,14 @@ class TargetSession(Protocol):
         """Adapter and connection of the session, without password, for the report."""
         ...
 
-    def commands(self, path: str, dry_run: bool) -> Iterator[Command]:
-        """Read the commands of an artifact in the format of the adapter."""
+    def commands(self, lines: Iterable[str], dry_run: bool, first_line: int = 1, source: str = None) -> Iterator[Command]:
+        """Read commands, in the format of the adapter, from lines that keep their line endings.
+
+        The lines may be an open artifact file or text rendered in memory.
+        ``first_line`` numbers the first line, so a text that starts in the
+        middle of a phase keeps the line numbers of the phase file.
+        ``source`` names the input in read errors.
+        """
         ...
 
     def begin(self) -> None: ...

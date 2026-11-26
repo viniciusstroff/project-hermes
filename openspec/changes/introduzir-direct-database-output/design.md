@@ -85,6 +85,8 @@ Depois da `desacoplar-migracao-de-banco-e-versao`, a geração e a aplicação f
 
    A diferença que sobra é o tempo de lock. No output direto, o `TRUNCATE` da fase `prepare_target` segura as tabelas durante toda a geração.
 
+   Há um caso em que os dois caminhos divergem: um `Native` cujo texto não termina em `;`. No arquivo, ele se junta ao comando da operação seguinte. No output direto, cada operação é lida sozinha e o texto roda como um comando. A documentação pede para terminar os comandos de um `Native` com `;`.
+
 9. Relatório e manifesto.
 
    O output usa o mesmo `ApplicationReport`, em `aplicacoes/<YYYYmmdd-HHMMSS>-<modo>/`. O `relatorio.json` ganha a chave `source`, com `generation` no output direto e `artifacts` no aplicador.
@@ -117,6 +119,7 @@ Depois da `desacoplar-migracao-de-banco-e-versao`, a geração e a aplicação f
 - Cliente que lê o destino pelo driver do adapter (`context.target.connection`) no meio da geração fica parado esperando o lock. O `read()` do adapter já recusa leituras depois do `close_reads()`, então isso só acontece fora do contrato -> documentar.
 - Estouro do cache de subtransações com `continue` -> o mesmo do aplicador. Medir numa carga real.
 - Erro perto do fim descarta a carga inteira -> é o preço da transação única, igual ao do aplicador.
+- O output direto é mais lento que gerar e aplicar em sequência. Na AcmeEdu, num PostgreSQL local, `direct --apply` levou 5,2 s e gerar e aplicar em sequência levou 3,7 s. Na execução `hybrid`, a fase `03` levou 5,6 s com a geração junto, contra 2,8 s do `Aplicar.py` sobre o mesmo arquivo. O perfil mostra o tempo no `execute` do driver intercalado com a geração e na leitura de cada operação em separado. Agrupar operações reduziria o custo, mas tiraria a garantia de o comando rodar antes de o `write()` retornar. Fica para depois de uma medição numa carga real.
 
 ## Migration Plan
 
@@ -132,7 +135,7 @@ Rollback: reverter os commits. O padrão `file` e o `Aplicar.py` não mudam de c
 
 ## Open Questions
 
-- Vale manter `direct` sem arquivos ou só oferecer `hybrid`? Sem arquivos não dá para auditar nem reaplicar os comandos depois. O ganho é o espaço em disco do `03`.
+- Vale manter `direct` sem arquivos ou só oferecer `hybrid`? Os dois foram implementados. Sem arquivos não dá para auditar nem reaplicar os comandos depois. O ganho é o espaço em disco do `03`.
 - O túnel SSH usado para chegar ao destino (`docs/execucao.md`) derruba conexão ociosa? Se derrubar, o `direct` só deve ser usado de dentro da rede do destino. Precisa medir com uma geração longa antes de recomendar.
-- O ganho compensa? Sem paralelismo, o tempo total fica perto de gerar e aplicar em sequência. A falha antecipada e o disco são os ganhos certos. O tempo precisa ser medido numa carga real.
-- `--debug` com `--output direct --apply` grava uma carga parcial no destino. Essa combinação deve ser recusada? Hoje `--debug --apply` sobre arquivos já é permitido.
+- O ganho compensa? Na AcmeEdu o tempo total ficou maior que gerar e aplicar em sequência (ver Risks). A falha antecipada e o disco são os ganhos certos. O tempo precisa ser medido numa carga real.
+- `--debug` com `--output direct --apply` grava uma carga parcial no destino. Essa combinação deve ser recusada? Por ora ela é permitida, como `--debug --apply` sobre arquivos. A documentação avisa.

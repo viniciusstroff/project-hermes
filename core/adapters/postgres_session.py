@@ -13,7 +13,7 @@ settings the target does not have, such as ``transaction_timeout`` (17) on a
 
 import re
 
-from core.adapters.postgres_splitter import META_COMMAND, split_sql_file
+from core.adapters.postgres_splitter import META_COMMAND, split_sql, standard_conforming_strings_after
 from core.application import Capabilities, Command
 
 CAPABILITIES = Capabilities(transactions=True, savepoints=True, suspend_constraints=True)
@@ -34,9 +34,14 @@ class PostgresSession:
     # Every command runs when execute() is called.
     pending = 0
 
-    def __init__(self, connection):
+    def __init__(self, connection, waits_between_commands: bool = False):
         self.connection = connection
+        # The direct output takes time between commands: the server must not
+        # end the session for being idle inside the transaction.
+        self.waits_between_commands = waits_between_commands
         self._cursor = None
+        # Value of the server, and value after the commands read so far.
+        self._server_standard_conforming_strings = None
         self._standard_conforming_strings = None
         self._parameters = None
 
@@ -61,12 +66,24 @@ class PostgresSession:
         self.connection.autocommit = False
         self._cursor = self.connection.cursor()
         self._cursor.execute('SHOW standard_conforming_strings')
-        self._standard_conforming_strings = self._cursor.fetchone()[0] == 'on'
+        self._server_standard_conforming_strings = self._cursor.fetchone()[0] == 'on'
+        self._standard_conforming_strings = self._server_standard_conforming_strings
         self._cursor.execute('SHOW ALL')
         self._parameters = {row[0].lower() for row in self._cursor.fetchall()}
+        self._keep_idle_session()
 
-    def commands(self, path: str, dry_run: bool):
-        for statement in split_sql_file(path, standard_conforming_strings=self._standard_conforming_strings):
+    def commands(self, lines, dry_run: bool, first_line: int = 1, source: str = None):
+        statements = split_sql(
+            lines,
+            source=source or '<sql>',
+            standard_conforming_strings=self._standard_conforming_strings,
+            first_line=first_line,
+        )
+        for statement in statements:
+            # A later call reads with the setting this text left, as one file would.
+            self._standard_conforming_strings = standard_conforming_strings_after(
+                statement.text, self._standard_conforming_strings, self._server_standard_conforming_strings,
+            )
             yield _command(statement, dry_run, self._parameters)
 
     def execute(self, command: Command):
@@ -88,6 +105,13 @@ class PostgresSession:
         # Each artifact used to run in its own psql session. Settings changed
         # by one (search_path from pg_dump) must not reach the next.
         self._cursor.execute('RESET ALL')
+        self._standard_conforming_strings = self._server_standard_conforming_strings
+        self._keep_idle_session()
+
+    def _keep_idle_session(self):
+        # SET, not a connection option: RESET ALL undoes it, so it runs again after each one.
+        if self.waits_between_commands:
+            self._cursor.execute('SET idle_in_transaction_session_timeout = 0')
 
     def commit(self):
         self.connection.commit()

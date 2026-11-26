@@ -1,18 +1,67 @@
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 
 from dotenv import dotenv_values
 
 from core.adapters.registry import connect_adapter
+from core.apply.cli import session_opener, target_label
 from core.artifacts import ArtifactManager
 from core.connections import ConnectionConfigError, parse_connections
 from core.metrics import GENERATION_REPORT, GenerationMetrics
 from core.migration_engine import MigrationEngine
 from core.operations import SuspendConstraints
-from core.outputs import FileOutput, OutputAdapter
+from core.outputs import FileOutput, MirrorOutput, OutputAdapter
+from core.outputs.direct import DirectDatabaseOutput
 from core.references import ReferenceMap, ReferenceMapError, build_reference_map, reference_pairs, reference_query
 from core.runtime import MigrationLogger, MigrationProgress
+
+
+FILE_OUTPUT = 'file'
+DIRECT_OUTPUT = 'direct'
+HYBRID_OUTPUT = 'hybrid'
+OUTPUTS = (FILE_OUTPUT, DIRECT_OUTPUT, HYBRID_OUTPUT)
+
+
+@dataclass(frozen=True)
+class OutputSettings:
+    """Output chosen on the command line.
+
+    ``direct`` and ``hybrid`` run the commands on the target during the
+    generation, so they need the mode (``apply`` or ``dry-run``). There is
+    no default that writes to the target.
+    """
+
+    output: str = FILE_OUTPUT
+    mode: str = None
+    on_error: str = None
+
+    def __post_init__(self):
+        if self.output not in OUTPUTS:
+            raise ValueError(f'output inválido: {self.output!r}. Use {", ".join(OUTPUTS)}.')
+        if self.output != FILE_OUTPUT and self.mode is None:
+            raise ValueError(f'o output {self.output} executa no destino e precisa do modo: apply ou dry-run.')
+
+
+_OUTPUT_SETTINGS = ContextVar('hermes_output_settings', default=OutputSettings())
+
+
+@contextmanager
+def output_settings(settings: OutputSettings):
+    """Output used by the contexts built inside the block.
+
+    ``Migracao.py`` builds the client inside it, so the client constructor
+    (``super().__init__(_clientdir)``) does not change. Outside it, the
+    factory uses the file output.
+    """
+
+    token = _OUTPUT_SETTINGS.set(settings)
+    try:
+        yield settings
+    finally:
+        _OUTPUT_SETTINGS.reset(token)
 
 
 class SourceNotConfiguredError(LookupError):
@@ -203,7 +252,7 @@ class DefaultMigrationContextFactory:
             _check_native_copies(source_configs, sources, target)
 
             # The artifact format, and so the file extension, comes from the target adapter.
-            output = FileOutput(artifacts, target)
+            output = _build_output(_OUTPUT_SETTINGS.get(), artifacts, target, target_config, logger)
             metrics.open_phase('setup')
             output.open_phase('setup')
         except Exception as exc:
@@ -232,6 +281,25 @@ class DefaultMigrationContextFactory:
             connections=connections,
             metrics=metrics,
         )
+
+
+def _build_output(settings: OutputSettings, artifacts, target, target_config, logger):
+    if settings.output == FILE_OUTPUT:
+        return FileOutput(artifacts, target)
+    direct = DirectDatabaseOutput(
+        target,
+        # Its own connection, opened when prepare_target opens.
+        session_opener(type(target), target_config, waits_between_commands=True),
+        artifacts.run_dir,
+        settings.mode,
+        settings.on_error,
+        log=logger.print_log,
+        target_label=target_label(target_config),
+    )
+    if settings.output == DIRECT_OUTPUT:
+        return direct
+    # The file first: it keeps the operation that failed on the target.
+    return MirrorOutput(FileOutput(artifacts, target), direct)
 
 
 def _check_native_copies(source_configs, sources, target):

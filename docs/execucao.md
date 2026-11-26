@@ -66,9 +66,17 @@ python3 Migracao.py Acme --dry-run
 
 # Gera e aplica no destino
 python3 Migracao.py Acme --apply
+
+# Grava os arquivos e valida no destino durante a geração
+python3 Migracao.py Acme --output hybrid --dry-run
+
+# Carrega no destino durante a geração, sem arquivos de comandos
+python3 Migracao.py Acme --output direct --apply
 ```
 
 Com `--apply` ou `--dry-run`, o `Migracao.py` aplica a execução que acabou de gerar no banco das chaves `TARGET_*` do `.env`, o mesmo que a geração consulta. A aplicação só começa se a geração terminou com status `success`. Ela funciona como o `Aplicar.py`, descrito em [Aplicando os SQLs no destino](#aplicando-os-sqls-no-destino). O `--on-error` também vale aqui.
+
+Com `--output direct` ou `hybrid`, os comandos rodam no destino durante a geração e nada é aplicado depois. Ver [Executando no destino durante a geração](#executando-no-destino-durante-a-geração).
 
 ### Via Docker
 
@@ -252,6 +260,50 @@ Um dry run com erros termina com código 0. Confira a linha `Comandos com erro` 
 - Num `apply` que falha, os `setval` que já rodaram continuam valendo, porque sequences não voltam no `ROLLBACK`. As tabelas voltam ao estado anterior e a próxima carga ajusta as sequences de novo.
 - No dry run, o `nextval` dos defaults de coluna avança as sequences. A carga real corrige isso pelos `setval` do `04` e também pelos do `pg_dump` quando a cópia nativa está ligada.
 - Um erro perto do fim descarta a carga inteira. Em cargas longas, rode o dry run antes, de preferência numa cópia do destino.
+
+---
+
+## Executando no destino durante a geração
+
+O `--output` escolhe para onde vão os comandos:
+
+| `--output` | Arquivos em `comandos/` | Comandos no destino |
+|---|---|---|
+| `file` (padrão) | sim | depois da geração, só com `--apply` ou `--dry-run` |
+| `direct` | não | durante a geração |
+| `hybrid` | sim | durante a geração |
+
+`--apply` e `--dry-run` dizem como a transação termina no destino, em qualquer output. Com `file`, elas aplicam os arquivos depois da geração, como o `Aplicar.py`. Com `direct` ou `hybrid`, elas são obrigatórias: não existe padrão que escreva no destino sem ninguém pedir. O `--on-error` vale nos três, com os mesmos padrões do aplicador. A escolha não vai para o `.env`, para que uma execução nunca escreva no destino sem estar na linha de comando.
+
+```bash
+# Valida contra o destino e grava os arquivos para auditoria
+python3 Migracao.py AcmeEdu --output hybrid --dry-run
+
+# Mesma validação, parando no primeiro erro
+python3 Migracao.py AcmeEdu --output hybrid --dry-run --on-error stop
+
+# Carga, sem os arquivos de comandos
+python3 Migracao.py AcmeEdu --output direct --apply
+```
+
+Cada operação vai para o destino antes de a geração seguir, pela mesma sessão do adapter que o `Aplicar.py` usa, com as mesmas regras de comandos pulados. Numa transação só: no `apply` ela termina em `COMMIT`, no `dry-run` em `ROLLBACK`. Numa falha ou interrupção, nada fica no destino. Com `stop`, o primeiro comando com erro derruba a geração na hora, com a fase, o número do comando e a linha que ele teria no arquivo. O relatório vai para `aplicacoes/<timestamp>-<modo>/`, como no aplicador, com `"source": "generation"` no `relatorio.json`. O manifesto descreve o output com o modo, a política e a pasta do relatório.
+
+A sessão de escrita usa uma conexão própria, aberta só quando a fase `prepare_target` começa, depois de os mapas de referência carregarem. No PostgreSQL, ela desliga o `idle_in_transaction_session_timeout` da sessão, porque passa a geração inteira esperando o Python entre um comando e outro.
+
+### Quando usar
+
+- `hybrid --dry-run` mostra os erros contra o destino numa execução só e ainda deixa os arquivos para auditar ou aplicar depois.
+- `direct --apply` evita gravar o `03_load_transformed_data` em disco, que num cliente grande ocupa gigabytes. Sem arquivos, não dá para auditar nem reaplicar a carga depois. Para isso, use `hybrid`.
+- O tempo não cai. Na AcmeEdu, num PostgreSQL local, `direct --apply` levou 5,2 s e gerar e aplicar em sequência levou 3,7 s. O ganho é a falha antecipada e o disco, não a velocidade.
+
+### Cuidados
+
+- O destino fica bloqueado pelo `TRUNCATE` desde a fase `prepare_target` até o fim da geração, não só durante a aplicação. A janela sem uso concorrente passa a incluir o tempo de geração.
+- Uma conexão ociosa derrubada pela rede (túnel SSH, proxy, firewall) desfaz a carga inteira no fim. Ainda não foi medido se o túnel usado para chegar ao destino faz isso numa geração longa. Até lá, prefira rodar de dentro da rede do destino.
+- No MongoDB, o servidor desfaz uma transação mais velha que o `transactionLifetimeLimitSeconds`, 60 segundos por padrão. Com o output direto, esse tempo cobre a geração inteira. O limite aparece no console quando a sessão abre e no relatório. Aumente o parâmetro antes de uma carga.
+- O script do cliente não deve ler o destino pelo driver (`context.target.connection`) no meio da geração: a leitura espera o lock da conexão de escrita. O `read()` do adapter já recusa leituras depois que os mapas carregam.
+- `--debug` com `--output direct --apply` grava uma carga parcial no destino, como `--debug --apply` sobre arquivos.
+- Um `Native` sem `;` no fim roda sozinho no output direto. No arquivo, ele se junta ao comando seguinte. Termine os comandos de um `Native` com `;`.
 
 ---
 

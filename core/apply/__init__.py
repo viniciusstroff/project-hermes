@@ -1,4 +1,5 @@
-from core.apply.applier import (
+from core.apply.applier import ArtifactApplier
+from core.apply.execution import (
     APPLY,
     COMMITTED,
     CONTINUE,
@@ -7,7 +8,6 @@ from core.apply.applier import (
     ROLLED_BACK,
     STOP,
     ApplicationError,
-    ArtifactApplier,
     CommitFailedError,
     StatementFailedError,
     UnsupportedStatementError,
