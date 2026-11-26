@@ -163,27 +163,25 @@ openspec/        specs e changes do fluxo OpenSpec
 
 ## Planos futuros
 
-O core já não depende de um banco nem de uma versão: a change `desacoplar-migracao-de-banco-e-versao` trouxe conexões nomeadas, consultas neutras, escrita por operações, artefatos no formato do destino, aplicação guiada por capacidades e os adapters de PostgreSQL, Firebird e MongoDB. A AcmeEdu roda sem SQL próprio em seis caminhos de banco e versão. O plano completo, com a justificativa de cada item, está em [docs/melhorias-futuras.md](docs/melhorias-futuras.md).
+O core já não depende de um banco nem de uma versão: a change `desacoplar-migracao-de-banco-e-versao` trouxe conexões nomeadas, consultas neutras, escrita por operações, artefatos no formato do destino, aplicação guiada por capacidades e os adapters de PostgreSQL, Firebird e MongoDB. A AcmeEdu roda sem SQL próprio em seis caminhos de banco e versão. A geração grava métricas e perdas de dado em `relatorio-geracao.json`. O `--output direct` ou `hybrid` executa os comandos no destino durante a geração. O plano completo, com a justificativa de cada item, está em [docs/melhorias-futuras.md](docs/melhorias-futuras.md).
 
 ### Próximo passo
 
-O `DirectDatabaseOutput`, que executaria os comandos durante a geração, deixou de esbarrar na leitura do destino no meio da carga. A change `introduzir-direct-database-output` precisa ser reescrita sobre a `TargetSession` e as operações antes de ser implementada.
+Converter os clientes reais para o core novo com o guia de [docs/conversao-clientes.md](docs/conversao-clientes.md). Depois, medir numa carga real o que a AcmeEdu não mostra: as perdas de dado, o tempo do output direto, a política `continue` num banco com réplica e se o túnel SSH derruba uma conexão ociosa.
 
 ### Depois
 
 A ordem segue a recomendada em `melhorias-futuras.md`:
 
-1. Implementar o `DirectDatabaseOutput`, revisto para o modelo de operações, com a escolha do output pela linha de comando.
-2. Definir um formato declarativo de plano de migração em YAML ou JSON, interpretado pelo mesmo core.
-3. Criar um `ExecutionAdapter` que separe a orquestração da execução pesada.
-4. Logs estruturados em JSON Lines e relatório por execução com contagem de linhas e tempo por tabela.
-5. Checkpoints por fase, tabela e lote, para retomar uma execução longa depois de uma falha.
-6. Executor `bulk-copy` com `COPY` e tabelas de staging, antes de considerar outra linguagem.
-7. Paralelismo entre tabelas independentes e leitura em streaming, só depois de existirem checkpoints e métricas.
-8. Novos adapters de origem e destino quando houver demanda real.
-9. Interface gráfica para montar migrações simples sem editar Python, usando o plano declarativo como contrato.
-10. Executor externo em Go ou Rust, apenas se medições mostrarem um gargalo que o Python e os recursos nativos do banco não resolvem.
-11. Captura de mudanças com Debezium para clientes com janela de parada curta.
+1. Definir um formato declarativo de plano de migração em YAML ou JSON, interpretado pelo mesmo core.
+2. Criar um `ExecutionAdapter` que separe a orquestração da execução pesada.
+3. Checkpoints por fase, tabela e lote, para retomar uma execução longa depois de uma falha.
+4. Executor `bulk-copy` com `COPY` e tabelas de staging, antes de considerar outra linguagem.
+5. Paralelismo entre tabelas independentes e leitura em streaming, só depois de existirem checkpoints e métricas.
+6. Novos adapters de origem e destino quando houver demanda real.
+7. Interface gráfica para montar migrações simples sem editar Python, usando o plano declarativo como contrato.
+8. Executor externo em Go ou Rust, apenas se medições mostrarem um gargalo que o Python e os recursos nativos do banco não resolvem.
+9. Captura de mudanças com Debezium para clientes com janela de parada curta.
 
 ## Por que "Hermes"
 

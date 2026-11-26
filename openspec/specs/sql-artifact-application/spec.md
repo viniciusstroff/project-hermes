@@ -115,7 +115,7 @@ The PostgreSQL target session SHALL split `.sql` artifacts into commands, ending
 - **THEN** it is not there, because it lives in the PostgreSQL adapter
 
 ### Requirement: Each application writes its own report
-Each application SHALL write `aplicacoes/<YYYYmmdd-HHMMSS>-<apply|dry-run>/relatorio.json` and `erros.txt` inside the run directory, without changing `manifest.json` or the artifacts in `comandos/`.
+Each application SHALL write `aplicacoes/<YYYYmmdd-HHMMSS>-<apply|dry-run>/relatorio.json` and `erros.txt` inside the run directory, without changing `manifest.json` or the artifacts in `comandos/`. The `relatorio.json` SHALL record in `source` where the commands came from: `artifacts` for the `ArtifactApplier` and `generation` for the direct output.
 
 #### Scenario: Dry run followed by apply
 - **WHEN** a run directory receives a dry run and later an apply
@@ -126,6 +126,10 @@ Each application SHALL write `aplicacoes/<YYYYmmdd-HHMMSS>-<apply|dry-run>/relat
 - **WHEN** the report records the target connection
 - **THEN** it includes host, port, database and user
 - **AND** it does not include the password
+
+#### Scenario: Source of the commands
+- **WHEN** the `ArtifactApplier` writes its report
+- **THEN** `relatorio.json` has `"source": "artifacts"`
 
 ### Requirement: Applier refuses modes the target cannot honor
 The applier SHALL check the capabilities declared by the target adapter before connecting, and the capabilities of the opened session before executing any command, and SHALL refuse a mode or policy the target cannot honor, naming the missing capability.
