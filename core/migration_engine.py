@@ -23,6 +23,7 @@ class MigrationEngine:
         warn_fn=None,
         metrics=None,
         source_name: str = None,
+        cancel_check=None,
     ):
         self.source_adapter = source_adapter
         self.target_adapter = target_adapter
@@ -36,6 +37,8 @@ class MigrationEngine:
         # GenerationMetrics of the run, or None (an engine built by hand counts nothing).
         self.metrics = metrics
         self.source_name = source_name
+        # In a worker, raises when another task failed or the run was interrupted.
+        self.cancel_check = cancel_check
 
     def unit(self, label: str):
         """Context manager of one migration unit: rows read, inserts and losses of the block."""
@@ -105,6 +108,8 @@ class MigrationEngine:
     def insert(self, entity: str, pairs):
         """Emit an Insert from (column, Python value) pairs, in the order of the fields."""
 
+        if self.cancel_check is not None:
+            self.cancel_check()
         values = {}
         for column, value in pairs:
             if column in values:

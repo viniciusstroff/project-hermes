@@ -9,6 +9,7 @@ any SQL database.
 from abc import ABC, abstractmethod
 from typing import Any, Iterator, Mapping
 
+from core.adapters.ownership import check_owner
 from core.queries import NativeField, NativeQuery, SourceQuery, UnsupportedQueryError, check_native
 
 
@@ -19,10 +20,12 @@ class SqlSourceAdapter(ABC):
     dialect: Any
 
     def read(self, query) -> Iterator[Mapping[str, Any]]:
+        check_owner(self)
         # Render now, so a refused query fails at the call and not at the first row.
         return self._rows(self.render(query))
 
     def count(self, query) -> int | None:
+        check_owner(self)
         total = self._scalar(f'SELECT COUNT(*) FROM ({self.render(query)}) progress_src')
         return None if total is None else int(total)
 

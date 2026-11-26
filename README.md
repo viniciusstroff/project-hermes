@@ -163,7 +163,7 @@ openspec/        specs e changes do fluxo OpenSpec
 
 ## Planos futuros
 
-O core já não depende de um banco nem de uma versão: a change `desacoplar-migracao-de-banco-e-versao` trouxe conexões nomeadas, consultas neutras, escrita por operações, artefatos no formato do destino, aplicação guiada por capacidades e os adapters de PostgreSQL, Firebird e MongoDB. A AcmeEdu roda sem SQL próprio em seis caminhos de banco e versão. A geração grava métricas e perdas de dado em `relatorio-geracao.json`. O `--output direct` ou `hybrid` executa os comandos no destino durante a geração. O plano completo, com a justificativa de cada item, está em [docs/melhorias-futuras.md](docs/melhorias-futuras.md).
+O core já não depende de um banco nem de uma versão: a change `desacoplar-migracao-de-banco-e-versao` trouxe conexões nomeadas, consultas neutras, escrita por operações, artefatos no formato do destino, aplicação guiada por capacidades e os adapters de PostgreSQL, Firebird e MongoDB. A AcmeEdu roda sem SQL próprio em seis caminhos de banco e versão. A geração grava métricas e perdas de dado em `relatorio-geracao.json`. O `--output direct` ou `hybrid` executa os comandos no destino durante a geração. Com `--workers`, as tarefas declaradas com `@task` geram ao mesmo tempo, sem mudar os artefatos. O plano completo, com a justificativa de cada item, está em [docs/melhorias-futuras.md](docs/melhorias-futuras.md).
 
 ### Próximo passo
 
@@ -177,7 +177,7 @@ A ordem segue a recomendada em `melhorias-futuras.md`:
 2. Criar um `ExecutionAdapter` que separe a orquestração da execução pesada.
 3. Checkpoints por fase, tabela e lote, para retomar uma execução longa depois de uma falha.
 4. Executor `bulk-copy` com `COPY` e tabelas de staging, antes de considerar outra linguagem.
-5. Paralelismo entre tabelas independentes e leitura em streaming, só depois de existirem checkpoints e métricas.
+5. Leitura em streaming e paralelismo dentro de uma tabela, por faixa de chave ou partição.
 6. Novos adapters de origem e destino quando houver demanda real.
 7. Interface gráfica para montar migrações simples sem editar Python, usando o plano declarativo como contrato.
 8. Executor externo em Go ou Rust, apenas se medições mostrarem um gargalo que o Python e os recursos nativos do banco não resolvem.

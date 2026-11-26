@@ -89,6 +89,7 @@ from core.compatible import CopyEntity
 from core.queries import NativeQuery, SourceQuery
 from core.references import ReferenceMap
 from core.table_migration import TableMigration
+from core.tasks import task
 from core.strategies import Copy, Rename, Fixed, Lookup, RegexClean, DateConvert, EmailExtract, NullIfBlank, Truncate, Default
 
 
@@ -141,17 +142,12 @@ class Migracao(BaseMigration):
 
     # ------------------------------------------------------------------
     # Fase de carga (03_load_transformed_data)
+    #
+    # Cada método com @task é uma tarefa. O run_inserts() padrão roda todas,
+    # na ordem da sequência. Dentro dela, na ordem em que estão aqui.
     # ------------------------------------------------------------------
 
-    def run_inserts(self):
-        self.insert_tabela_a()
-        self.insert_tabela_b()
-        # adicione na ordem correta (respeite FKs)
-
-    # ------------------------------------------------------------------
-    # Métodos de inserção
-    # ------------------------------------------------------------------
-
+    @task('tabela_a')
     def insert_tabela_a(self):
         TableMigration(
             source=SourceQuery('public.tabela_a', order_by='f_id'),
@@ -162,6 +158,7 @@ class Migracao(BaseMigration):
             ],
         ).run(self.context.source('v1'))
 
+    @task('tabela_b')
     def insert_tabela_b(self):
         # Junção não cabe num SourceQuery: a consulta vai inteira, presa ao adapter.
         TableMigration(
@@ -203,12 +200,20 @@ Consulte [estrategias.md](estrategias.md) para o catálogo completo de estratég
 
 ## Passo 5 — Respeitar a ordem das inserções
 
-`run_inserts()` deve inserir as tabelas de forma que nenhuma FK seja violada:
+Os comandos entram no `03_load_transformed_data` na ordem da sequência das tarefas. Dentro dela, entram na ordem de declaração na classe. Declare as tarefas de forma que nenhuma FK seja violada:
 
 1. Tabelas de domínio (sem FKs): `acme_departments_demo`, `acme_statuses_demo`, etc.
 2. Tabelas que dependem de domínio: `acme_customers_demo`, `acme_contracts_demo`.
 3. Tabelas que dependem dessas entidades: `acme_orders_demo`, `acme_order_items_demo`, etc.
 4. Tabelas dependentes das anteriores: `acme_notes_demo`, `acme_files_demo`, etc.
+
+Tarefas da mesma sequência podem gerar ao mesmo tempo com `--workers` maior que 1 (ver [execucao.md](execucao.md#gerando-em-paralelo)). Isso exige que nenhuma dependa do resultado de outra: uma tarefa que lê um dicionário montado por outra vai para uma sequência maior, como `@task('pedidos', sequence=2)`. Dentro de uma tarefa:
+
+- leia a origem com `self.context.source('<nome>')`, sem guardar engines criados no `__init__`;
+- emita só `Insert`, `Comment` e `Native`: `clear()`, `suspend_constraints()` e `reset_identity()` ficam no `run_initial()` e no `reset_sequences()`;
+- não altere estado compartilhado com outras tarefas. Em processos, o que a tarefa muda na memória não volta.
+
+Um cliente que prefira controlar a carga escreve o próprio `run_inserts()` e chama os métodos em ordem, ou chama `self.run_tasks()` no ponto em que quiser.
 
 ---
 
@@ -242,7 +247,7 @@ Veja o passo a passo completo em [execucao.md](execucao.md).
 - [ ] `declare_reference_maps()` com os mapas lidos da V2, sem SQL solto no `run_inserts()`
 - [ ] `reset_sequences()` com todas as tabelas que têm sequence
 - [ ] `run_initial()` com `clear()` e `suspend_constraints()`
-- [ ] `run_inserts()` com todos os métodos em ordem de FK
+- [ ] métodos de carga com `@task`, declarados em ordem de FK, com sequência maior só para quem depende do resultado de outra tarefa
 - [ ] Teste com `--debug 100` sem erros
 - [ ] SQL gerado revisado
 - [ ] Migração completa executada e logs verificados

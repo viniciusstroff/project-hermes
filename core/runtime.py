@@ -41,12 +41,16 @@ class MigrationLogger:
             sys.stdout.write(text + '\n')
         sys.stdout.flush()
 
-    def event(self, event: str, message: str, level: str = 'info', data: dict = None):
-        """Write a structured event to ``migration.jsonl`` only."""
+    def event(self, event: str, message: str, level: str = 'info', data: dict = None, unit: str = None):
+        """Write a structured event to ``migration.jsonl`` only.
 
-        self._write_event(datetime.datetime.now(), level, event, message, data or {})
+        ``unit`` names the unit of an event sent by a worker, whose unit the
+        collector of the main process does not know.
+        """
 
-    def _write_event(self, now, level: str, event: str, message: str, data: dict):
+        self._write_event(datetime.datetime.now(), level, event, message, data or {}, unit)
+
+    def _write_event(self, now, level: str, event: str, message: str, data: dict, unit: str = None):
         if level not in LEVELS:
             raise ValueError(f'nível de log inválido: {level!r}. Use {", ".join(LEVELS)}.')
         if self._events_file.closed:
@@ -56,7 +60,7 @@ class MigrationLogger:
             'run_id': self.run_id,
             'level': level,
             'phase': self.metrics.phase_name if self.metrics is not None else None,
-            'unit': self.metrics.unit_label if self.metrics is not None else None,
+            'unit': unit if unit is not None else (self.metrics.unit_label if self.metrics is not None else None),
             'event': event,
             'message': message,
             'data': data,

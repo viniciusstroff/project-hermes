@@ -45,6 +45,15 @@ class MigrationRunner:
             self.context.logger.print_log('----- Fim do script de importação V1 - V2 -----')
             self.context.write_manifest('success')
 
+        except KeyboardInterrupt:
+            # Workers were cancelled by the task runner; the run is recorded as failed.
+            self.context.progress.finish()
+            self.context.logger.print_log('[ERRO] Geração interrompida.', level='error')
+            if not finish_called:
+                self._finish_failed_output(output)
+            self._write_generation_report('failed', 'geração interrompida')
+            self.context.write_manifest('failed', 'geração interrompida')
+            raise
         except Exception as exc:
             self.context.progress.finish()
             self.context.logger.print_log('[ERRO] ' + str(exc), level='error')

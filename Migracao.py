@@ -3,7 +3,7 @@ Ponto de entrada unificado para migrações V1→V2.
 
 Uso:
     python3 Migracao.py <cliente> [--debug [quantidade]] [--apply | --dry-run] [--on-error stop|continue]
-                        [--output file|direct|hybrid]
+                        [--output file|direct|hybrid] [--workers N] [--worker-mode thread|process]
 
 Exemplos:
     python3 Migracao.py Acme
@@ -11,11 +11,13 @@ Exemplos:
     python3 Migracao.py Acme --dry-run
     python3 Migracao.py Acme --apply
     python3 Migracao.py Acme --output hybrid --dry-run
+    python3 Migracao.py Acme --workers 4
 
 Com --apply ou --dry-run, a execução gerada é aplicada no destino das chaves
 TARGET_* do .env do cliente, a mesma conexão que a geração consulta. Com
 --output direct ou hybrid, os comandos rodam no destino durante a geração,
-numa transação só, e nada é aplicado depois.
+numa transação só, e nada é aplicado depois. Com --workers maior que 1, as
+tarefas declaradas com @task de uma mesma sequência geram ao mesmo tempo.
 """
 
 import argparse
@@ -32,7 +34,15 @@ from core.apply import APPLY, CONTINUE, DRY_RUN, STOP
 from core.apply.cli import log_report_summary, run_application
 from core.adapters.registry import AdapterResolutionError
 from core.connections import ConnectionConfigError, parse_connections
-from core.context import DIRECT_OUTPUT, FILE_OUTPUT, HYBRID_OUTPUT, OutputSettings, output_settings
+from core.context import (
+    DIRECT_OUTPUT,
+    FILE_OUTPUT,
+    HYBRID_OUTPUT,
+    OutputSettings,
+    output_settings,
+    parallel_settings,
+)
+from core.parallel import THREAD, WORKER_MODES, ParallelSettings
 from core.outputs.direct import find_direct_output
 
 DEFAULT_DEBUG_LIMIT = 100
@@ -84,7 +94,23 @@ def parse_args(argv=None):
              'hybrid faz os dois. direct e hybrid exigem --apply ou --dry-run',
     )
 
+    parser.add_argument(
+        '--workers',
+        type=int,
+        default=1,
+        metavar='N',
+        help='tarefas da mesma sequência geradas ao mesmo tempo (padrão 1, em sequência)',
+    )
+    parser.add_argument(
+        '--worker-mode',
+        choices=WORKER_MODES,
+        default=THREAD,
+        help='thread (padrão) ou process; process usa fork, só em Linux e sem MongoDB',
+    )
+
     args = parser.parse_args(argv)
+    if args.workers < 1:
+        parser.error('--workers precisa ser 1 ou mais')
     if args.on_error and not args.application:
         parser.error('--on-error exige --apply ou --dry-run')
     if args.output != FILE_OUTPUT and not args.application:
@@ -143,8 +169,8 @@ def main(argv=None) -> int:
     )
 
     try:
-        # The client builds its context in the constructor: the choice reaches the factory from here.
-        with output_settings(settings):
+        # The client builds its context in the constructor: the choices reach the factory from here.
+        with output_settings(settings), parallel_settings(ParallelSettings(args.workers, args.worker_mode)):
             migration = load_migration(args.client)
         generate(migration, args.debug)
     except (ClientNotFoundError, ConnectionConfigError, AdapterResolutionError) as exc:

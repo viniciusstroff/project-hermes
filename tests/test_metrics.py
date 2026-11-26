@@ -503,7 +503,7 @@ class RunnerReportTest(unittest.TestCase):
         self.assertIn("[AVISO] students.status_id: 1 valores sem correspondência no mapa student_statuses (ex.: 'X')",
                       result['log'])
         self.assertEqual(set(manifest), {'client', 'timestamp', 'status', 'debug', 'run_dir', 'artifacts',
-                                         'logs_dir', 'sources', 'target', 'output'})
+                                         'logs_dir', 'sources', 'target', 'output', 'parallel'})
 
     def test_failed_run_reports_the_interrupted_unit(self):
         rows = [{'id': number, 'status': 'A'} for number in range(250)]

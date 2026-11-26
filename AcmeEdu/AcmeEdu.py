@@ -21,6 +21,7 @@ from core.queries import SourceQuery
 from core.references import ReferenceMap
 from core.strategies import DateConvert, Fixed, Lookup, Rename, Transform
 from core.table_migration import TableMigration
+from core.tasks import task
 
 # Professores que não são alunos ganham em people o id 100000 + cod_prof.
 # Os alunos usam o próprio cod_aluno, que na V1 fica abaixo disso.
@@ -247,15 +248,12 @@ class Migracao(BaseMigration):
         self.suspend_constraints()
 
     # Fase de carga (03_load_transformed_data) ----------------------------
+    #
+    # Cada carga é uma tarefa. Nenhuma depende do resultado de outra, então
+    # todas ficam na sequência 1 e rodam juntas com --workers maior que 1. A
+    # ordem de declaração é a ordem dos comandos no 03_load_transformed_data.
 
-    def run_inserts(self):
-        self.insert_courses()
-        self.insert_students()
-        self.insert_teachers()
-        self.insert_subjects()
-        self.insert_classes()
-        self.insert_enrollments()
-
+    @task('courses')
     def insert_courses(self):
         self.print_log('Inserindo cursos')
         self.comment('COURSES')
@@ -272,6 +270,7 @@ class Migracao(BaseMigration):
             ],
         ).run(self.context.source('v1'))
 
+    @task('students')
     def insert_students(self):
         """Cada aluno vira uma pessoa, um aluno, um telefone e um responsável."""
 
@@ -303,6 +302,7 @@ class Migracao(BaseMigration):
             ],
         ).run(self.context.source('v1'))
 
+    @task('teachers')
     def insert_teachers(self):
         """Professores que já são alunos reaproveitam a pessoa do aluno."""
 
@@ -339,6 +339,7 @@ class Migracao(BaseMigration):
             ],
         ).run(self.context.source('v1'))
 
+    @task('subjects')
     def insert_subjects(self):
         self.print_log('Inserindo disciplinas')
         self.comment('SUBJECTS')
@@ -354,6 +355,7 @@ class Migracao(BaseMigration):
             ],
         ).run(self.context.source('v1'))
 
+    @task('classes')
     def insert_classes(self):
         self.print_log('Inserindo turmas')
         self.comment('CLASSES')
@@ -369,6 +371,7 @@ class Migracao(BaseMigration):
             ],
         ).run(self.context.source('v1'))
 
+    @task('enrollments')
     def insert_enrollments(self):
         self.print_log('Inserindo matrículas')
         self.comment('ENROLLMENTS')

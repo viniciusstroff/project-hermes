@@ -1,6 +1,7 @@
 import itertools
 from typing import Any
 
+from core.adapters.ownership import claim
 from core.adapters.pg_dump import PgDumpCopy
 from core.adapters.postgres_session import CAPABILITIES, PostgresSession
 from core.adapters.sql_source import SqlSourceAdapter
@@ -73,6 +74,8 @@ class PostgresSourceAdapter(SqlSourceAdapter):
         self.dialect = dialect or PostgresDialect()
         # Optional native copy of compatible entities (SOURCE_<NAME>_NATIVE_COPY).
         self.native_copy = None
+        # The connection serves the worker that created the adapter.
+        claim(self)
 
     @classmethod
     def connect(cls, config):
