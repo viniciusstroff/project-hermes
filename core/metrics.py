@@ -113,6 +113,8 @@ class Unit:
         self.rows_read = 0
         self.inserts = {}
         self.losses = {}
+        # Source counts of the unit, so a resume can check that the source did not change.
+        self.counts = []
         self.started_at = now()
         self.finished_at = None
         self.duration_seconds = None
@@ -151,6 +153,7 @@ class Unit:
         unit.state = data['state']
         unit.rows_read = data['rows_read']
         unit.inserts = dict(data['inserts'])
+        unit.counts = list(data.get('counts', ()))
         unit.losses = {}
         for loss in data.get('losses', ()):
             group = LossGroup(loss['entity'], loss['column'], loss['strategy'], loss['reason'], loss['reference_map'])
@@ -162,6 +165,11 @@ class Unit:
         unit.duration_seconds = data.get('duration_seconds')
         unit._started = None
         return unit
+
+    def checkpoint_dict(self) -> dict:
+        """``as_dict()`` plus the source counts, for the checkpoint and the workers."""
+
+        return {**self.as_dict(), 'counts': list(self.counts)}
 
     def describe(self) -> str:
         source = f' ({self.source})' if self.source else ''
@@ -260,6 +268,8 @@ class GenerationMetrics:
         self.tasks = []
         # Workers and worker mode of the run, set by the context.
         self.parallel = None
+        # Attempts of a resumed run, set from the checkpoint.
+        self.attempts = None
         self.status = RUNNING
         self.error = None
         self.started_at = now()
@@ -361,8 +371,10 @@ class GenerationMetrics:
             if phase is not None:
                 phase.units.append(unit)
 
-    def task_finished(self, name: str, sequence: int, worker, started_at, finished_at, duration_seconds: float):
-        """Record a finished task in the open phase."""
+    def task_finished(
+        self, name: str, sequence: int, worker, started_at, finished_at, duration_seconds: float, resumed: bool = False,
+    ):
+        """Record a finished task in the open phase. A resumed task came from the checkpoint."""
 
         record = {
             'name': name,
@@ -372,10 +384,17 @@ class GenerationMetrics:
             'started_at': _timestamp(started_at),
             'finished_at': _timestamp(finished_at),
             'duration_seconds': _round(duration_seconds),
+            'resumed': resumed,
         }
         self.tasks.append(record)
         if self._phase_open:
             self.phases[-1].tasks.append(record)
+
+    def counted(self, source: str, query: dict, total):
+        """Record in the open unit the source count of a query, given as ``query_to_dict()``."""
+
+        if self._open_units and query is not None and total is not None:
+            self._open_units[-1].counts.append({'source': source, 'query': query, 'total': total})
 
     def inserted(self, entity: str):
         """Count an insert in the open unit. Outside a unit, nothing is counted."""
@@ -437,6 +456,7 @@ class GenerationMetrics:
             'phases': [phase.as_dict() for phase in self.phases],
             'units': units,
             'tasks': list(self.tasks),
+            'attempts': self.attempts,
             'artifacts': [_artifact_size(artifact, run_dir) for artifact in artifacts],
         }
 

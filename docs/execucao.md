@@ -75,6 +75,9 @@ python3 Migracao.py Acme --output direct --apply
 
 # Gera as tarefas independentes em 4 processos
 python3 Migracao.py Acme --workers 4 --worker-mode process
+
+# Retoma uma geração que falhou, sem gerar de novo as tarefas concluídas
+python3 Migracao.py Acme --resume 20261126-101500
 ```
 
 Com `--apply` ou `--dry-run`, o `Migracao.py` aplica a execução que acabou de gerar no banco das chaves `TARGET_*` do `.env`, o mesmo que a geração consulta. A aplicação só começa se a geração terminou com status `success`. Ela funciona como o `Aplicar.py`, descrito em [Aplicando os SQLs no destino](#aplicando-os-sqls-no-destino). O `--on-error` também vale aqui.
@@ -137,6 +140,35 @@ O terminal mostra uma linha por tarefa concluída, no lugar do rodapé de progre
 - Uma tarefa que falha cancela as outras e a geração termina `failed` com o nome dela. Os segmentos que não entraram na fase ficam em `tarefas/`.
 - No modo processo, cada worker é uma cópia do processo principal na memória.
 
+## Retomando uma geração que falhou
+
+Com o output `file`, a geração grava `checkpoint.json` na pasta da execução. Depois de cada tarefa (os métodos com `@task` e cada entidade de `compatible_entities()`), o arquivo da fase é descarregado no disco e o checkpoint registra onde a tarefa terminou e o sha256 do arquivo até ali.
+
+Se a geração falhar, por exemplo porque a conexão com a origem caiu, ela continua na mesma pasta:
+
+```bash
+python3 Migracao.py Acme --resume 20261126-101500
+
+# Gera de novo uma tarefa concluída e o que vem depois dela na fase
+python3 Migracao.py Acme --resume 20261126-101500 --rerun students
+```
+
+A retomada roda os hooks de novo. As tarefas confirmadas não rodam: os comandos delas já estão no arquivo. O que fica fora de tarefas é gerado de novo e comparado byte a byte com o que está no arquivo. O que a tentativa anterior gravou depois da última tarefa confirmada é cortado. A geração segue dali. Os arquivos ficam iguais aos de uma geração limpa.
+
+A retomada é recusada, sem mudar nada na pasta, quando:
+
+- a execução já terminou com `success`, não tem `checkpoint.json` ou está em uso por outro processo;
+- mudou algo que deixaria o resultado diferente de uma geração limpa: o código do core, as conexões e as versões dos servidores, o limite de debug, o output, os mapas de referência ou o catálogo do destino;
+- a contagem de linhas da origem de uma tarefa concluída mudou. A conferência não pega atualização de linhas: a premissa continua sendo a origem parada durante a janela;
+- o script gera, antes do ponto confirmado, algo diferente do que está no arquivo;
+- o output é `direct` ou `hybrid`, porque a transação no destino já foi desfeita na falha.
+
+Uma tarefa concluída cujo código mudou desde a primeira tentativa não roda de novo sozinha: o log avisa e sugere `--rerun <nome>`. Use `--debug` na retomada só se a primeira tentativa também usou, com o mesmo limite.
+
+O checkpoint vale por tarefa. Uma tarefa interrompida recomeça do zero. Um cliente que não declara tarefas gera a fase de carga inteira de novo. Os hooks devem só emitir operações: um hook que grava em disco ou em outro sistema repete esse efeito na retomada.
+
+Cada geração nova tem a própria pasta. Se outra já usou o mesmo segundo, a pasta ganha `-2`, `-3` e assim por diante.
+
 ## Arquivos gerados
 
 Após a execução, os artefatos ficam em `runs/<cliente>/<YYYYmmdd-HHMMSS>/`:
@@ -147,6 +179,7 @@ Após a execução, os artefatos ficam em `runs/<cliente>/<YYYYmmdd-HHMMSS>/`:
 | `logs/migration.log` | Log da geração feita pelo Python |
 | `logs/migration.jsonl` | O mesmo log em JSON Lines, um evento por linha, com fase, unidade e nível |
 | `relatorio-geracao.json` | Linhas lidas, inserts, duração e perdas de dado de cada unidade e de cada fase |
+| `checkpoint.json` | Tarefas confirmadas de cada fase, impressão digital e tentativas, para a retomada |
 | `comandos/00_setup.sql` | Arquivo inicial da execução |
 | `comandos/01_prepare_target.sql` | Limpeza da V2 e desativação de triggers |
 | `comandos/02_copy_compatible_entities.sql` | Cópia das entidades de `compatible_entities()`, linha a linha ou pelo `pg_dump` |

@@ -419,6 +419,33 @@ recusado fora do Linux e com MongoDB antes de qualquer conexão, pela
 tarefas com mais de um worker, uma por entidade e uma por cópia nativa, cujo
 arquivo do `pg_dump` é o próprio segmento.
 
+## Checkpoint da geração
+
+Com o output `file`, a factory abre um `Checkpoint` (`core/checkpoint.py`) com
+`flock` na pasta da execução e monta um `CheckpointedFileOutput`. Esse output
+acompanha a posição em bytes e o sha256 de cada fase. Os pontos de controle
+são as tarefas: antes de uma tarefa, `begin_task()` guarda a posição; depois
+dela, `end_task()` descarrega o arquivo, faz `fsync` e registra no
+`checkpoint.json` o nome, as posições, o sha256 do arquivo até o fim da tarefa,
+as unidades com as contagens da origem e um hash do código do método. O
+`checkpoint.json` é gravado num arquivo temporário e trocado com `os.replace`.
+Com mais de um worker, uma tarefa que termina fora de ordem tem o segmento
+registrado antes de entrar na fase.
+
+Na retomada, o `Checkpoint` monta um plano por fase. Uma fase fechada é
+pulada inteira. A fase em que a falha aconteceu é cortada no fim da última
+tarefa confirmada. As fases seguintes começam do zero. Com `--rerun`, o corte fica
+no início da tarefa pedida. Depois de os mapas de referência carregarem, o
+runner chama `context.begin_checkpoint()`, que confere a impressão digital e
+conta de novo, na origem, as unidades das tarefas que não vão rodar.
+
+O `CheckpointedFileOutput` abre uma fase cortada em modo de pulo. Ele confere
+o sha256 do trecho confirmado. Depois disso, compara com o arquivo cada
+operação renderizada e pula as tarefas confirmadas (`resumed_task()` e
+`skip_task()`). Quando a posição chega ao corte, ele trunca o arquivo ali e
+passa a gravar. Até esse ponto, o arquivo e o checkpoint da fase não mudam,
+então uma retomada recusada deixa a execução como estava.
+
 ## Métricas da geração
 
 O contexto tem um coletor, `context.metrics`, definido em `core/metrics.py`. O
@@ -460,6 +487,7 @@ Os artefatos ficam em `runs/<cliente>/<YYYYmmdd-HHMMSS>/`:
 - `logs/migration.log` e `logs/migration.jsonl`
 - `relatorio-geracao.json`
 - `tarefas/`, só durante uma geração com mais de um worker, com os segmentos que ainda não entraram na fase
+- `checkpoint.json` e `checkpoint.lock`, com o output `file`
 - `comandos/00_setup.sql`
 - `comandos/01_prepare_target.sql`
 - `comandos/02_copy_compatible_entities.sql`

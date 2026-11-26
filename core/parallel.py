@@ -30,6 +30,7 @@ from typing import Callable
 
 from core.adapters.registry import connect_adapter
 from core.artifacts import PHASES
+from core.checkpoint import file_sha256
 from core.connections import ConnectionConfigError
 from core.metrics import GenerationMetrics
 from core.migration_engine import MigrationEngine
@@ -109,6 +110,8 @@ class Task:
     sequence: int
     run: Callable
     writes_segment: bool = False
+    # Hash of the code of the task, so a resume warns when a finished task changed.
+    code_hash: str = None
 
 
 # The task context of the current thread. BaseMigration.context reads it, so
@@ -199,7 +202,7 @@ class TaskContext:
         if self.output is not None:
             self.output.finish(True)
             self.output.close()
-        return [unit.as_dict() for unit in self.metrics.units]
+        return [unit.checkpoint_dict() for unit in self.metrics.units]
 
     def abort(self):
         if self.output is not None:
@@ -231,7 +234,10 @@ def run_task_list(context, tasks: list):
     total = len(tasks)
     done = 0
     for group in _sequence_groups(tasks):
-        runner(context, group, min(settings.workers, len(group)), done, total).run()
+        prefilled = _prefilled(context, group)
+        pending = [index for index in range(len(group)) if index not in prefilled]
+        workers = max(1, min(settings.workers, len(pending)))
+        runner(context, group, workers, done, total, prefilled, pending).run()
         done += len(group)
     _remove_empty_dirs(context)
 
@@ -239,16 +245,72 @@ def run_task_list(context, tasks: list):
 def _run_inline(context, task: Task):
     """One worker: the task runs on the context of the run, writing straight to the output."""
 
+    output = _checkpointed_output(context)
+    mark = output.resumed_task(task.name) if output is not None else None
+    if mark is not None:
+        _resume_task(context, output, task, mark)
+        return
     started = datetime.datetime.now()
     clock = time.monotonic()
+    units_before = len(context.metrics.units)
+    if output is not None:
+        output.begin_task()
     context._running_task = task.name
     try:
         task.run(context)
     finally:
         context._running_task = None
+    finished = datetime.datetime.now()
+    duration = time.monotonic() - clock
+    if output is not None:
+        units = [unit.checkpoint_dict() for unit in context.metrics.units[units_before:]]
+        output.end_task(task, units, MAIN_WORKER, started, finished, duration)
+    context.metrics.task_finished(task.name, task.sequence, MAIN_WORKER, started, finished, duration)
+
+
+def _checkpointed_output(context):
+    """The output when it records task positions for a checkpoint, else None."""
+
+    output = getattr(context, 'output', None)
+    return output if hasattr(output, 'resumed_task') else None
+
+
+def _resume_task(context, output, task: Task, mark: dict):
+    """A task confirmed in the checkpoint: its commands are in the artifact, its metrics come from the mark."""
+
+    output.skip_task(mark)
+    context.metrics.adopt(mark.get('units', ()))
     context.metrics.task_finished(
-        task.name, task.sequence, MAIN_WORKER, started, datetime.datetime.now(), time.monotonic() - clock,
+        task.name, task.sequence, mark.get('worker'), _parse(mark.get('started_at')), _parse(mark.get('finished_at')),
+        mark.get('duration') or 0, resumed=True,
     )
+    if task.code_hash and mark.get('code_hash') and task.code_hash != mark['code_hash']:
+        context.warn_once(
+            f'resume-code:{task.name}',
+            f'A tarefa {task.name} mudou desde que foi gerada e não roda de novo na retomada. '
+            f'Use --rerun {task.name} para gerá-la de novo.',
+        )
+
+
+def _prefilled(context, group) -> dict:
+    """Tasks of a group that do not run on resume: confirmed in the artifact, or with a finished segment."""
+
+    output = _checkpointed_output(context)
+    checkpoint = getattr(context, 'checkpoint', None)
+    confirmed = output.confirmed_names() if output is not None else set()
+    prefilled = {}
+    for index, task in enumerate(group):
+        if task.name in confirmed:
+            prefilled[index] = {'resumed': True}
+        elif checkpoint is not None:
+            payload = checkpoint.reusable_segment(context.metrics.phase_name, task.name)
+            if payload is not None:
+                prefilled[index] = {**payload, 'reused': True}
+    return prefilled
+
+
+def _parse(value):
+    return datetime.datetime.fromisoformat(value) if isinstance(value, str) else value
 
 
 def _sequence_groups(tasks):
@@ -301,9 +363,13 @@ def _execute(context, task: Task, segment_path: str, send, cancelled, connect_so
         raise
     finally:
         _TASK_CONTEXT.reset(token)
+    exists = os.path.exists(segment_path)
     return {
         'units': units,
         'worker': worker,
+        # Computed in the worker, so the checkpoint can reuse the segment on resume.
+        'sha256': file_sha256(segment_path) if exists else None,
+        'size': os.path.getsize(segment_path) if exists else 0,
         'started': started,
         'finished': datetime.datetime.now(),
         'duration': time.monotonic() - clock,
@@ -318,11 +384,12 @@ def _describe(exc: BaseException) -> str:
 class _Coordinator:
     """Main side: writes what workers send and merges finished segments in order."""
 
-    def __init__(self, context, tasks, paths, done_before: int, total: int):
+    def __init__(self, context, tasks, paths, done_before: int, total: int, prefilled=None):
         self.context = context
         self.tasks = tasks
         self.paths = paths
-        self.results = {}
+        # Resumed tasks and reused segments are results from the start.
+        self.results = dict(prefilled or {})
         self.next_merge = 0
         self.done = done_before
         self.total = total
@@ -343,28 +410,52 @@ class _Coordinator:
         elif kind == 'native_copy':
             self.context.metrics.native_copy(*record[1:])
         elif kind == 'done':
+            self._record_segment(record[1], record[2])
             self.results[record[1]] = record[2]
-            self._merge_ready()
+            self.merge_ready()
         elif kind == 'failed':
             _, index, message, details = record
             self.context.logger.print_log(details, level='error')
             raise TaskFailedError(f"A tarefa '{self.tasks[index].name}' falhou: {message}")
 
-    def _merge_ready(self):
+    def _record_segment(self, index: int, payload: dict):
+        """A finished task not merged yet: the checkpoint keeps its segment for a resume."""
+
+        checkpoint = getattr(self.context, 'checkpoint', None)
+        if checkpoint is not None and payload.get('sha256'):
+            checkpoint.record_segment(
+                self.context.metrics.phase_name, self.tasks[index].name, self.paths[index],
+                payload['sha256'], payload['size'], payload,
+            )
+
+    def merge_ready(self):
+        output = _checkpointed_output(self.context)
         while self.next_merge in self.results:
             index = self.next_merge
             payload = self.results.pop(index)
             task = self.tasks[index]
-            path = self.paths[index]
+            if payload.get('resumed'):
+                _resume_task(self.context, output, task, output.resumed_task(task.name))
+                self.done += 1
+                self.context.logger.print_log(f'Tarefa {task.name} retomada do checkpoint ({self.done} de {self.total} tarefas)')
+                self.next_merge += 1
+                continue
+            path = payload.get('segment') or self.paths[index]
+            started, finished = _parse(payload['started']), _parse(payload['finished'])
+            if output is not None:
+                output.begin_task()
             if os.path.exists(path):
                 try:
                     self.context.output.include_file(path)
                 except Exception as exc:
                     raise TaskFailedError(f"A tarefa '{task.name}' falhou ao entrar na fase: {_describe(exc)}") from exc
+            if output is not None:
+                output.end_task(task, payload['units'], payload['worker'], started, finished, payload['duration'])
+            if os.path.exists(path):
                 os.remove(path)
             self.context.metrics.adopt(payload['units'])
             self.context.metrics.task_finished(
-                task.name, task.sequence, payload['worker'], payload['started'], payload['finished'], payload['duration'],
+                task.name, task.sequence, payload['worker'], started, finished, payload['duration'],
             )
             self.done += 1
             self.context.logger.print_log(
@@ -376,12 +467,13 @@ class _Coordinator:
 class _ThreadRunner:
     """Runs a group of tasks in a thread pool, each thread with its own source connections."""
 
-    def __init__(self, context, tasks, workers, done_before, total):
+    def __init__(self, context, tasks, workers, done_before, total, prefilled=None, pending=None):
         self.context = context
         self.tasks = tasks
         self.workers = workers
         self.paths = [_segment_path(context, index, task) for index, task in enumerate(tasks)]
-        self.coordinator = _Coordinator(context, tasks, self.paths, done_before, total)
+        self.pending = list(range(len(tasks))) if pending is None else list(pending)
+        self.coordinator = _Coordinator(context, tasks, self.paths, done_before, total, prefilled)
         self._records = queue.Queue()
         self._cancel = threading.Event()
         self._local = threading.local()
@@ -390,9 +482,12 @@ class _ThreadRunner:
 
     def run(self):
         os.makedirs(_segment_dir(self.context), exist_ok=True)
+        self.coordinator.merge_ready()
+        if not self.pending:
+            return
         pool = ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix='tarefa')
         try:
-            for index in range(len(self.tasks)):
+            for index in self.pending:
                 pool.submit(self._work, index)
             while not self.coordinator.finished:
                 try:
@@ -453,15 +548,19 @@ class _ThreadRunner:
 class _ProcessRunner:
     """Runs a group of tasks in forked processes, each with its own source connections."""
 
-    def __init__(self, context, tasks, workers, done_before, total):
+    def __init__(self, context, tasks, workers, done_before, total, prefilled=None, pending=None):
         self.context = context
         self.tasks = tasks
         self.workers = workers
         self.paths = [_segment_path(context, index, task) for index, task in enumerate(tasks)]
-        self.coordinator = _Coordinator(context, tasks, self.paths, done_before, total)
+        self.pending = list(range(len(tasks))) if pending is None else list(pending)
+        self.coordinator = _Coordinator(context, tasks, self.paths, done_before, total, prefilled)
 
     def run(self):
         os.makedirs(_segment_dir(self.context), exist_ok=True)
+        self.coordinator.merge_ready()
+        if not self.pending:
+            return
         fork = multiprocessing.get_context('fork')
         self._records = fork.Queue()
         self._next = fork.Value('i', 0)
@@ -503,10 +602,11 @@ class _ProcessRunner:
         try:
             while not self._cancel.value:
                 with self._next.get_lock():
-                    index = self._next.value
+                    position = self._next.value
                     self._next.value += 1
-                if index >= len(self.tasks):
+                if position >= len(self.pending):
                     break
+                index = self.pending[position]
                 try:
                     payload = _execute(
                         self.context, self.tasks[index], self.paths[index], self._records.put,

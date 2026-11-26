@@ -130,6 +130,57 @@ def check_native(item, adapter_name: str):
         raise NativeAdapterMismatchError(f"O NativeField '{item.alias}'", item.adapter, adapter_name)
 
 
+def query_to_dict(query):
+    """JSON form of a query, to count it again later, or None when it holds values JSON does not keep."""
+
+    import json
+
+    if isinstance(query, SourceQuery):
+        data = {
+            'kind': 'source',
+            'entity': query.entity,
+            'fields': [_field_to_dict(item) for item in query.fields],
+            'where': dict(query.where),
+            'order_by': list(query.order_by),
+            'limit': query.limit,
+        }
+    elif isinstance(query, NativeQuery):
+        data = {'kind': 'native', 'adapter': query.adapter, 'query': query.query, 'limit': query.limit}
+    else:
+        return None
+    try:
+        # A round trip, so tuples and lists compare the same after loading.
+        return json.loads(json.dumps(data))
+    except (TypeError, ValueError):
+        return None
+
+
+def query_from_dict(data: dict):
+    """Query rebuilt from ``query_to_dict()``."""
+
+    if data['kind'] == 'native':
+        return NativeQuery(data['adapter'], data['query'], data['limit'])
+    return SourceQuery(
+        data['entity'],
+        fields=tuple(_field_from_dict(item) for item in data['fields']),
+        where=data['where'],
+        order_by=tuple(data['order_by']),
+        limit=data['limit'],
+    )
+
+
+def _field_to_dict(item):
+    if isinstance(item, NativeField):
+        return {'native': [item.adapter, item.expression, item.alias]}
+    return item
+
+
+def _field_from_dict(item):
+    if isinstance(item, dict):
+        return NativeField(*item['native'])
+    return item
+
+
 def _as_tuple(value):
     if value is None:
         return ()

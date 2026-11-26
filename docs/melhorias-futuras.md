@@ -632,7 +632,9 @@ O streaming deve ser tratado como contrato do `SourceAdapter` e do `ExecutionAda
 
 ## 13 — Registrar checkpoints do estado atual da migração
 
-A parte da geração está proposta na change `registrar-checkpoints-da-geracao`, que depende da de paralelismo. O nome de cada tarefa vira a identidade do checkpoint. O `checkpoint.json` guarda a posição de cada tarefa no arquivo da fase. Com `--resume`, uma geração que falhou retoma na mesma pasta, pulando as tarefas concluídas, desde que a impressão digital da execução e a contagem da origem não tenham mudado. A aplicação continua tudo ou nada: checkpoint na aplicação fica para depois.
+A change `registrar-checkpoints-da-geracao` implementou o checkpoint da geração. O nome de cada tarefa é a identidade dela no `checkpoint.json`, que guarda a posição da tarefa no arquivo da fase e o sha256 do arquivo até ali. Com `--resume`, uma geração que falhou continua na mesma pasta, pulando as tarefas concluídas, desde que a impressão digital da execução e a contagem da origem não tenham mudado. Na AcmeEdu, uma geração derrubada parando a V1 no meio da carga retomou sem gerar de novo as tarefas concluídas. Os arquivos saíram iguais aos de uma geração limpa.
+
+Ficam para depois: checkpoint na aplicação, que é o pré-requisito da aplicação paralela; checkpoint por lote dentro de uma tarefa; e a retomada com o output direto ou híbrido.
 
 Uma migração longa não deve precisar começar do zero depois de uma falha operacional. O projeto pode evoluir para registrar checkpoints confiáveis por fase, tabela e batch.
 

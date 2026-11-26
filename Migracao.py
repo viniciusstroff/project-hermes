@@ -4,6 +4,7 @@ Ponto de entrada unificado para migrações V1→V2.
 Uso:
     python3 Migracao.py <cliente> [--debug [quantidade]] [--apply | --dry-run] [--on-error stop|continue]
                         [--output file|direct|hybrid] [--workers N] [--worker-mode thread|process]
+                        [--resume TIMESTAMP [--rerun TAREFA]]
 
 Exemplos:
     python3 Migracao.py Acme
@@ -12,16 +13,20 @@ Exemplos:
     python3 Migracao.py Acme --apply
     python3 Migracao.py Acme --output hybrid --dry-run
     python3 Migracao.py Acme --workers 4
+    python3 Migracao.py Acme --resume 20261126-101500
 
 Com --apply ou --dry-run, a execução gerada é aplicada no destino das chaves
 TARGET_* do .env do cliente, a mesma conexão que a geração consulta. Com
 --output direct ou hybrid, os comandos rodam no destino durante a geração,
 numa transação só, e nada é aplicado depois. Com --workers maior que 1, as
-tarefas declaradas com @task de uma mesma sequência geram ao mesmo tempo.
+tarefas declaradas com @task de uma mesma sequência geram ao mesmo tempo. Com
+--resume, uma geração que falhou continua na mesma pasta, sem gerar de novo as
+tarefas concluídas.
 """
 
 import argparse
 import importlib.util
+from contextlib import nullcontext
 import os
 import sys
 import traceback
@@ -33,6 +38,7 @@ sys.path.insert(0, _rootdir)
 from core.apply import APPLY, CONTINUE, DRY_RUN, STOP
 from core.apply.cli import log_report_summary, run_application
 from core.adapters.registry import AdapterResolutionError
+from core.checkpoint import CheckpointError, ResumeSettings, resume_settings
 from core.connections import ConnectionConfigError, parse_connections
 from core.context import (
     DIRECT_OUTPUT,
@@ -108,7 +114,22 @@ def parse_args(argv=None):
         help='thread (padrão) ou process; process usa fork, só em Linux e sem MongoDB',
     )
 
+    parser.add_argument(
+        '--resume',
+        metavar='TIMESTAMP',
+        help='retoma a geração que falhou em runs/<cliente>/<TIMESTAMP>, sem gerar de novo as tarefas concluídas',
+    )
+    parser.add_argument(
+        '--rerun',
+        metavar='TAREFA',
+        help='na retomada, gera de novo a tarefa concluída e tudo o que vem depois dela na fase',
+    )
+
     args = parser.parse_args(argv)
+    if args.rerun and not args.resume:
+        parser.error('--rerun exige --resume')
+    if args.resume and args.output != FILE_OUTPUT:
+        parser.error('--resume só funciona com --output file: a transação no destino já foi desfeita na falha')
     if args.workers < 1:
         parser.error('--workers precisa ser 1 ou mais')
     if args.on_error and not args.application:
@@ -170,10 +191,11 @@ def main(argv=None) -> int:
 
     try:
         # The client builds its context in the constructor: the choices reach the factory from here.
-        with output_settings(settings), parallel_settings(ParallelSettings(args.workers, args.worker_mode)):
+        resume = resume_settings(ResumeSettings(args.resume, args.rerun)) if args.resume else nullcontext()
+        with output_settings(settings), parallel_settings(ParallelSettings(args.workers, args.worker_mode)), resume:
             migration = load_migration(args.client)
         generate(migration, args.debug)
-    except (ClientNotFoundError, ConnectionConfigError, AdapterResolutionError) as exc:
+    except (ClientNotFoundError, ConnectionConfigError, AdapterResolutionError, CheckpointError) as exc:
         # Configuration problems: the message says what to fix, a traceback adds nothing.
         print(f'[ERRO] {exc}')
         return 1

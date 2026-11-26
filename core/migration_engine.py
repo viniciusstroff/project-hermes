@@ -2,7 +2,7 @@ from contextlib import nullcontext
 
 from core.metrics import NULL_UNIT, LostValue
 from core.operations import Insert
-from core.queries import UnsupportedQueryError, with_limit
+from core.queries import UnsupportedQueryError, query_to_dict, with_limit
 from core.strategies import FieldStrategy
 
 DEFAULT_PROGRESS_EVERY = 1000
@@ -99,7 +99,11 @@ class MigrationEngine:
             raise
         except Exception:
             return None
-        return None if total is None else int(total)
+        total = None if total is None else int(total)
+        if self.metrics is not None and total is not None:
+            # Kept in the checkpoint: a resume counts it again to detect a changed source.
+            self.metrics.counted(self.source_name, query_to_dict(query), total)
+        return total
 
     def emit(self, operation):
         """Deliver one write operation to the output, which renders it for the target."""

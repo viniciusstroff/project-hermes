@@ -215,6 +215,8 @@ Tarefas da mesma sequência podem gerar ao mesmo tempo com `--workers` maior que
 
 Um cliente que prefira controlar a carga escreve o próprio `run_inserts()` e chama os métodos em ordem, ou chama `self.run_tasks()` no ponto em que quiser.
 
+As tarefas também são os pontos de retomada de uma geração que falhou (ver [execucao.md](execucao.md#retomando-uma-geração-que-falhou)). Para a retomada funcionar, os hooks só emitem operações: nada de gravar em disco ou em outro sistema dentro deles.
+
 ---
 
 ## Passo 6 — Testar em modo debug

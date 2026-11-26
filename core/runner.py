@@ -19,6 +19,9 @@ class MigrationRunner:
             self.context.logger.print_log('----- Início do script de importação V1 - V2 -----')
 
             self._load_reference_maps()
+            begin_checkpoint = getattr(self.context, 'begin_checkpoint', None)
+            if begin_checkpoint is not None:
+                begin_checkpoint()
 
             self.context.open_phase('prepare_target')
             self._call_hook('run_initial')

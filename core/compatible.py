@@ -67,10 +67,11 @@ class CopyEntity:
 def copy_compatible_entities(context, entities):
     """Copy every listed entity into the current phase of the output.
 
-    With more than one worker, each entity is a task ``copy:<entity>`` and
-    each native copy a task whose dump file is its segment. The merge order
-    is the one of the sequential copy: per source, the row by row copies,
-    then the native copy.
+    Each entity is a task ``copy:<entity>`` and each native copy a task, so a
+    resume skips what was copied. With more than one worker they run at the
+    same time, and the dump file of a native copy is its segment. The merge
+    order is the one of the sequential copy: per source, the row by row
+    copies, then the native copy.
     """
 
     entities = list(entities)
@@ -78,20 +79,7 @@ def copy_compatible_entities(context, entities):
         if not isinstance(entity, CopyEntity):
             raise TypeError(f'compatible_entities() deve devolver CopyEntity; recebeu {entity!r}.')
 
-    plan = _plan(context, entities)
-    parallel = getattr(context, 'parallel', None)
-    if parallel is not None and parallel.workers > 1:
-        run_task_list(context, _copy_tasks(plan))
-        return
-
-    for source_name, rows, native, native_entities in plan:
-        engine = context.source(source_name)
-        for entity in rows:
-            entity.run(engine)
-        if native_entities:
-            # Last in the phase: a native copy may change session settings,
-            # such as the search_path that pg_dump empties.
-            _native_copy(context, source_name, native, native_entities)
+    run_task_list(context, _copy_tasks(_plan(context, entities)))
 
 
 def _plan(context, entities):
@@ -129,11 +117,14 @@ def _copy_tasks(plan) -> list:
                 f'copy:{entity.target_entity}', 1, lambda context, entity=entity: entity.run(context.source(entity.source)),
             ))
         if native_entities:
+            # Last in the phase: a native copy may change session settings,
+            # such as the search_path that pg_dump empties.
             tasks.append(Task(
                 f'copy:{source_name}:{native.name}',
                 1,
                 lambda context, source_name=source_name, native=native, entities=native_entities: (
                     _native_copy_task(context, source_name, native, entities)
+                    if hasattr(context, 'segment_path') else _native_copy(context, source_name, native, entities)
                 ),
                 writes_segment=True,
             ))
