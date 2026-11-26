@@ -139,7 +139,7 @@ class FakeSource(FakeSqlSource):
 
     def _rows_for(self, sql):
         for table, rows in self.rows_by_table.items():
-            if f'public.{table}' in sql.split('JOIN')[0]:
+            if f' FROM {table}' in sql:
                 return rows
         raise AssertionError(f'consulta inesperada: {sql}')
 
@@ -203,22 +203,22 @@ class GeneratedSqlTest(unittest.TestCase):
         self.assertEqual(
             source.queries[-1],
             'SELECT cod_aluno, nome_aluno, cpf, dt_nasc, email_contato, sexo, dt_cadastro, cod_curso, situacao, '
-            'obs, fone, nome_resp, fone_resp, parentesco FROM public.tb_aluno ORDER BY cod_aluno',
+            'obs, fone, nome_resp, fone_resp, parentesco FROM tb_aluno ORDER BY cod_aluno',
         )
 
         self.assertEqual(written, [
-            "INSERT INTO public.people (id, name, cpf, birth_date, email, gender, created_at) VALUES "
+            "INSERT INTO people (id, name, cpf, birth_date, email, gender, created_at) VALUES "
             "(300, 'Mariana da Silva Santos', '10000210000', '1990-10-02', 'aluno300@acmeedu.example', 'F', "
             "'2016-08-22 08:00:00');\n",
-            "INSERT INTO public.students (id, person_id, course_id, status_id, notes) VALUES "
+            "INSERT INTO students (id, person_id, course_id, status_id, notes) VALUES "
             "(300, 300, 1, 4, E'Documentos em \\\\\\\\servidor\\\\secretaria\\\\');\n",
-            "INSERT INTO public.phones (person_id, number, source) VALUES (300, '51902375700', 'student');\n",
-            "INSERT INTO public.guardians (student_id, name, phone, relationship) VALUES "
+            "INSERT INTO phones (person_id, number, source) VALUES (300, '51902375700', 'student');\n",
+            "INSERT INTO guardians (student_id, name, phone, relationship) VALUES "
             "(300, 'João da Silva', '11987654321', 'Pai');\n",
-            "INSERT INTO public.people (id, name, cpf, birth_date, email, gender, created_at) VALUES "
+            "INSERT INTO people (id, name, cpf, birth_date, email, gender, created_at) VALUES "
             "(301, 'Mariana da Silva Santos', NULL, NULL, 'aluno300@acmeedu.example', NULL, "
             "'2016-08-22 08:00:00');\n",
-            "INSERT INTO public.students (id, person_id, course_id, status_id, notes) VALUES "
+            "INSERT INTO students (id, person_id, course_id, status_id, notes) VALUES "
             "(301, 301, 1, 4, NULL);\n",
         ])
 
@@ -226,26 +226,32 @@ class GeneratedSqlTest(unittest.TestCase):
         shared = {
             'cod_prof': 6, 'nome_prof': 'Mariana da Silva Santos', 'cpf': '10000210000',
             'email': 'prof6@acmeedu.example', 'titulacao': '', 'fone1': '(51) 90237-5700',
-            'fone2': '+55 71 97518-7514', 'person_id': 300, 'is_student': True, 'student_phone': '51902375700',
+            'fone2': '+55 71 97518-7514',
         }
         regular = {
             'cod_prof': 4, 'nome_prof': 'João de Fernandes Rodrigues', 'cpf': '500.000.044-00',
             'email': 'Prof4@AcmeEdu.Example', 'titulacao': 'mestrado', 'fone1': '(51) 99598-1676',
-            'fone2': '51995981676', 'person_id': 100004, 'is_student': False, 'student_phone': None,
+            'fone2': '51995981676',
         }
-        migration, written, source = make_migration({'tb_professor': [shared, regular]})
+        # Dois alunos com o CPF da professora 6: vale o de menor cod_aluno.
+        students = [
+            {'cod_aluno': 300, 'cpf': '100.002.100-00', 'fone': '51902375700'},
+            {'cod_aluno': 301, 'cpf': '10000210000', 'fone': '11999999999'},
+            {'cod_aluno': 302, 'cpf': '', 'fone': None},
+        ]
+        migration, written, source = make_migration({'tb_professor': [shared, regular], 'tb_aluno': students})
 
         migration.insert_teachers()
 
-        self.assertIn('LEFT JOIN LATERAL', source.queries[0])
-        self.assertIn('100000 + p.cod_prof', source.queries[0])
+        self.assertEqual(source.queries[0], 'SELECT cod_aluno, cpf, fone FROM tb_aluno ORDER BY cod_aluno')
+        self.assertTrue(all('JOIN' not in query for query in source.queries))
         self.assertEqual(written, [
-            "INSERT INTO public.teachers (id, person_id, degree) VALUES (6, 300, NULL);\n",
-            "INSERT INTO public.phones (person_id, number, source) VALUES (300, '71975187514', 'teacher');\n",
-            "INSERT INTO public.people (id, name, cpf, email) VALUES "
+            "INSERT INTO teachers (id, person_id, degree) VALUES (6, 300, NULL);\n",
+            "INSERT INTO phones (person_id, number, source) VALUES (300, '71975187514', 'teacher');\n",
+            "INSERT INTO people (id, name, cpf, email) VALUES "
             "(100004, 'João de Fernandes Rodrigues', '50000004400', 'prof4@acmeedu.example');\n",
-            "INSERT INTO public.teachers (id, person_id, degree) VALUES (4, 100004, 2);\n",
-            "INSERT INTO public.phones (person_id, number, source) VALUES (100004, '51995981676', 'teacher');\n",
+            "INSERT INTO teachers (id, person_id, degree) VALUES (4, 100004, 2);\n",
+            "INSERT INTO phones (person_id, number, source) VALUES (100004, '51995981676', 'teacher');\n",
         ])
 
     def test_courses_classes_and_enrollments(self):
@@ -262,10 +268,10 @@ class GeneratedSqlTest(unittest.TestCase):
         migration.insert_enrollments()
 
         self.assertEqual(written, [
-            "INSERT INTO public.courses (id, name, code, modality, workload_hours, active) VALUES "
+            "INSERT INTO courses (id, name, code, modality, workload_hours, active) VALUES "
             "(3, 'Pedagogia', 'PED', 1, 3200, true);\n",
-            "INSERT INTO public.classes (id, subject_id, year, term, room) VALUES (7, 7, 2022, 1, 'Sala 107');\n",
-            "INSERT INTO public.enrollments (id, student_id, class_id, enrolled_at, final_grade, attendance_pct, status) "
+            "INSERT INTO classes (id, subject_id, year, term, room) VALUES (7, 7, 2022, 1, 'Sala 107');\n",
+            "INSERT INTO enrollments (id, student_id, class_id, enrolled_at, final_grade, attendance_pct, status) "
             "VALUES (97, 25, 7, NULL, 5.89, 85.00, 3);\n",
         ])
 
@@ -276,7 +282,7 @@ class PhaseSqlTest(unittest.TestCase):
 
         self.assertEqual(
             migration.compatible_entities(),
-            [CopyEntity('public.holidays', source='v1', order_by='id')],
+            [CopyEntity('holidays', source='v1', order_by='id')],
         )
         self.assertFalse(hasattr(migration, 'dump_ignoring_tables'))
 
@@ -287,11 +293,11 @@ class PhaseSqlTest(unittest.TestCase):
 
         operations = [op for op in migration.context.operations if not isinstance(op, Comment)]
         clear, suspend = operations
-        self.assertEqual(clear.entities[:2], ('public.enrollments', 'public.classes'))
-        self.assertEqual(clear.entities[-1], 'public.holidays')
-        self.assertNotIn('public.student_statuses', clear.entities)
+        self.assertEqual(clear.entities[:2], ('enrollments', 'classes'))
+        self.assertEqual(clear.entities[-1], 'holidays')
+        self.assertNotIn('student_statuses', clear.entities)
         self.assertEqual(suspend, SuspendConstraints())
-        self.assertTrue(PostgresTargetAdapter().render(clear)[0].endswith('public.holidays RESTART IDENTITY;\n'))
+        self.assertTrue(PostgresTargetAdapter().render(clear)[0].endswith(' holidays RESTART IDENTITY;\n'))
 
     def test_sequences_use_id_column(self):
         migration, _, _ = make_migration({})
@@ -300,7 +306,7 @@ class PhaseSqlTest(unittest.TestCase):
 
         self.assertEqual(
             migration.context.operations,
-            [ResetIdentity(f'public.{table}', 'id') for table in [*acmeedu.TARGET_TABLES, 'holidays']],
+            [ResetIdentity(table, 'id') for table in [*acmeedu.TARGET_TABLES, 'holidays']],
         )
 
 
