@@ -187,7 +187,7 @@ class RegistryTest(unittest.TestCase):
             resolve_adapter('oracle', 'source')
 
         self.assertIn("'oracle'", str(raised.exception))
-        self.assertIn('firebird, postgres', str(raised.exception))
+        self.assertIn('firebird, mongodb, postgres', str(raised.exception))
 
     def test_adapter_without_the_role(self):
         with self.assertRaises(AdapterResolutionError) as raised:
@@ -220,7 +220,7 @@ class DriversOnDemandTest(unittest.TestCase):
     def test_core_imports_without_database_drivers(self):
         script = '\n'.join([
             'import sys, types',
-            "for name in ('psycopg2', 'psycopg2.extras', 'firebirdsql', 'pymongo'):",
+            "for name in ('psycopg2', 'psycopg2.extras', 'firebirdsql', 'pymongo', 'bson'):",
             '    sys.modules[name] = None',
             "dotenv = types.ModuleType('dotenv')",
             'dotenv.dotenv_values = lambda path: {}',
@@ -230,6 +230,8 @@ class DriversOnDemandTest(unittest.TestCase):
             "resolve_adapter('postgres', 'source')",
             "resolve_adapter('postgres', 'target')",
             "resolve_adapter('firebird', 'source')",
+            "resolve_adapter('mongodb', 'source')",
+            "resolve_adapter('mongodb', 'target')",
         ])
 
         result = subprocess.run(

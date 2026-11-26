@@ -38,6 +38,8 @@ class Command:
     line: int
     skip: str = None
     error: str = None
+    payload: Any = None
+    """Parsed form of the command, when the session reads it into something other than text."""
 
 
 class ArtifactReadError(ValueError):
@@ -48,10 +50,27 @@ class CapabilityError(Exception):
     """The target cannot honor the requested mode or error policy."""
 
 
+class DeferredCommandError(Exception):
+    """A command the session had deferred (to run it in a batch) failed.
+
+    ``position`` counts the deferred commands from the oldest one still
+    pending, in the order the session received them, so the applier can name
+    the command of the artifact that failed.
+    """
+
+    def __init__(self, position: int, cause: BaseException):
+        self.position = position
+        self.cause = cause
+        super().__init__(str(cause))
+
+
 class TargetSession(Protocol):
     """One connection to the target, used for one application."""
 
     capabilities: Capabilities
+
+    pending: int
+    """Commands received by ``execute`` and not run yet. Zero for a session that never defers."""
 
     def describe(self) -> dict:
         """Adapter and connection of the session, without password, for the report."""
@@ -63,7 +82,13 @@ class TargetSession(Protocol):
 
     def begin(self) -> None: ...
 
-    def execute(self, command: Command) -> None: ...
+    def execute(self, command: Command) -> None:
+        """Run a command, or defer it to a batch. A deferred failure raises ``DeferredCommandError``."""
+        ...
+
+    def flush(self) -> None:
+        """Run every deferred command."""
+        ...
 
     def savepoint(self, name: str) -> None: ...
 

@@ -5,10 +5,10 @@
 ### Dependências Python
 
 ```bash
-pip install -r requirements.txt -r requirements/postgres.txt -r requirements/firebird.txt
+pip install -r requirements.txt -r requirements/postgres.txt -r requirements/firebird.txt -r requirements/mongodb.txt
 ```
 
-O `requirements.txt` tem só o core (`python-dotenv`). Os drivers ficam em `requirements/<adapter>.txt`: `psycopg2-binary` no `postgres.txt` e `firebirdsql` no `firebird.txt`. Instale só os dos adapters que o cliente usa. O driver de cada banco só é importado quando uma conexão daquele adapter abre.
+O `requirements.txt` tem só o core (`python-dotenv`). Os drivers ficam em `requirements/<adapter>.txt`: `psycopg2-binary` no `postgres.txt`, `firebirdsql` no `firebird.txt` e `pymongo` no `mongodb.txt`. Instale só os dos adapters que o cliente usa. O driver de cada banco só é importado quando uma conexão daquele adapter abre.
 
 ### Versões dos servidores
 
@@ -18,6 +18,15 @@ Cada adapter lê a versão do servidor ao conectar e confere a faixa que aceita.
 |---|---|---|
 | `postgres` | 9.6 ou mais novo | 12 ou mais novo |
 | `firebird` | 2.5 ou mais novo | não se aplica |
+| `mongodb` | 4.4 ou mais novo | 4.4 ou mais novo |
+
+### MongoDB
+
+O adapter `mongodb` lê `<PREFIXO>_URI`, obrigatória e fora do manifesto. O banco vem de `<PREFIXO>_NAME` ou da própria URI. Na origem, cada entidade é uma coleção e o `_id` só vem quando é pedido. Os artefatos do destino são `.jsonl`, uma operação por linha em Extended JSON relaxado, que guarda data, `Decimal128` e binário.
+
+A aplicação no MongoDB roda numa transação, que só existe em replica set (ou atrás de um `mongos`). Num servidor solto, o aplicador recusa o apply e o dry run antes de executar qualquer comando. O MongoDB não tem savepoint, então a política `continue` é recusada e o dry run usa `stop`. Os inserts seguidos na mesma coleção vão em lotes de 1000 (`insert_many`). Um erro no lote aparece no relatório com o número e a linha do comando que falhou.
+
+O servidor desfaz uma transação mais velha que o `transactionLifetimeLimitSeconds`, 60 segundos por padrão. O valor vai para o relatório da aplicação. Para uma carga grande, aumente o limite antes de aplicar, por exemplo com `db.adminCommand({setParameter: 1, transactionLifetimeLimitSeconds: 3600})`.
 
 Um `pg_dump` mais novo que o destino grava parâmetros que o destino não conhece, como o `SET transaction_timeout` do 17. Na aplicação, a sessão PostgreSQL lê os parâmetros do servidor e pula esses comandos, contados como `unknown_setting` no relatório.
 

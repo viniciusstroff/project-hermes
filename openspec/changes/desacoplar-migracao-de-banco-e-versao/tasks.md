@@ -49,11 +49,11 @@
 
 ## 8. MongoDB Adapter
 
-- [ ] 8.1 Write `core/adapters/mongodb.py` with `find`, `aggregate` for native queries and `count_documents`.
-- [ ] 8.2 Render operations as relaxed Extended JSON lines and read them back.
-- [ ] 8.3 Apply in a session transaction, grouping consecutive inserts into `insert_many` batches and mapping bulk errors back to command numbers.
-- [ ] 8.4 Detect replica set support for the transaction capability and read `transactionLifetimeLimitSeconds`.
-- [ ] 8.5 Add tests with a fake client and an integration test against MongoDB 7 in Docker.
+- [x] 8.1 Write `core/adapters/mongodb.py` with `find`, `aggregate` for native queries and `count_documents`.
+- [x] 8.2 Render operations as relaxed Extended JSON lines and read them back.
+- [x] 8.3 Apply in a session transaction, grouping consecutive inserts into `insert_many` batches and mapping bulk errors back to command numbers.
+- [x] 8.4 Detect replica set support for the transaction capability and read `transactionLifetimeLimitSeconds`.
+- [x] 8.5 Add tests with a fake client and an integration test against MongoDB 7 in Docker. (`tests/test_mongodb_integration.py` runs with `MONGODB_TEST_URI` and `MONGODB_STANDALONE_URI`; skipped otherwise.)
 
 ## 9. Reference Client and Version Matrix
 

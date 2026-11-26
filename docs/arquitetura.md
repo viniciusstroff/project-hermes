@@ -20,7 +20,7 @@ O `core/connections.py` lê as conexões que o `.env` do cliente declara por nom
 
 Quando dois nomes de origem começam igual, a chave fica com o nome declarado mais longo: `SOURCE_V1_LEGACY_HOST` é da origem `v1_legacy`, não da `v1`. Uma chave `SOURCE_` sem dono interrompe a execução antes de conectar.
 
-O registro em `core/adapters/registry.py` resolve o nome do adapter para a classe de origem ou de destino. Os embutidos são `postgres` (origem e destino) e `firebird` (só origem). Qualquer outro valor no formato `pacote.modulo:Classe` é importado e conferido contra o contrato do papel (`connect`, `read`, `count` e `close` na origem; `connect`, `render`, `read` e `close` no destino). Cada adapter importa o driver dentro do próprio `connect`, então um cliente só com PostgreSQL roda sem `firebirdsql`.
+O registro em `core/adapters/registry.py` resolve o nome do adapter para a classe de origem ou de destino. Os embutidos são `postgres` (origem e destino), `firebird` (só origem) e `mongodb` (origem e destino). Qualquer outro valor no formato `pacote.modulo:Classe` é importado e conferido contra o contrato do papel (`connect`, `read`, `count` e `close` na origem; `connect`, `render`, `read` e `close` no destino). Cada adapter importa o driver dentro do próprio `connect`, então um cliente só com PostgreSQL roda sem `firebirdsql`.
 
 Na AcmeEdu e no Acme, a origem principal se chama `v1`. Ela é a fonte das leituras e da cópia das entidades compatíveis. O destino é lido para os mapas de referência e para a lista de tabelas da suspensão de triggers. O Acme declara ainda a origem opcional `fb`, de Firebird, para algumas rotinas específicas.
 
@@ -233,6 +233,14 @@ O que é do PostgreSQL fica no adapter: `core/adapters/postgres_splitter.py`
 separa os `.sql` em comandos e `core/adapters/postgres_session.py` tem as
 regras de comandos pulados, o `RESET ALL`, o `standard_conforming_strings`
 lido do servidor, os savepoints e o `SQLSTATE` como código de erro.
+
+O adapter MongoDB (`core/adapters/mongodb.py`) tem a própria sessão. Ela lê os
+`.jsonl` linha a linha (`Command.payload` guarda a operação já lida), declara
+transação só em replica set e nenhum savepoint. Os inserts seguidos na mesma
+coleção ficam pendentes e vão num `insert_many` de até 1000. Por isso a sessão
+expõe `pending` e `flush()`. Um erro de lote chega como `DeferredCommandError`,
+com a posição do comando entre os pendentes. A `_StopPolicy` usa essa
+posição para registrar no relatório o comando certo do artefato.
 
 ### Por que depois da geração
 

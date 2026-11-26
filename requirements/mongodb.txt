@@ -1,0 +1,2 @@
+# Driver do adapter mongodb (origem e destino). Traz o bson.
+pymongo>=4.6,<5

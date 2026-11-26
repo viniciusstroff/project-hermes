@@ -31,6 +31,8 @@ class PostgresSession:
     """One psycopg2 connection used for one application, in a single transaction."""
 
     capabilities = CAPABILITIES
+    # Every command runs when execute() is called.
+    pending = 0
 
     def __init__(self, connection):
         self.connection = connection
@@ -69,6 +71,9 @@ class PostgresSession:
 
     def execute(self, command: Command):
         self._cursor.execute(command.text)
+
+    def flush(self):
+        pass
 
     def savepoint(self, name: str):
         self._cursor.execute(f'SAVEPOINT {name}')
