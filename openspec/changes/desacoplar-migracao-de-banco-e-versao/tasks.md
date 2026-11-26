@@ -78,12 +78,12 @@
 
 ## 10. Documentation
 
-- [ ] 10.1 Update `docs/arquitetura.md` with the contracts, the registry, the operations and the capabilities.
-- [ ] 10.2 Update `docs/execucao.md`, `docs/novo-cliente.md`, `docs/estrategias.md`, the main README and `AcmeEdu/README.md` with the new `.env` and API.
-- [ ] 10.3 Write a conversion guide for private clients, with the `AcmeEdu` script before and after.
-- [ ] 10.4 Update item 1 of `docs/melhorias-futuras.md`.
+- [x] 10.1 Update `docs/arquitetura.md` with the contracts, the registry, the operations and the capabilities.
+- [x] 10.2 Update `docs/execucao.md`, `docs/novo-cliente.md`, `docs/estrategias.md`, the main README and `AcmeEdu/README.md` with the new `.env` and API.
+- [x] 10.3 Write a conversion guide for private clients, with the `AcmeEdu` script before and after. (`docs/conversao-clientes.md`.)
+- [x] 10.4 Update item 1 of `docs/melhorias-futuras.md`.
 
 ## 11. Verification
 
-- [ ] 11.1 Run `python3 -m unittest discover -s tests` and `python3 -m compileall core Acme AcmeEdu tests`.
-- [ ] 11.2 Run `openspec validate desacoplar-migracao-de-banco-e-versao`.
+- [x] 11.1 Run `python3 -m unittest discover -s tests` and `python3 -m compileall core Acme AcmeEdu tests`. (On the host, 11 MongoDB tests skip without `pymongo`; in the image with every driver, only the 3 integration tests skip without `MONGODB_TEST_URI`.)
+- [x] 11.2 Run `openspec validate desacoplar-migracao-de-banco-e-versao`.

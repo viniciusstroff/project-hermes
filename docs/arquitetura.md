@@ -63,7 +63,29 @@ Componentes principais:
   `FileOutput`, que pede ao adapter de destino os comandos de cada operação e
   grava em `runs/<cliente>/<timestamp>/comandos/<NN>_<fase>.<extensão>`.
   O `MirrorOutput` entrega as mesmas operações para mais de um output.
-- `BaseMigration`: fachada transitória para scripts que ainda usam herança.
+- `TargetSession` e `Capabilities` (`core/application.py`): aplicam os
+  artefatos no destino, depois da geração. Ver [Aplicação no destino](#aplicação-no-destino).
+- Versões (`core/versions.py`): cada adapter declara a versão mínima do
+  servidor (`supported_versions`) e confere ao conectar.
+- `BaseMigration`: fachada para scripts que usam herança, sobre o mesmo contexto.
+
+### Contratos por papel
+
+| Papel | Contrato | Embutidos | Onde |
+|---|---|---|---|
+| origem | `connect`, `read(query)`, `count(query)`, `close` | `postgres`, `firebird`, `mongodb` | `core/adapters/` |
+| destino, geração | `connect`, `render(operacao)`, `read(query)`, `close_reads`, `close`, `artifact_format` | `postgres`, `mongodb` | `core/adapters/` |
+| destino, aplicação | `capabilities`, `session()` com `TargetSession` | `postgres`, `mongodb` | `core/adapters/` e `core/application.py` |
+| saída | `OutputAdapter`: `open_phase`, `write(operacao)`, `include_file`, `flush`, `finish`, `describe`, `close` | `FileOutput`, `MirrorOutput` | `core/outputs/` |
+
+| Adapter | Origem | Destino | Formato | Transação | Savepoint | Driver |
+|---|---|---|---|---|---|---|
+| `postgres` | 9.6 ou mais novo | 12 ou mais novo | `.sql` | sim | sim | `psycopg2` |
+| `firebird` | 2.5 ou mais novo | não | | | | `firebirdsql` |
+| `mongodb` | 4.4 ou mais novo | 4.4 ou mais novo | `.jsonl` | só em replica set | não | `pymongo` |
+
+Um adapter de fora do core implementa o contrato do papel e entra no `.env`
+pelo caminho `pacote.modulo:Classe`. O registro confere os métodos antes de usar.
 
 Responsabilidades do cliente:
 
@@ -144,17 +166,19 @@ um `OutputAdapter`, definido em `core/outputs/base.py`:
 class OutputAdapter(Protocol):
     def open_phase(self, phase: str) -> None: ...
     def write(self, operation) -> None: ...
+    def include_file(self, path: str) -> None: ...
     def flush(self) -> None: ...
     def finish(self, success: bool) -> None: ...
     def describe(self) -> dict: ...
     def close(self) -> None: ...
 ```
 
-As fases são chaves lógicas: `setup`, `prepare_target`, `load_transformed_data`
-e `finalize_target`. A `DefaultMigrationContextFactory` abre `setup` ao montar o
-contexto, depois de conectar o destino, porque a extensão do arquivo vem do
-adapter. O `MigrationRunner` abre as outras três na ordem padrão, emite a
-retomada das triggers suspensas e chama `flush()`. Os engines criados por
+As fases são chaves lógicas: `setup`, `prepare_target`, `copy_compatible_entities`,
+`load_transformed_data` e `finalize_target`. A `DefaultMigrationContextFactory`
+abre `setup` ao montar o contexto, depois de conectar o destino, porque a
+extensão do arquivo vem do adapter. O `MigrationRunner` abre as outras quatro na
+ordem padrão, copia as entidades de `compatible_entities()`, emite a retomada
+das triggers suspensas e chama `flush()`. Os engines criados por
 `context.source()` escrevem pelo mesmo `context.emit`.
 
 O output fica sabendo do resultado pelo `finish(success)`, que o runner chama
@@ -184,7 +208,8 @@ um buffer de até 500 antes de ir para o arquivo. Trocar de fase, chamar
 bloco `-----` de antes no SQL. O `finish()` grava o buffer nos dois resultados:
 quando a execução falha, os arquivos parciais ficam no disco. Um valor que o
 destino não guarda falha no `write()`, com tabela e coluna na mensagem
-(`ValueSerializationError`).
+(`ValueSerializationError`). O `include_file()` copia para a fase um arquivo já
+no formato do destino, como a saída do `pg_dump` da cópia nativa.
 
 O `MirrorOutput`, em `core/outputs/mirror.py`, recebe uma lista de outputs e
 repassa cada chamada para todos, na ordem em que foram passados:
@@ -333,6 +358,7 @@ Os artefatos ficam em `runs/<cliente>/<YYYYmmdd-HHMMSS>/`:
 - `comandos/02_copy_compatible_entities.sql`
 - `comandos/03_load_transformed_data.sql`
 - `comandos/04_finalize_target.sql`
+- com destino MongoDB, os mesmos arquivos com extensão `.jsonl`
 - `aplicacoes/<YYYYmmdd-HHMMSS>-<apply|dry-run>/relatorio.json` e `erros.txt`, um par por aplicação
 
 Responsabilidade de cada artefato:
@@ -370,13 +396,13 @@ Para funcionar, o ambiente precisa ter:
 
 - `python3`
 - `python-dotenv`
-- o driver de cada adapter usado, de `requirements/<adapter>.txt`: `psycopg2` no `postgres` e `firebirdsql` no `firebird`
+- o driver de cada adapter usado, de `requirements/<adapter>.txt`: `psycopg2` no `postgres`, `firebirdsql` no `firebird` e `pymongo` no `mongodb`
 - `pg_dump`, só com a cópia nativa ligada, da versão do servidor de origem ou mais nova
 - `psql`, só para aplicar com o `rodar2.sh`
 - servidores dentro da faixa de cada adapter, conferida ao conectar (`supported_versions` e `core/versions.py`)
 - acesso de rede aos bancos configurados
 
-O `Aplicar.py` sozinho precisa apenas de Python 3, `psycopg2` e da pasta `core/`.
+O `Aplicar.py` sozinho precisa apenas de Python 3, do driver do adapter de destino e da pasta `core/`.
 
 O diretório `runs/` é criado automaticamente na raiz do projeto e ignorado pelo Git.
 
@@ -385,5 +411,6 @@ O diretório `runs/` é criado automaticamente na raiz do projeto e ignorado pel
 - O `main` chama `enable_debug(100)`, o que limita as consultas e impede migração completa se isso não for removido.
 - A aplicação em transação única bloqueia o destino até o fim. Um erro perto do fim descarta a carga inteira.
 - Os `setval` executados antes de um erro continuam valendo depois do `ROLLBACK`, porque sequences não são transacionais.
-- Os valores dos `INSERT`s passam pelo `PostgresDialect.serialize_value`. Strings com barra invertida saem como `E'...'` com a barra dobrada e chegam ao destino sem alteração, com qualquer `standard_conforming_strings`. Ainda saem errados `bytes` e `memoryview` (colunas `bytea`), `nan`, `inf` e textos com o caractere NUL (item 8 de [melhorias-futuras.md](melhorias-futuras.md)).
-- A lista de tabelas ignoradas e deletadas é estática e depende do histórico do Acme.
+- Num destino MongoDB, a transação tem limite de tempo (`transactionLifetimeLimitSeconds`, 60 segundos por padrão). Uma carga grande precisa do limite aumentado antes da aplicação.
+- A cópia linha a linha das entidades compatíveis insere todas as colunas. Uma coluna `GENERATED ALWAYS` falha; para essas tabelas, o caminho é o `pg_dump`.
+- As listas de entidades compatíveis e de tabelas limpas são estáticas e dependem do histórico de cada cliente.
