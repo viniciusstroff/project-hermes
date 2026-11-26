@@ -8,10 +8,17 @@
 #
 # Os scripts de banco/ só rodam na primeira subida, com o volume vazio. Para
 # recriar do zero: docker compose -f AcmeEdu/docker-compose.yml down -v
+#
+# O profile matriz sobe as outras bases da matriz de prova: V1 e V2 em
+# PostgreSQL 17, um MongoDB 7 em replica set de um nó e Firebird 3 e 5. As V1
+# em MongoDB e Firebird são preenchidas a partir da V1 em PostgreSQL pelo
+# AcmeEdu/preparar_matriz.py. A matriz roda com o AcmeEdu/matriz.py:
+#
+#   docker compose -f AcmeEdu/docker-compose.yml --profile matriz up -d
 
 services:
   acmeedu-v1:
-    # 9.6 para combinar com o pg_dump da imagem do Hermes e com a V1 real.
+    # 9.6, a versão da V1 real.
     image: postgres:9.6-alpine
     container_name: acmeedu-v1
     environment:
@@ -49,6 +56,80 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    networks:
+      - hermes-net
+
+  acmeedu-v1-pg17:
+    image: postgres:17-alpine
+    container_name: acmeedu-v1-pg17
+    profiles: ["matriz"]
+    environment:
+      POSTGRES_DB: acmeedu_v1
+      POSTGRES_USER: acmeedu
+      POSTGRES_PASSWORD: acmeedu
+    volumes:
+      - ./banco/v1_esquema.sql:/docker-entrypoint-initdb.d/01_esquema.sql:ro
+      - ./banco/v1_dados.sql:/docker-entrypoint-initdb.d/02_dados.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U acmeedu -d acmeedu_v1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - hermes-net
+
+  acmeedu-v2-pg17:
+    image: postgres:17-alpine
+    container_name: acmeedu-v2-pg17
+    profiles: ["matriz"]
+    environment:
+      POSTGRES_DB: acmeedu_v2
+      POSTGRES_USER: acmeedu
+      POSTGRES_PASSWORD: acmeedu
+    volumes:
+      - ./banco/v2_esquema.sql:/docker-entrypoint-initdb.d/01_esquema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U acmeedu -d acmeedu_v2"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - hermes-net
+
+  acmeedu-mongo:
+    # Transação no MongoDB só existe em replica set: um nó basta para a prova.
+    image: mongo:7
+    container_name: acmeedu-mongo
+    profiles: ["matriz"]
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    healthcheck:
+      # Inicia o replica set na primeira checagem e depois só confere.
+      test: ["CMD", "mongosh", "--quiet", "--eval",
+             "try { rs.status().ok } catch (e) { rs.initiate({_id: 'rs0', members: [{_id: 0, host: 'acmeedu-mongo:27017'}]}).ok }"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+    networks:
+      - hermes-net
+
+  acmeedu-fb3:
+    image: firebirdsql/firebird:3
+    container_name: acmeedu-fb3
+    profiles: ["matriz"]
+    environment: &firebird
+      FIREBIRD_ROOT_PASSWORD: acmeedu-raiz
+      FIREBIRD_USER: acmeedu
+      FIREBIRD_PASSWORD: acmeedu
+      FIREBIRD_DATABASE: acmeedu_v1.fdb
+      FIREBIRD_DATABASE_DEFAULT_CHARSET: UTF8
+    networks:
+      - hermes-net
+
+  acmeedu-fb5:
+    image: firebirdsql/firebird:5
+    container_name: acmeedu-fb5
+    profiles: ["matriz"]
+    environment: *firebird
     networks:
       - hermes-net
 

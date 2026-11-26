@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(_clientdir))
 from core.base_migration import BaseMigration
 from core.compatible import CopyEntity
 from core.multi_target_migration import MultiTargetMigration, TargetMigration
-from core.queries import NativeQuery, SourceQuery
+from core.queries import SourceQuery
 from core.references import ReferenceMap
 from core.strategies import DateConvert, Fixed, Lookup, Rename, Transform
 from core.table_migration import TableMigration
@@ -172,25 +172,34 @@ TARGET_TABLES = [
     'enrollments',
 ]
 
-# person_id: o cod_aluno de um aluno com o mesmo CPF (só dígitos) ou
-# 100000 + cod_prof. is_student diz se a pessoa já veio pelos alunos.
-# A junção não cabe num SourceQuery, por isso a consulta é nativa do PostgreSQL.
-TEACHERS_SQL = r"""
-SELECT p.cod_prof, p.nome_prof, p.cpf, p.email, p.titulacao, p.fone1, p.fone2,
-       COALESCE(a.cod_aluno, {offset} + p.cod_prof) AS person_id,
-       a.cod_aluno IS NOT NULL AS is_student,
-       a.fone AS student_phone
-FROM public.tb_professor p
-LEFT JOIN LATERAL (
-    SELECT al.cod_aluno, al.fone
-    FROM public.tb_aluno al
-    WHERE regexp_replace(p.cpf, '\D', '', 'g') <> ''
-      AND regexp_replace(al.cpf, '\D', '', 'g') = regexp_replace(p.cpf, '\D', '', 'g')
-    ORDER BY al.cod_aluno
-    LIMIT 1
-) a ON true
-ORDER BY p.cod_prof
-"""
+class TeacherPeople:
+    """Pessoa de cada professor: o aluno com o mesmo CPF (só dígitos) ou 100000 + cod_prof.
+
+    Os alunos chegam em ordem de cod_aluno. Quando dois alunos têm o mesmo
+    CPF, vale o de menor cod_aluno. O agrupamento é feito em Python para o
+    script rodar com a V1 em qualquer banco.
+    """
+
+    def __init__(self, students):
+        self._by_cpf = {}
+        for row in students:
+            digits = only_digits(row['cpf'])
+            if digits and digits not in self._by_cpf:
+                self._by_cpf[digits] = (row['cod_aluno'], row['fone'])
+
+    def _student(self, row):
+        return self._by_cpf.get(only_digits(row['cpf']))
+
+    def is_student(self, row):
+        return self._student(row) is not None
+
+    def person_id(self, row):
+        student = self._student(row)
+        return student[0] if student else TEACHER_PERSON_OFFSET + row['cod_prof']
+
+    def student_phone(self, row):
+        student = self._student(row)
+        return student[1] if student else None
 
 
 def _has_student_phone(row):
@@ -198,14 +207,14 @@ def _has_student_phone(row):
     return phone is not None
 
 
-def _teacher_phone_is_new(column):
+def _teacher_phone_is_new(column, people):
     """Telefone do professor que ainda não está em phones para a mesma pessoa."""
 
     def condition(row):
         phone = clean_phone(row[column])
         if phone is None:
             return False
-        if row['is_student'] and phone == clean_phone(row['student_phone']):
+        if people.is_student(row) and phone == clean_phone(people.student_phone(row)):
             return False
         if column == 'fone2' and phone == clean_phone(row['fone1']):
             return False
@@ -224,15 +233,15 @@ class Migracao(BaseMigration):
 
     def compatible_entities(self):
         # Os feriados já estão no padrão da V2: passam sem transformação.
-        return [CopyEntity('public.holidays', source='v1', order_by='id')]
+        return [CopyEntity('holidays', source='v1', order_by='id')]
 
     def declare_reference_maps(self):
         # Lido da V2 antes da primeira fase, junto com os outros mapas.
-        return [ReferenceMap('student_statuses', table='public.student_statuses', key='code', value='id')]
+        return [ReferenceMap('student_statuses', table='student_statuses', key='code', value='id')]
 
     def run_initial(self):
         self.comment('LIMPEZA DAS TABELAS DA V2')
-        self.clear([f'public.{name}' for name in [*reversed(TARGET_TABLES), 'holidays']])
+        self.clear([*reversed(TARGET_TABLES), 'holidays'])
         self.comment('DESABILITAR TRIGGERS DE TABELAS')
         # Todas as tabelas do destino; o runner reabilita na fase final.
         self.suspend_constraints()
@@ -251,8 +260,8 @@ class Migracao(BaseMigration):
         self.print_log('Inserindo cursos')
         self.comment('COURSES')
         TableMigration(
-            source=SourceQuery('public.tb_curso', order_by='cod_curso'),
-            target='public.courses',
+            source=SourceQuery('tb_curso', order_by='cod_curso'),
+            target='courses',
             fields=[
                 Rename('cod_curso', 'id'),
                 Transform('nome_curso', _column(normalize_name), v2_name='name'),
@@ -269,23 +278,23 @@ class Migracao(BaseMigration):
         self.print_log('Inserindo alunos, pessoas, telefones e responsáveis')
         self.comment('PEOPLE, STUDENTS, PHONES E GUARDIANS (ALUNOS)')
         MultiTargetMigration(
-            source=SourceQuery('public.tb_aluno', order_by='cod_aluno'),
-            label='public.students',
+            source=SourceQuery('tb_aluno', order_by='cod_aluno'),
+            label='students',
             targets=[
-                TargetMigration('public.people', self._student_person_fields()),
-                TargetMigration('public.students', [
+                TargetMigration('people', self._student_person_fields()),
+                TargetMigration('students', [
                     Rename('cod_aluno', 'id'),
                     Rename('cod_aluno', 'person_id'),
                     Rename('cod_curso', 'course_id'),
                     Lookup('situacao', self.student_status_ids(), v2_name='status_id', key_normalizer=_upper_key),
                     Transform('obs', _column(clean_text), v2_name='notes'),
                 ]),
-                TargetMigration('public.phones', [
+                TargetMigration('phones', [
                     Rename('cod_aluno', 'person_id'),
                     Transform('fone', _column(clean_phone), v2_name='number'),
                     Fixed('source', 'student'),
                 ], condition=_has_student_phone),
-                TargetMigration('public.guardians', [
+                TargetMigration('guardians', [
                     Rename('cod_aluno', 'student_id'),
                     Transform('nome_resp', _column(normalize_name), v2_name='name'),
                     Transform('fone_resp', _column(clean_phone), v2_name='phone'),
@@ -298,32 +307,35 @@ class Migracao(BaseMigration):
         """Professores que já são alunos reaproveitam a pessoa do aluno."""
 
         self.print_log('Inserindo professores')
+        engine = self.context.source('v1')
+        people = TeacherPeople(engine.read(SourceQuery('tb_aluno', fields=('cod_aluno', 'cpf', 'fone'), order_by='cod_aluno')))
+        person_id = Transform('cod_prof', lambda value, row: people.person_id(row), v2_name='person_id')
         self.comment('PEOPLE, TEACHERS E PHONES (PROFESSORES)')
         MultiTargetMigration(
-            source=NativeQuery('postgres', TEACHERS_SQL.replace('{offset}', str(TEACHER_PERSON_OFFSET))),
-            label='public.teachers',
+            source=SourceQuery('tb_professor', order_by='cod_prof'),
+            label='teachers',
             targets=[
-                TargetMigration('public.people', [
-                    Rename('person_id', 'id'),
+                TargetMigration('people', [
+                    Transform('cod_prof', lambda value, row: people.person_id(row), v2_name='id'),
                     Transform('nome_prof', _column(normalize_name), v2_name='name'),
                     Transform('cpf', _column(clean_cpf)),
                     Transform('email', _column(clean_email)),
-                ], condition=lambda row: not row['is_student']),
-                TargetMigration('public.teachers', [
+                ], condition=lambda row: not people.is_student(row)),
+                TargetMigration('teachers', [
                     Rename('cod_prof', 'id'),
-                    Rename('person_id', 'person_id'),
+                    person_id,
                     Transform('titulacao', _column(degree_of), v2_name='degree'),
                 ]),
-                TargetMigration('public.phones', [
-                    Rename('person_id', 'person_id'),
+                TargetMigration('phones', [
+                    person_id,
                     Transform('fone1', _column(clean_phone), v2_name='number'),
                     Fixed('source', 'teacher'),
-                ], condition=_teacher_phone_is_new('fone1')),
-                TargetMigration('public.phones', [
-                    Rename('person_id', 'person_id'),
+                ], condition=_teacher_phone_is_new('fone1', people)),
+                TargetMigration('phones', [
+                    person_id,
                     Transform('fone2', _column(clean_phone), v2_name='number'),
                     Fixed('source', 'teacher'),
-                ], condition=_teacher_phone_is_new('fone2')),
+                ], condition=_teacher_phone_is_new('fone2', people)),
             ],
         ).run(self.context.source('v1'))
 
@@ -331,8 +343,8 @@ class Migracao(BaseMigration):
         self.print_log('Inserindo disciplinas')
         self.comment('SUBJECTS')
         TableMigration(
-            source=SourceQuery('public.tb_disciplina', order_by='cod_disc'),
-            target='public.subjects',
+            source=SourceQuery('tb_disciplina', order_by='cod_disc'),
+            target='subjects',
             fields=[
                 Rename('cod_disc', 'id'),
                 Transform('nome_disc', _column(clean_text), v2_name='name'),
@@ -346,8 +358,8 @@ class Migracao(BaseMigration):
         self.print_log('Inserindo turmas')
         self.comment('CLASSES')
         TableMigration(
-            source=SourceQuery('public.tb_turma', order_by='cod_turma'),
-            target='public.classes',
+            source=SourceQuery('tb_turma', order_by='cod_turma'),
+            target='classes',
             fields=[
                 Rename('cod_turma', 'id'),
                 Rename('cod_disc', 'subject_id'),
@@ -361,8 +373,8 @@ class Migracao(BaseMigration):
         self.print_log('Inserindo matrículas')
         self.comment('ENROLLMENTS')
         TableMigration(
-            source=SourceQuery('public.tb_matricula', order_by='cod_matricula'),
-            target='public.enrollments',
+            source=SourceQuery('tb_matricula', order_by='cod_matricula'),
+            target='enrollments',
             fields=[
                 Rename('cod_matricula', 'id'),
                 Rename('cod_aluno', 'student_id'),
@@ -378,7 +390,7 @@ class Migracao(BaseMigration):
 
     def reset_sequences(self):
         self.print_log('Ajustando sequences')
-        self.reset_identity([f'public.{name}' for name in [*TARGET_TABLES, 'holidays']], column='id')
+        self.reset_identity([*TARGET_TABLES, 'holidays'], column='id')
 
     # Apoio -------------------------------------------------------------------
 

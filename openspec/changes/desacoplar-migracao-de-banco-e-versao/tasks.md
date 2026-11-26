@@ -57,11 +57,24 @@
 
 ## 9. Reference Client and Version Matrix
 
-- [ ] 9.1 Make `AcmeEdu.py` use only `SourceQuery`, operations and strategies, grouping teachers by CPF in Python.
-- [ ] 9.2 Make `conferir.py` read both sides through the adapters, with PostgreSQL-only checks when the target is PostgreSQL.
-- [ ] 9.3 Add compose services for PostgreSQL 17, MongoDB 7 as a single-node replica set and Firebird 3 and 5, and a script that fills the MongoDB V1 and the Firebird fixture from the PostgreSQL V1.
-- [ ] 9.4 Run the matrix: PostgreSQL 9.6 → 16, PostgreSQL 17 → 17, PostgreSQL → MongoDB, MongoDB → PostgreSQL, Firebird 3 and 5 → PostgreSQL, each with dry run, apply and `conferir.py`.
-- [ ] 9.5 Record the results of the matrix in this file.
+- [x] 9.1 Make `AcmeEdu.py` use only `SourceQuery`, operations and strategies, grouping teachers by CPF in Python.
+- [x] 9.2 Make `conferir.py` read both sides through the adapters, with PostgreSQL-only checks when the target is PostgreSQL.
+- [x] 9.3 Add compose services for PostgreSQL 17, MongoDB 7 as a single-node replica set and Firebird 3 and 5, and a script that fills the MongoDB V1 and the Firebird fixture from the PostgreSQL V1.
+- [x] 9.4 Run the matrix: PostgreSQL 9.6 → 16, PostgreSQL 17 → 17, PostgreSQL → MongoDB, MongoDB → PostgreSQL, Firebird 3 and 5 → PostgreSQL, each with dry run, apply and `conferir.py`.
+- [x] 9.5 Record the results of the matrix in this file.
+
+  Results of `AcmeEdu/matriz.py` on 2026-11-26, the same `AcmeEdu.py` in every path, only the `.env` changing:
+
+  | Path | V1 | V2 | Dry run | Apply | `conferir.py` |
+  |---|---|---|---|---|---|
+  | `pg96-pg16` | PostgreSQL 9.6.24 | PostgreSQL 16.15 | rolled_back | committed | 58 of 58 |
+  | `pg17-pg17` | PostgreSQL 17.12 | PostgreSQL 17.12 | rolled_back | committed | 58 of 58 |
+  | `pg-mongo` | PostgreSQL 9.6.24 | MongoDB 7.0.48 | rolled_back | committed | 28 of 28 (no sequence or index checks) |
+  | `mongo-pg` | MongoDB 7.0.48 | PostgreSQL 16.15 | rolled_back | committed | 58 of 58 |
+  | `fb3-pg` | Firebird 3.0.14 | PostgreSQL 16.15 | rolled_back | committed | 58 of 58 |
+  | `fb5-pg` | Firebird 5.0.4 | PostgreSQL 16.15 | rolled_back | committed | 58 of 58 |
+
+  The Firebird V1 holds the full data (1500 students, 6000 enrollments), not a small fixture. The generated SQL of `pg96-pg16` matches the one of the previous `AcmeEdu.py` (with `LEFT JOIN LATERAL`) except for the `public.` prefix.
 
 ## 10. Documentation
 

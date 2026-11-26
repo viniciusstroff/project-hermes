@@ -1,26 +1,35 @@
-"""Confere a carga da AcmeEdu comparando a V1 com a V2.
+"""Confere a carga da AcmeEdu comparando a V1 com a V2, pelos adapters.
 
 Uso, dentro do container project-hermes:
 
     python3 AcmeEdu/conferir.py
 
-Fora do Docker, sobrescreva o host e a porta pelas variáveis de ambiente:
+As conexões vêm do AcmeEdu/.env, como na migração: SOURCE_V1_* e TARGET_*.
+Variáveis de ambiente com esses prefixos sobrescrevem o .env, por exemplo fora
+do Docker:
 
     SOURCE_V1_HOST=localhost SOURCE_V1_PORT=5441 TARGET_HOST=localhost TARGET_PORT=5442 python3 AcmeEdu/conferir.py
 
-O esperado é calculado a partir da V1, com as mesmas funções de limpeza do
-AcmeEdu.py. Cada verificação mostra o esperado e o encontrado. O script sai com
-código 1 se alguma falhar.
+A V1 e a V2 podem estar em qualquer banco com adapter: o script lê as duas por
+SourceQuery. O esperado é calculado a partir da V1, com as mesmas funções de
+limpeza do AcmeEdu.py. Sequences e amcheck só são conferidos quando o destino
+é PostgreSQL. Cada verificação mostra o esperado e o encontrado. O script sai
+com código 1 se alguma falhar.
 """
 
 import os
 import sys
+from collections import Counter
 from dataclasses import dataclass
 
 _clientdir = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, os.path.dirname(_clientdir))
 
-import psycopg2
 from dotenv import dotenv_values
+
+from core.adapters.registry import connect_adapter
+from core.connections import parse_connections
+from core.queries import NativeQuery, SourceQuery
 
 # Rodando como script, a pasta AcmeEdu/ está no sys.path e AcmeEdu é o AcmeEdu.py.
 from AcmeEdu import (
@@ -59,28 +68,21 @@ class Check:
         return self.expected == self.found
 
 
-def connect(prefix):
-    config = {**dotenv_values(os.path.join(_clientdir, '.env')), **os.environ}
-    connection = psycopg2.connect(
-        host=config[f'{prefix}_HOST'],
-        port=config[f'{prefix}_PORT'],
-        dbname=config[f'{prefix}_NAME'],
-        user=config[f'{prefix}_USER'],
-        password=config[f'{prefix}_PASS'],
-    )
-    # Só leitura. Com autocommit, um índice com erro no amcheck não aborta as consultas seguintes.
-    connection.autocommit = True
-    return connection
+def open_adapters():
+    """Adapters da origem v1 e do destino, como a migração abre."""
+
+    overrides = {key: value for key, value in os.environ.items() if key.startswith(('SOURCE_', 'TARGET_'))}
+    config = {**dotenv_values(os.path.join(_clientdir, '.env')), **overrides}
+    sources, target = parse_connections(config)
+    return connect_adapter(sources['v1'], 'source'), connect_adapter(target, 'target')
 
 
-def rows(connection, sql):
-    with connection.cursor() as cursor:
-        cursor.execute(sql)
-        return cursor.fetchall()
+def read(adapter, entity, *fields, order_by=()):
+    return list(adapter.read(SourceQuery(entity, fields=fields, order_by=order_by)))
 
 
-def scalar(connection, sql):
-    return rows(connection, sql)[0][0]
+def pairs(adapter, entity, key, value):
+    return {row[key]: row[value] for row in read(adapter, entity, key, value)}
 
 
 def expected_people_and_phones(v1):
@@ -89,29 +91,24 @@ def expected_people_and_phones(v1):
     people = {}
     phones = set()
     student_by_cpf = {}
-    student_phone = {}
 
-    for cod_aluno, nome, cpf, email, fone in rows(
-        v1, 'SELECT cod_aluno, nome_aluno, cpf, email_contato, fone FROM tb_aluno ORDER BY cod_aluno'
-    ):
-        people[cod_aluno] = (normalize_name(nome), clean_cpf(cpf), clean_email(email))
-        digits = clean_cpf(cpf)
+    for row in read(v1, 'tb_aluno', 'cod_aluno', 'nome_aluno', 'cpf', 'email_contato', 'fone', order_by='cod_aluno'):
+        cod_aluno = row['cod_aluno']
+        people[cod_aluno] = (normalize_name(row['nome_aluno']), clean_cpf(row['cpf']), clean_email(row['email_contato']))
+        digits = clean_cpf(row['cpf'])
         if digits:
             student_by_cpf.setdefault(digits, cod_aluno)
-        student_phone[cod_aluno] = clean_phone(fone)
-        if clean_phone(fone):
-            phones.add((cod_aluno, clean_phone(fone)))
+        if clean_phone(row['fone']):
+            phones.add((cod_aluno, clean_phone(row['fone'])))
 
     teacher_person = {}
-    for cod_prof, nome, cpf, email, fone1, fone2 in rows(
-        v1, 'SELECT cod_prof, nome_prof, cpf, email, fone1, fone2 FROM tb_professor ORDER BY cod_prof'
-    ):
-        student = student_by_cpf.get(clean_cpf(cpf))
-        person_id = student if student else TEACHER_PERSON_OFFSET + cod_prof
-        teacher_person[cod_prof] = person_id
+    for row in read(v1, 'tb_professor', 'cod_prof', 'nome_prof', 'cpf', 'email', 'fone1', 'fone2', order_by='cod_prof'):
+        student = student_by_cpf.get(clean_cpf(row['cpf']))
+        person_id = student if student else TEACHER_PERSON_OFFSET + row['cod_prof']
+        teacher_person[row['cod_prof']] = person_id
         if not student:
-            people[person_id] = (normalize_name(nome), clean_cpf(cpf), clean_email(email))
-        for fone in (fone1, fone2):
+            people[person_id] = (normalize_name(row['nome_prof']), clean_cpf(row['cpf']), clean_email(row['email']))
+        for fone in (row['fone1'], row['fone2']):
             if clean_phone(fone):
                 phones.add((person_id, clean_phone(fone)))
 
@@ -120,35 +117,37 @@ def expected_people_and_phones(v1):
 
 def count_checks(v1, v2, people, phones):
     expected = {
-        'courses': scalar(v1, 'SELECT count(*) FROM tb_curso'),
+        'courses': len(read(v1, 'tb_curso', 'cod_curso')),
         'people': len(people),
-        'students': scalar(v1, 'SELECT count(*) FROM tb_aluno'),
-        'teachers': scalar(v1, 'SELECT count(*) FROM tb_professor'),
+        'students': len(read(v1, 'tb_aluno', 'cod_aluno')),
+        'teachers': len(read(v1, 'tb_professor', 'cod_prof')),
         'phones': len(phones),
-        'guardians': sum(1 for (nome,) in rows(v1, 'SELECT nome_resp FROM tb_aluno') if normalize_name(nome)),
-        'subjects': scalar(v1, 'SELECT count(*) FROM tb_disciplina'),
-        'classes': scalar(v1, 'SELECT count(*) FROM tb_turma'),
-        'enrollments': scalar(v1, 'SELECT count(*) FROM tb_matricula'),
-        'holidays': scalar(v1, 'SELECT count(*) FROM holidays'),
+        'guardians': sum(1 for row in read(v1, 'tb_aluno', 'nome_resp') if normalize_name(row['nome_resp'])),
+        'subjects': len(read(v1, 'tb_disciplina', 'cod_disc')),
+        'classes': len(read(v1, 'tb_turma', 'cod_turma')),
+        'enrollments': len(read(v1, 'tb_matricula', 'cod_matricula')),
+        'holidays': len(read(v1, 'holidays', 'id')),
     }
     return [
-        Check(f'linhas em {table}', count, scalar(v2, f'SELECT count(*) FROM public.{table}'))
+        Check(f'linhas em {table}', count, len(read(v2, table, 'id')))
         for table, count in expected.items()
     ]
 
 
 def content_checks(v1, v2, people, phones, teacher_person):
     found_people = {
-        person_id: (name, cpf.strip() if cpf else None, email)
-        for person_id, name, cpf, email in rows(v2, 'SELECT id, name, cpf, email FROM public.people')
+        row['id']: (row['name'], row['cpf'].strip() if row['cpf'] else None, row['email'])
+        for row in read(v2, 'people', 'id', 'name', 'cpf', 'email')
     }
-    found_phones = set(rows(v2, 'SELECT person_id, number FROM public.phones'))
-    found_teachers = dict(rows(v2, 'SELECT id, person_id FROM public.teachers'))
+    found_phones = {(row['person_id'], row['number']) for row in read(v2, 'phones', 'person_id', 'number')}
+    found_teachers = pairs(v2, 'teachers', 'id', 'person_id')
     shared = {teacher: person for teacher, person in teacher_person.items() if person < TEACHER_PERSON_OFFSET}
 
-    v1_notes = {cod: clean_text(obs) for cod, obs in rows(v1, 'SELECT cod_aluno, obs FROM tb_aluno')}
-    v2_notes = dict(rows(v2, 'SELECT id, notes FROM public.students'))
+    v1_notes = {cod: clean_text(obs) for cod, obs in pairs(v1, 'tb_aluno', 'cod_aluno', 'obs').items()}
+    v2_notes = pairs(v2, 'students', 'id', 'notes')
     backslash_notes = {cod for cod, obs in v1_notes.items() if obs and '\\' in obs}
+    names = [name for name, _, _ in found_people.values()]
+    cpfs = Counter(cpf for _, cpf, _ in found_people.values() if cpf)
 
     return [
         Check('pessoas com nome, CPF e e-mail esperados', 0,
@@ -161,65 +160,65 @@ def content_checks(v1, v2, people, phones, teacher_person):
         Check('observações iguais às da V1', 0,
               sum(1 for cod, obs in v1_notes.items() if v2_notes.get(cod) != obs)),
         Check('nomes com espaço sobrando', 0,
-              scalar(v2, "SELECT count(*) FROM public.people WHERE name <> btrim(name) OR name LIKE '%  %'")),
-        Check('CPF repetido em people', 0,
-              scalar(v2, 'SELECT count(*) FROM (SELECT cpf FROM public.people WHERE cpf IS NOT NULL '
-                         'GROUP BY cpf HAVING count(*) > 1) repetidos')),
+              sum(1 for name in names if name and (name != name.strip() or '  ' in name))),
+        Check('CPF repetido em people', 0, sum(1 for count in cpfs.values() if count > 1)),
     ]
 
 
 def foreign_key_checks(v2):
-    return [
-        Check(f'{table}.{column} sem órfãos', 0, scalar(v2,
-              f'SELECT count(*) FROM public.{table} t WHERE t.{column} IS NOT NULL '
-              f'AND NOT EXISTS (SELECT 1 FROM public.{parent} p WHERE p.id = t.{column})'))
-        for table, column, parent in FOREIGN_KEYS
-    ]
-
-
-def sequence_checks(v2):
     checks = []
-    for table in [*TARGET_TABLES, 'holidays']:
-        highest = scalar(v2, f'SELECT coalesce(max(id), 0) FROM public.{table}')
-        last_value = scalar(v2, f'SELECT last_value FROM public.{table}_id_seq')
-        checks.append(Check(f'{table}_id_seq >= maior id', True, last_value >= highest))
+    for table, column, parent in FOREIGN_KEYS:
+        parent_ids = {row['id'] for row in read(v2, parent, 'id')}
+        orphans = sum(1 for row in read(v2, table, column) if row[column] is not None and row[column] not in parent_ids)
+        checks.append(Check(f'{table}.{column} sem órfãos', 0, orphans))
     return checks
 
 
-def index_checks(v2):
-    """amcheck com heapallindexed: toda linha da tabela precisa estar no índice."""
+def postgres_checks(v2):
+    """Sequences e amcheck: só existem quando o destino é PostgreSQL."""
+
+    def native(sql):
+        return list(v2.read(NativeQuery('postgres', sql)))
 
     checks = []
-    for (index,) in rows(v2, """
-        SELECT c.relname
-        FROM pg_index i
-        JOIN pg_class c ON c.oid = i.indexrelid
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        JOIN pg_am a ON a.oid = c.relam
-        WHERE n.nspname = 'public' AND a.amname = 'btree'
-        ORDER BY c.relname
-    """):
+    for table in [*TARGET_TABLES, 'holidays']:
+        highest = native(f'SELECT coalesce(max(id), 0) AS highest FROM public.{table}')[0]['highest']
+        last_value = native(f'SELECT last_value FROM public.{table}_id_seq')[0]['last_value']
+        checks.append(Check(f'{table}_id_seq >= maior id', True, last_value >= highest))
+
+    indexes = native(
+        "SELECT c.relname FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+        "JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_am a ON a.oid = c.relam "
+        "WHERE n.nspname = 'public' AND a.amname = 'btree' ORDER BY c.relname"
+    )
+    for row in indexes:
+        index = row['relname']
         try:
-            rows(v2, f"SELECT bt_index_check('public.{index}'::regclass, true)")
+            # heapallindexed: toda linha da tabela precisa estar no índice.
+            native(f"SELECT bt_index_check('public.{index}'::regclass, true)")
             result = 'consistente'
-        except psycopg2.Error as exc:
+        except Exception as exc:
+            # Um erro aborta a transação de leitura; as checagens seguintes precisam de outra.
+            v2.connection.rollback()
             result = str(exc).strip().splitlines()[0]
         checks.append(Check(f'índice {index}', 'consistente', result))
     return checks
 
 
 def main():
-    v1 = connect('SOURCE_V1')
-    v2 = connect('TARGET')
+    v1, v2 = open_adapters()
+    print(f'Origem v1: {v1.name} {v1.server_version or ""}'.rstrip())
+    print(f'Destino: {v2.name} {v2.server_version or ""}'.rstrip())
     people, phones, teacher_person = expected_people_and_phones(v1)
 
     checks = [
         *count_checks(v1, v2, people, phones),
         *content_checks(v1, v2, people, phones, teacher_person),
         *foreign_key_checks(v2),
-        *sequence_checks(v2),
-        *index_checks(v2),
+        *(postgres_checks(v2) if v2.name == 'postgres' else []),
     ]
+    v1.close()
+    v2.close()
 
     width = max(len(check.name) for check in checks)
     for check in checks:

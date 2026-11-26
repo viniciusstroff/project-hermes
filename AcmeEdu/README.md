@@ -1,6 +1,6 @@
 # AcmeEdu
 
-Cliente fictício para rodar o Hermes de ponta a ponta sem dado real. A AcmeEdu é uma instituição de ensino com uma V1 legada e uma V2 nova, as duas em Docker. A migração exercita os recursos do core usados pelos clientes reais: `TableMigration`, `MultiTargetMigration`, strategies de limpeza, mapa de referência lido da V2, `pg_dump` de tabela compatível, `NativeQuery`, limpeza, suspensão de triggers e ajuste de sequences por operações.
+Cliente fictício para rodar o Hermes de ponta a ponta sem dado real. A AcmeEdu é uma instituição de ensino com uma V1 legada e uma V2 nova, as duas em Docker. A migração exercita os recursos do core usados pelos clientes reais: `TableMigration`, `MultiTargetMigration`, strategies de limpeza, mapa de referência lido da V2, cópia de entidade compatível, limpeza, suspensão de triggers e ajuste de sequences por operações. O `AcmeEdu.py` não tem SQL: só `SourceQuery`, operações e strategies. Por isso o mesmo script roda com a V1 e a V2 em PostgreSQL, MongoDB ou Firebird (só origem), como a [matriz de prova](#matriz-de-prova) mostra.
 
 Nada aqui representa uma instituição real. Nomes, CPFs, telefones e e-mails são gerados. Os e-mails usam o domínio reservado `.example`.
 
@@ -89,13 +89,15 @@ O id de cada pessoa sai da V1, porque a geração escreve SQL sem ler o destino:
 - professor que não é aluno: `people.id` = `100000 + cod_prof`;
 - professor que também é aluno, com o mesmo CPF: reaproveita a pessoa do aluno.
 
+O agrupamento é feito em Python (`TeacherPeople`): o script lê o código, o CPF e o telefone dos alunos e casa pelos dígitos do CPF. Quando dois alunos têm o mesmo CPF, vale o de menor código.
+
 Quatro professores da V1 têm o CPF e o celular de um aluno, em outro formato, para exercitar esse caso.
 
 As regras próprias do cliente (nome, CPF, telefone, e-mail, titulação, semestre, frequência) são funções puras no início do `AcmeEdu.py`, testadas em `tests/test_acmeedu.py`.
 
 ## Conferência
 
-O `conferir.py` lê as duas bases, calcula o esperado a partir da V1 com as mesmas funções de limpeza e compara com a V2:
+O `conferir.py` lê as duas bases pelos adapters, com as mesmas conexões do `.env`. Ele calcula o esperado a partir da V1 com as mesmas funções de limpeza e compara com a V2:
 
 - contagem de linhas por tabela;
 - nome, CPF, e-mail e telefones de cada pessoa;
@@ -103,7 +105,31 @@ O `conferir.py` lê as duas bases, calcula o esperado a partir da V1 com as mesm
 - observações, inclusive as com barra invertida, iguais às da V1;
 - CPF sem repetição e nomes sem espaço sobrando;
 - chaves estrangeiras sem órfãos, já que a carga roda com as triggers desligadas;
-- sequences maiores ou iguais ao maior `id`;
-- `bt_index_check` com `heapallindexed` do `amcheck` em todos os índices.
+- sequences maiores ou iguais ao maior `id`, só com destino PostgreSQL;
+- `bt_index_check` com `heapallindexed` do `amcheck` em todos os índices, só com destino PostgreSQL.
 
-Mostra o esperado e o encontrado de cada verificação e sai com código 1 se alguma falhar. Numa carga completa, todas as 58 verificações passam.
+Mostra o esperado e o encontrado de cada verificação e sai com código 1 se alguma falhar. Numa carga completa com destino PostgreSQL, as 58 verificações passam. Com destino MongoDB são 28, sem as de sequence e índice.
+
+## Matriz de prova
+
+O profile `matriz` do compose sobe as outras bases: V1 e V2 em PostgreSQL 17, um MongoDB 7 em replica set de um nó e Firebird 3 e 5. O `preparar_matriz.py` copia a V1 em PostgreSQL para o MongoDB e para os dois Firebird. Ele também leva a `student_statuses` da V2 para o MongoDB. O `matriz.py` roda cada caminho com o mesmo `AcmeEdu.py`: troca o `.env`, roda dry run, apply e `conferir.py`. No fim, o `.env` original volta.
+
+```bash
+docker compose -f AcmeEdu/docker-compose.yml --profile matriz up -d
+
+# imagem com os três drivers
+docker compose build
+docker run --rm --network hermes-net -v "$PWD":/home/project-hermes project-hermes-app python3 AcmeEdu/preparar_matriz.py
+docker run --rm --network hermes-net -v "$PWD":/home/project-hermes project-hermes-app python3 AcmeEdu/matriz.py
+```
+
+O nome da imagem é o que o `docker compose build` der ao serviço `app` (`docker compose images`). O `matriz.py` aceita nomes de caminho para rodar só alguns, como `python3 AcmeEdu/matriz.py pg-mongo mongo-pg`.
+
+| Caminho | V1 | V2 | Dry run | Apply | Conferência |
+|---|---|---|---|---|---|
+| `pg96-pg16` | PostgreSQL 9.6.24 | PostgreSQL 16.15 | ROLLBACK | COMMIT | 58 de 58 |
+| `pg17-pg17` | PostgreSQL 17.12 | PostgreSQL 17.12 | ROLLBACK | COMMIT | 58 de 58 |
+| `pg-mongo` | PostgreSQL 9.6.24 | MongoDB 7.0.48 | ROLLBACK | COMMIT | 28 de 28 |
+| `mongo-pg` | MongoDB 7.0.48 | PostgreSQL 16.15 | ROLLBACK | COMMIT | 58 de 58 |
+| `fb3-pg` | Firebird 3.0.14 | PostgreSQL 16.15 | ROLLBACK | COMMIT | 58 de 58 |
+| `fb5-pg` | Firebird 5.0.4 | PostgreSQL 16.15 | ROLLBACK | COMMIT | 58 de 58 |
