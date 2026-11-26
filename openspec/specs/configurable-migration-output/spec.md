@@ -1,7 +1,7 @@
 # configurable-migration-output Specification
 
 ## Purpose
-Define how the migration runtime delivers operations through an `OutputAdapter`, with `FileOutput` writing each phase as an artifact in the format of the target adapter and the manifest listing those artifacts.
+Define how the migration runtime delivers operations through an `OutputAdapter` chosen on the command line, with `FileOutput` as the default, writing each phase as an artifact in the format of the target adapter and the manifest listing those artifacts.
 ## Requirements
 ### Requirement: Runtime writes through output adapter
 The migration runtime SHALL deliver the operations emitted by migrations to an `OutputAdapter` through `write(operation)`, phase by phase, and SHALL NOT pass rendered commands or SQL text to the output.
@@ -13,13 +13,6 @@ The migration runtime SHALL deliver the operations emitted by migrations to an `
 #### Scenario: Context exposes configured output
 - **WHEN** a migration context is created
 - **THEN** the context exposes the configured output adapter as the only output API
-
-### Requirement: Non-file outputs remain out of scope
-The default runtime SHALL NOT execute the generated commands against the target database as part of the generation.
-
-#### Scenario: Default migration runs
-- **WHEN** a migration runs with the default context
-- **THEN** the commands are written to the phase artifacts and are not applied directly to the target database by the output layer
 
 ### Requirement: Runner reports execution result to output
 The migration runner SHALL call `finish(success)` on the configured output adapter exactly once per run, after the last phase write on success and before the manifest records the final status.
@@ -110,4 +103,34 @@ The `FileOutput` SHALL flush pending commands on `finish()` for both results and
 #### Scenario: Failed run keeps partial artifacts
 - **WHEN** a run fails after writing commands to the `load_transformed_data` phase
 - **THEN** the artifact of that phase keeps the commands written before the failure
+
+### Requirement: Output is selected explicitly
+The default migration context SHALL use `FileOutput` unless the output is chosen on the command line. `Migracao.py` SHALL accept `--output file|direct|hybrid`, SHALL require `--apply` or `--dry-run` with `direct` and `hybrid`, and SHALL NOT read the output choice from the client `.env`.
+
+#### Scenario: Default output
+- **WHEN** `Migracao.py` runs without `--output`
+- **THEN** the context uses `FileOutput`
+- **AND** no command is run on the target by the output layer
+
+#### Scenario: Files then application
+- **WHEN** `Migracao.py` runs with `--output file --dry-run`
+- **THEN** generation writes the artifacts
+- **AND** the `ArtifactApplier` applies them in `dry-run` mode after generation, as before
+
+#### Scenario: Direct output with mode
+- **WHEN** `Migracao.py` runs with `--output direct --dry-run`
+- **THEN** the context uses a `DirectDatabaseOutput` in `dry-run` mode
+- **AND** no application runs after generation
+
+#### Scenario: Hybrid output
+- **WHEN** `Migracao.py` runs with `--output hybrid --apply`
+- **THEN** the context uses a `MirrorOutput` of a `FileOutput` followed by a `DirectDatabaseOutput` in `apply` mode
+
+#### Scenario: Direct output without mode
+- **WHEN** `Migracao.py` runs with `--output direct` and neither `--apply` nor `--dry-run`
+- **THEN** it exits with an argument error before connecting to any database
+
+#### Scenario: Client constructors stay unchanged
+- **WHEN** a client class calls `super().__init__(_clientdir)` without output arguments
+- **THEN** the context built for it uses the output chosen on the command line
 
