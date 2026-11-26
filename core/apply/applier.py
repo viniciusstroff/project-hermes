@@ -132,7 +132,8 @@ class ArtifactApplier:
         for artifact in self.run.artifacts:
             self._log(f'Aplicando {artifact.name}')
             report.start_file(artifact.name)
-            with open(artifact.path, encoding='utf-8') as lines:
+            # newline='': a \r\n inside a literal must reach the target as it is.
+            with open(artifact.path, encoding='utf-8', newline='') as lines:
                 for number, command in enumerate(session.commands(lines, dry_run, source=artifact.name), 1):
                     run_command(policy, report, CommandItem(artifact.name, number, command))
                     if number % self.progress_every == 0:

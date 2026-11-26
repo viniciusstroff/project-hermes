@@ -146,6 +146,10 @@ def content_checks(v1, v2, people, phones, teacher_person):
     v1_notes = {cod: clean_text(obs) for cod, obs in pairs(v1, 'tb_aluno', 'cod_aluno', 'obs').items()}
     v2_notes = pairs(v2, 'students', 'id', 'notes')
     backslash_notes = {cod for cod, obs in v1_notes.items() if obs and '\\' in obs}
+    carriage_notes = {cod for cod, obs in v1_notes.items() if obs and '\r' in obs}
+    v1_holidays = pairs(v1, 'holidays', 'id', 'description')
+    v2_holidays = pairs(v2, 'holidays', 'id', 'description')
+    carriage_holidays = {key for key, text in v1_holidays.items() if text and '\r' in text}
     names = [name for name, _, _ in found_people.values()]
     cpfs = Counter(cpf for _, cpf, _ in found_people.values() if cpf)
 
@@ -157,6 +161,10 @@ def content_checks(v1, v2, people, phones, teacher_person):
               sum(1 for teacher, person in shared.items() if found_teachers.get(teacher) == person)),
         Check('observações com barra invertida iguais às da V1', len(backslash_notes),
               sum(1 for cod in backslash_notes if v2_notes.get(cod) == v1_notes[cod])),
+        Check('textos com \\r iguais aos da V1 (observações e feriados)',
+              len(carriage_notes) + len(carriage_holidays),
+              sum(1 for cod in carriage_notes if v2_notes.get(cod) == v1_notes[cod])
+              + sum(1 for key in carriage_holidays if v2_holidays.get(key) == v1_holidays[key])),
         Check('observações iguais às da V1', 0,
               sum(1 for cod, obs in v1_notes.items() if v2_notes.get(cod) != obs)),
         Check('nomes com espaço sobrando', 0,

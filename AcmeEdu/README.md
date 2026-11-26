@@ -62,7 +62,8 @@ A V1 tem sujeira proposital:
 - datas em texto, vazias ou impossíveis (`31/02/2001`, `20230230`);
 - e-mail no meio de outro texto (`Email: Aluno5@AcmeEdu.Example / tel. recado`);
 - códigos de uma letra, alguns em minúscula;
-- observações com `;`, aspas e barra invertida, algumas terminando em barra.
+- observações com `;`, aspas e barra invertida, algumas terminando em barra;
+- observações e um feriado com `\r\n` e `\r` sozinho no meio do texto.
 
 Volume: 6 cursos, 25 professores, 48 disciplinas, 120 turmas, 1500 alunos, 6000 matrículas e 12 feriados.
 
@@ -103,12 +104,13 @@ O `conferir.py` lê as duas bases pelos adapters, com as mesmas conexões do `.e
 - nome, CPF, e-mail e telefones de cada pessoa;
 - professores que também são alunos apontando para a pessoa do aluno;
 - observações, inclusive as com barra invertida, iguais às da V1;
+- textos com `\r` (observações e o feriado 12) iguais aos da V1;
 - CPF sem repetição e nomes sem espaço sobrando;
 - chaves estrangeiras sem órfãos, já que a carga roda com as triggers desligadas;
 - sequences maiores ou iguais ao maior `id`, só com destino PostgreSQL;
 - `bt_index_check` com `heapallindexed` do `amcheck` em todos os índices, só com destino PostgreSQL.
 
-Mostra o esperado e o encontrado de cada verificação e sai com código 1 se alguma falhar. Numa carga completa com destino PostgreSQL, as 58 verificações passam. Com destino MongoDB são 28, sem as de sequence e índice.
+Mostra o esperado e o encontrado de cada verificação e sai com código 1 se alguma falhar. Numa carga completa com destino PostgreSQL, as 59 verificações passam. Com destino MongoDB são 29, sem as de sequence e índice.
 
 ## Matriz de prova
 
@@ -133,3 +135,5 @@ O nome da imagem é o que o `docker compose build` der ao serviço `app` (`docke
 | `mongo-pg` | MongoDB 7.0.48 | PostgreSQL 16.15 | ROLLBACK | COMMIT | 58 de 58 |
 | `fb3-pg` | Firebird 3.0.14 | PostgreSQL 16.15 | ROLLBACK | COMMIT | 58 de 58 |
 | `fb5-pg` | Firebird 5.0.4 | PostgreSQL 16.15 | ROLLBACK | COMMIT | 58 de 58 |
+
+A tabela registra a última rodada completa da matriz, anterior à verificação dos textos com `\r`. Depois dela, os caminhos `pg96-pg16` e `pg-mongo` rodaram de novo e passaram em 59 de 59 e 29 de 29, também com a cópia pelo `pg_dump`.

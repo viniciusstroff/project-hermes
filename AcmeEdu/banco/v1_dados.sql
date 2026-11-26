@@ -11,7 +11,8 @@
 --   datas em texto, vazias ou impossíveis (31/02/2001, 20230230);
 --   e-mail no meio de outro texto e com maiúsculas;
 --   códigos de uma letra, inclusive em minúscula;
---   observações com ;, aspas e barra invertida, uma delas terminando em barra.
+--   observações com ;, aspas e barra invertida, uma delas terminando em barra;
+--   observações e um feriado com \r\n e \r sozinho, que precisam chegar iguais à V2.
 -- Quatro professores têm o CPF de um aluno, com outra máscara, para o agrupamento em people.
 
 SET standard_conforming_strings = on;
@@ -150,6 +151,7 @@ SELECT i,
        CASE WHEN i % 3 = 0 AND i % 33 <> 0 THEN pg_temp.formatar_fone(pg_temp.fone_digitos(70000 + i), i + 1) END,
        CASE WHEN i % 3 = 0 AND i % 33 <> 0 THEN (ARRAY['Mãe', 'Pai', 'Avó', 'Tio', 'mae'])[1 + i % 5] END,
        CASE WHEN i % 50 = 0 THEN 'Documentos em \\servidor\secretaria\'
+            WHEN i % 45 = 0 THEN E'Retorno da secretaria:\r\nligar após as 14h\rconfirmar e-mail'
             WHEN i % 8 = 0 THEN 'Histórico em C:\docs\historico\' || i || '.pdf'
             WHEN i % 12 = 0 THEN 'Bolsista; renovar em 2025'
             WHEN i % 14 = 0 THEN 'Responsável avisou: "chega às 7h"'
@@ -198,7 +200,7 @@ INSERT INTO holidays (id, holiday_date, description) VALUES
     (9, '2024-10-12', 'Nossa Senhora Aparecida'),
     (10, '2024-11-02', 'Finados'),
     (11, '2024-11-15', 'Proclamação da República'),
-    (12, '2024-12-25', 'Natal');
+    (12, '2024-12-25', E'Natal\r\nrecesso até 02/01');
 
 -- Log de acesso, que não é migrado ---------------------------------------------
 
