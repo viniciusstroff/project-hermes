@@ -1,6 +1,6 @@
 ## 1. Prerequisites
 
-- [ ] 1.1 Archive `desacoplar-migracao-de-banco-e-versao`, so the deltas of this change apply over the specs it creates.
+- [x] 1.1 Archive `desacoplar-migracao-de-banco-e-versao`, so the deltas of this change apply over the specs it creates.
 
 ## 2. Shared Execution
 

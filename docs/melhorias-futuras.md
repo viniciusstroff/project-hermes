@@ -152,7 +152,7 @@ Executaria direto no destino, durante a geração:
 
 Ao detalhar o desenho apareceu um conflito com a geração da época. O `load_reference_map()` lia o destino enquanto os inserts eram gerados. Com os comandos executados durante a geração, essa leitura veria uma tabela já truncada, se usasse a mesma conexão do output. Numa conexão separada, ficaria esperando o lock do `TRUNCATE` da própria transação. Além disso, o `02_dump_compatible_tables.sql` não passa pelo output, porque o `pg_dump` grava o arquivo direto.
 
-O item 7 resolveu a primeira parte: os mapas de referência são carregados antes da primeira fase e as leituras do destino ficam fechadas depois disso. O `DirectDatabaseOutput` está proposto na change `introduzir-direct-database-output`, que precisa ser revista para o modelo de operações da `desacoplar-migracao-de-banco-e-versao`. Até lá, a aplicação no destino é feita pelo `SqlArtifactApplier`, sobre os arquivos gerados.
+O item 7 resolveu a primeira parte: os mapas de referência são carregados antes da primeira fase e as leituras do destino ficam fechadas depois disso. A `desacoplar-migracao-de-banco-e-versao` resolveu a segunda: a saída do `pg_dump` entra pelo `include_file()` do output. O `DirectDatabaseOutput` está proposto na change `introduzir-direct-database-output`, que executa as operações pela sessão do adapter de destino. Até ela ser implementada, a aplicação no destino é feita pelo `ArtifactApplier`, sobre os arquivos gerados.
 
 #### `ManifestOutput`
 
