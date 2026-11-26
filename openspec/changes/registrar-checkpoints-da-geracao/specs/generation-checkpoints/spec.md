@@ -28,7 +28,7 @@ After each task is merged into its phase artifact, the generation SHALL flush an
 - **THEN** the resume is refused with a message naming the phase and the position
 
 ### Requirement: Resume refuses an incompatible run
-The checkpoint SHALL record a fingerprint of the run: core version (git HEAD and a hash of uncommitted changes in `core/`), adapters and server versions, connection descriptions without passwords plus a hash of the URI, debug limit, output type and format, a hash of the loaded reference maps and the target catalog used to render `SuspendConstraints`. A resume with a different fingerprint SHALL be refused, naming what changed. The number of workers SHALL NOT be part of the fingerprint.
+The checkpoint SHALL record a fingerprint of the run: a hash of the source files of `core/`, adapters and server versions, connection descriptions without passwords plus a hash of the URI, debug limit, output type and format, a hash of the loaded reference maps and the target catalog used to render `SuspendConstraints`. A resume with a different fingerprint SHALL be refused, naming what changed. The number of workers SHALL NOT be part of the fingerprint.
 
 #### Scenario: Reference map changed
 - **WHEN** a row of the reference map `student_statuses` changed in the target between the failure and the resume
@@ -58,6 +58,13 @@ On resume, the units of the finished tasks SHALL be counted again on the source,
 #### Scenario: Resume with direct output
 - **WHEN** `Migracao.py --resume <timestamp> --output direct --apply` runs
 - **THEN** it exits with an argument error before connecting
+
+### Requirement: Each new run gets its own directory
+A new generation SHALL create a run directory of its own, adding a suffix to the timestamp when another run already used it, so two runs started in the same second never share artifacts or checkpoint. A resume SHALL reopen the directory it names.
+
+#### Scenario: Two runs in the same second
+- **WHEN** two generations of the same client start in the same second
+- **THEN** they write to `runs/<cliente>/<timestamp>/` and `runs/<cliente>/<timestamp>-2/`
 
 ### Requirement: The run state survives the end of the generation
 When the generation succeeds, the remaining segments SHALL be removed and `checkpoint.json` SHALL keep the status `success`. When the generation is interrupted, the runner SHALL record `failed` in the manifest and save the checkpoint before raising the interruption.

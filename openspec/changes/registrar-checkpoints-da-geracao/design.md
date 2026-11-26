@@ -61,7 +61,7 @@ Uma geração que falha deixa o arquivo da fase com as tarefas juntadas até a f
 
    O checkpoint guarda o que, se mudar, deixaria a geração retomada diferente de uma geração limpa. Uma diferença recusa a retomada:
 
-   - versão do core: o HEAD do git e um hash das mudanças não commitadas em `core/`;
+   - versão do core: um hash dos arquivos `.py` de `core/`. A primeira ideia era o HEAD do git, mas a imagem Docker não tem `git`. O hash dos arquivos pega também mudanças não commitadas;
    - adapters e versões dos servidores;
    - conexões sem senha e um hash da URI, que o `describe()` omite;
    - limite de debug;
@@ -84,6 +84,14 @@ Uma geração que falha deixa o arquivo da fase com as tarefas juntadas até a f
    No sucesso, os segmentos que sobrarem são apagados e o `checkpoint.json` fica com status `success`, para auditoria. O relatório da geração marca as tarefas retomadas e lista as tentativas, com início e fim de cada uma.
 
    O runner passa a tratar `BaseException`. Num Ctrl+C, ele grava `failed` no manifesto e o checkpoint antes de relançar a interrupção.
+
+8. Pasta de execução única.
+
+   O nome da pasta de execução é o horário em segundos. Duas gerações no mesmo segundo caíam na mesma pasta e uma sobrescrevia os artefatos da outra, o que estragaria o checkpoint. Uma geração nova passa a criar a pasta de forma exclusiva e acrescenta `-2`, `-3`... quando ela já existe. A retomada reabre a pasta que recebe.
+
+9. Cópia compatível em tarefas.
+
+   A cópia das entidades compatíveis passa a rodar como tarefas também com 1 worker, uma por entidade e uma por cópia nativa. Assim, cada entidade copiada vira um ponto de retomada. Os artefatos não mudam.
 
 ## Risks / Trade-offs
 

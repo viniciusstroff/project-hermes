@@ -23,6 +23,21 @@ class ArtifactFormat:
     extension: str
 
 
+def _claim_run_dir(parent: str, name: str) -> str:
+    """Create ``parent/name``, or ``name-2``, ``name-3``... when it exists, and return the name used."""
+
+    os.makedirs(parent, exist_ok=True)
+    candidate = name
+    suffix = 1
+    while True:
+        try:
+            os.mkdir(os.path.join(parent, candidate))
+            return candidate
+        except FileExistsError:
+            suffix += 1
+            candidate = f'{name}-{suffix}'
+
+
 def artifact_name(phase: str, extension: str) -> str:
     """File name of a phase artifact, such as ``03_load_transformed_data.sql``."""
 
@@ -38,8 +53,14 @@ class ArtifactManager:
         self.clientdir = os.path.abspath(clientdir)
         self.client_name = os.path.basename(self.clientdir)
         self.rootdir = os.path.abspath(rootdir or os.path.dirname(self.clientdir))
-        self.timestamp = timestamp or datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
-        self.run_dir = os.path.join(self.rootdir, 'runs', self.client_name, self.timestamp)
+        client_runs = os.path.join(self.rootdir, 'runs', self.client_name)
+        if timestamp is None:
+            # A new run gets a directory of its own, even when another one started in the same second.
+            self.timestamp = _claim_run_dir(client_runs, datetime.datetime.now().strftime('%Y%m%d-%H%M%S'))
+        else:
+            # A given timestamp reopens that run, as a resume does.
+            self.timestamp = timestamp
+        self.run_dir = os.path.join(client_runs, self.timestamp)
         self.commands_dir = os.path.join(self.run_dir, COMMANDS_DIR)
         self.logs_dir = os.path.join(self.run_dir, 'logs')
         self.manifest_path = os.path.join(self.run_dir, 'manifest.json')

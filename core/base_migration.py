@@ -6,6 +6,9 @@ This class keeps the old inheritance API available while delegating runtime
 responsibilities to smaller context components.
 """
 
+import hashlib
+import inspect
+
 from core.context import DefaultMigrationContextFactory
 from core.operations import Clear, Comment, ResetIdentity, SuspendConstraints
 from core.parallel import Task, current_task_context, run_task_list
@@ -117,10 +120,25 @@ class BaseMigration:
         """Run the tasks declared with @task, in merge order, with the workers of the run."""
 
         tasks = [
-            Task(spec.name, spec.sequence, lambda _context, method=spec.method: getattr(self, method)())
+            Task(
+                spec.name,
+                spec.sequence,
+                lambda _context, method=spec.method: getattr(self, method)(),
+                code_hash=_code_hash(getattr(type(self), spec.method)),
+            )
             for spec in declared_tasks(type(self))
         ]
         run_task_list(self._context, tasks)
 
     def run(self):
         MigrationRunner(self._context, self).run()
+
+
+def _code_hash(function) -> str:
+    """Hash of the source of a task method, so a resume warns when a finished task changed."""
+
+    try:
+        source = inspect.getsource(function)
+    except (OSError, TypeError):
+        return None
+    return hashlib.sha256(source.encode('utf-8')).hexdigest()[:16]

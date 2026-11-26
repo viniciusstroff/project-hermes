@@ -9,6 +9,7 @@ from dotenv import dotenv_values
 from core.adapters.registry import connect_adapter
 from core.apply.cli import session_opener, target_label
 from core.artifacts import ArtifactManager
+from core.checkpoint import Checkpoint, CheckpointedFileOutput, CheckpointError, check_resumable, current_resume
 from core.connections import ConnectionConfigError, parse_connections
 from core.metrics import GENERATION_REPORT, GenerationMetrics
 from core.migration_engine import MigrationEngine
@@ -104,6 +105,9 @@ class MigrationContext:
     # Connection configs of the sources, so each worker opens its own connections.
     source_configs: dict = field(default_factory=dict)
     parallel: ParallelSettings = field(default_factory=ParallelSettings)
+    target_config: Any = None
+    # Checkpoint of the generation, with the file output.
+    checkpoint: Any = None
     # Debug mode: row limit applied to every source query.
     debug_limit: int | None = None
     # Entities of each SuspendConstraints emitted; the runner resumes them at the end.
@@ -198,9 +202,18 @@ class MigrationContext:
                     f'Mapa de referência {declaration.name} carregou vazio. Confira tabela, filtros e banco.',
                 )
 
+    def begin_checkpoint(self):
+        """After target reads close: record the fingerprint, or check it and the source on resume."""
+
+        if self.checkpoint is not None:
+            self.checkpoint.begin(self)
+
     def write_generation_report(self, status: str, error: str = None):
         """Close the metrics, log the summary once and write relatorio-geracao.json."""
 
+        if self.checkpoint is not None:
+            self.checkpoint.finish(status, error)
+            self.metrics.attempts = self.checkpoint.attempts
         self.metrics.finish(status, error)
         if not self._summary_logged:
             self._summary_logged = True
@@ -232,6 +245,8 @@ class MigrationContext:
             return
 
         self.output.close()
+        if self.checkpoint is not None:
+            self.checkpoint.release()
         _close_adapters([*self.sources.values(), self.target])
         self.logger.close()
         self._closed = True
@@ -243,12 +258,28 @@ class DefaultMigrationContextFactory:
     @classmethod
     def from_clientdir(cls, clientdir: str) -> MigrationContext:
         config = dotenv_values(os.path.join(clientdir, '.env'))
-        artifacts = ArtifactManager(clientdir)
+        output_settings = _OUTPUT_SETTINGS.get()
+        resume = current_resume()
+        if resume is not None:
+            # Checked before anything is written: a refused resume leaves the run as it was.
+            if output_settings.output != FILE_OUTPUT:
+                raise CheckpointError('A retomada só funciona com --output file.')
+            clientpath = os.path.abspath(clientdir)
+            check_resumable(os.path.join(
+                os.path.dirname(clientpath), 'runs', os.path.basename(clientpath), resume.timestamp,
+            ))
+            artifacts = ArtifactManager(clientdir, timestamp=resume.timestamp)
+        else:
+            artifacts = ArtifactManager(clientdir)
+        checkpoint = Checkpoint.open(artifacts.run_dir, resume) if output_settings.output == FILE_OUTPUT else None
         logger = MigrationLogger(artifacts)
         progress = MigrationProgress(logger)
         logger.progress = progress
         metrics = GenerationMetrics(logger.run_id, events=logger.event)
         logger.metrics = metrics
+        if resume is not None:
+            rerun = f', gerando de novo a partir da tarefa {resume.rerun}' if resume.rerun else ''
+            logger.print_log(f'----- Retomando a execução {artifacts.timestamp}{rerun} -----')
 
         connections = {}
         opened = []
@@ -280,7 +311,7 @@ class DefaultMigrationContextFactory:
             _check_native_copies(source_configs, sources, target)
 
             # The artifact format, and so the file extension, comes from the target adapter.
-            output = _build_output(_OUTPUT_SETTINGS.get(), artifacts, target, target_config, logger)
+            output = _build_output(output_settings, artifacts, target, target_config, logger, checkpoint)
             metrics.open_phase('setup')
             output.open_phase('setup')
         except Exception as exc:
@@ -294,6 +325,8 @@ class DefaultMigrationContextFactory:
             _close_adapters(opened)
             if output is not None:
                 output.close()
+            if checkpoint is not None:
+                checkpoint.release()
             logger.close()
             raise
 
@@ -310,12 +343,14 @@ class DefaultMigrationContextFactory:
             metrics=metrics,
             source_configs=source_configs,
             parallel=parallel,
+            target_config=target_config,
+            checkpoint=checkpoint,
         )
 
 
-def _build_output(settings: OutputSettings, artifacts, target, target_config, logger):
+def _build_output(settings: OutputSettings, artifacts, target, target_config, logger, checkpoint=None):
     if settings.output == FILE_OUTPUT:
-        return FileOutput(artifacts, target)
+        return CheckpointedFileOutput(artifacts, target, checkpoint) if checkpoint is not None else FileOutput(artifacts, target)
     direct = DirectDatabaseOutput(
         target,
         # Its own connection, opened when prepare_target opens.
