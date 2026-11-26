@@ -15,6 +15,7 @@ import os
 import time
 from dataclasses import dataclass
 
+from core.parallel import Task, run_task_list
 from core.queries import SourceQuery
 
 
@@ -64,13 +65,39 @@ class CopyEntity:
 
 
 def copy_compatible_entities(context, entities):
-    """Copy every listed entity into the current phase of the output."""
+    """Copy every listed entity into the current phase of the output.
+
+    With more than one worker, each entity is a task ``copy:<entity>`` and
+    each native copy a task whose dump file is its segment. The merge order
+    is the one of the sequential copy: per source, the row by row copies,
+    then the native copy.
+    """
 
     entities = list(entities)
     for entity in entities:
         if not isinstance(entity, CopyEntity):
             raise TypeError(f'compatible_entities() deve devolver CopyEntity; recebeu {entity!r}.')
 
+    plan = _plan(context, entities)
+    parallel = getattr(context, 'parallel', None)
+    if parallel is not None and parallel.workers > 1:
+        run_task_list(context, _copy_tasks(plan))
+        return
+
+    for source_name, rows, native, native_entities in plan:
+        engine = context.source(source_name)
+        for entity in rows:
+            entity.run(engine)
+        if native_entities:
+            # Last in the phase: a native copy may change session settings,
+            # such as the search_path that pg_dump empties.
+            _native_copy(context, source_name, native, native_entities)
+
+
+def _plan(context, entities):
+    """Per source, in listed order: row by row entities, native copy and its entities."""
+
+    plan = []
     for source_name in dict.fromkeys(entity.source for entity in entities):
         group = [entity for entity in entities if entity.source == source_name]
         engine = context.source(source_name)
@@ -89,15 +116,40 @@ def copy_compatible_entities(context, entities):
                             f'{entity.entity} muda de nome para {entity.target_entity}: '
                             f'vai pela cópia linha a linha, não pelo {native.name}.'
                         )
+        rows = [entity for entity in group if entity not in native_entities]
+        plan.append((source_name, rows, native, native_entities))
+    return plan
 
-        for entity in group:
-            if entity not in native_entities:
-                entity.run(engine)
 
+def _copy_tasks(plan) -> list:
+    tasks = []
+    for source_name, rows, native, native_entities in plan:
+        for entity in rows:
+            tasks.append(Task(
+                f'copy:{entity.target_entity}', 1, lambda context, entity=entity: entity.run(context.source(entity.source)),
+            ))
         if native_entities:
-            # Last in the phase: a native copy may change session settings,
-            # such as the search_path that pg_dump empties.
-            _native_copy(context, source_name, native, native_entities)
+            tasks.append(Task(
+                f'copy:{source_name}:{native.name}',
+                1,
+                lambda context, source_name=source_name, native=native, entities=native_entities: (
+                    _native_copy_task(context, source_name, native, entities)
+                ),
+                writes_segment=True,
+            ))
+    return tasks
+
+
+def _native_copy_task(task_context, source_name, native, entities):
+    """Native copy in a worker: the dump file is the segment of the task."""
+
+    names = [entity.entity for entity in entities]
+    task_context.logger.print_log(f'Copiando com {native.name} da origem {source_name}: {", ".join(names)}')
+    started = time.monotonic()
+    native.copy(names, task_context.segment_path)
+    task_context.record_native_copy(
+        source_name, native.name, names, time.monotonic() - started, os.path.getsize(task_context.segment_path),
+    )
 
 
 def _native_copy(context, source_name, native, entities):

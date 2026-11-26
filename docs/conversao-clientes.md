@@ -112,6 +112,32 @@ O `reset_identity()` acha a sequence de cada coluna pelo `pg_get_serial_sequence
 
 O helper de índices saiu porque não funcionava: com nome de índice não fazia nada e com nome de tabela deixava o índice sem as linhas carregadas.
 
+### Tarefas, opcional
+
+Um `run_inserts()` que chama os `insert_*` em ordem continua funcionando. Para gerar em paralelo com `--workers`, troque o `run_inserts()` por `@task` em cada `insert_*`, na mesma ordem. Assim, o `03_load_transformed_data` sai igual ao de antes.
+
+Antes:
+
+```python
+def run_inserts(self):
+    self.insert_courses()
+    self.insert_students()
+```
+
+Depois:
+
+```python
+from core.tasks import task
+
+@task('courses')
+def insert_courses(self): ...
+
+@task('students')
+def insert_students(self): ...
+```
+
+Uma tarefa que depende do resultado de outra, como um dicionário montado por ela, vai para uma sequência maior: `@task('pedidos', sequence=2)`. Dentro de uma tarefa, a origem é lida por `self.context.source(...)`. `clear()`, `suspend_constraints()` e `reset_identity()` não são aceitos nela. As regras completas estão em [novo-cliente.md](novo-cliente.md#passo-5--respeitar-a-ordem-das-inserções).
+
 ## 3. As leituras
 
 O `source_sql` com `{fields}` e `{limit}` virou `source=`, com um `SourceQuery` para o caso comum e um `NativeQuery` para o que não cabe nele.

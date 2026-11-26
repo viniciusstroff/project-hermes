@@ -15,6 +15,7 @@ from core.migration_engine import MigrationEngine
 from core.operations import SuspendConstraints
 from core.outputs import FileOutput, MirrorOutput, OutputAdapter
 from core.outputs.direct import DirectDatabaseOutput
+from core.parallel import TASK_OPERATIONS, ParallelSettings, TaskOperationError
 from core.references import ReferenceMap, ReferenceMapError, build_reference_map, reference_pairs, reference_query
 from core.runtime import MigrationLogger, MigrationProgress
 
@@ -46,6 +47,7 @@ class OutputSettings:
 
 
 _OUTPUT_SETTINGS = ContextVar('hermes_output_settings', default=OutputSettings())
+_PARALLEL_SETTINGS = ContextVar('hermes_parallel_settings', default=ParallelSettings())
 
 
 @contextmanager
@@ -62,6 +64,17 @@ def output_settings(settings: OutputSettings):
         yield settings
     finally:
         _OUTPUT_SETTINGS.reset(token)
+
+
+@contextmanager
+def parallel_settings(settings: ParallelSettings):
+    """Workers used by the contexts built inside the block. Outside it, one worker."""
+
+    token = _PARALLEL_SETTINGS.set(settings)
+    try:
+        yield settings
+    finally:
+        _PARALLEL_SETTINGS.reset(token)
 
 
 class SourceNotConfiguredError(LookupError):
@@ -88,12 +101,17 @@ class MigrationContext:
     progress: MigrationProgress
     connections: dict = field(default_factory=dict)
     metrics: GenerationMetrics = field(default_factory=GenerationMetrics)
+    # Connection configs of the sources, so each worker opens its own connections.
+    source_configs: dict = field(default_factory=dict)
+    parallel: ParallelSettings = field(default_factory=ParallelSettings)
     # Debug mode: row limit applied to every source query.
     debug_limit: int | None = None
     # Entities of each SuspendConstraints emitted; the runner resumes them at the end.
     suspended_constraints: list = field(default_factory=list)
     _loaded_reference_maps: dict = field(default_factory=dict)
     _summary_logged: bool = False
+    # Name of the task running on this context with one worker.
+    _running_task: str = None
     _warnings_logged: set = field(default_factory=set)
     _closed: bool = False
 
@@ -108,6 +126,7 @@ class MigrationContext:
             debug_limit=self.debug_limit,
             error=error,
             output=self.output.describe(),
+            parallel=self.parallel.describe(),
         )
 
     def source(self, source_name: str) -> MigrationEngine:
@@ -135,6 +154,11 @@ class MigrationContext:
     def emit(self, operation):
         """Deliver one write operation to the output, the only write path of the run."""
 
+        if self._running_task is not None and not isinstance(operation, TASK_OPERATIONS):
+            raise TaskOperationError(
+                f"A tarefa '{self._running_task}' emitiu {type(operation).__name__}, que pertence à fase de "
+                'preparação ou de finalização. Uma tarefa só emite Insert, Comment e Native.'
+            )
         if isinstance(operation, SuspendConstraints):
             self.suspended_constraints.append(operation.entities)
         self.output.write(operation)
@@ -231,6 +255,10 @@ class DefaultMigrationContextFactory:
         output = None
         try:
             source_configs, target_config = parse_connections(config)
+            parallel = _PARALLEL_SETTINGS.get()
+            # Before any connection: the process mode is refused where fork is not safe.
+            parallel.check([source.adapter for source in source_configs.values()] + [target_config.adapter])
+            metrics.parallel = parallel.describe()
             connections = {
                 'sources': {name: source.describe() for name, source in source_configs.items()},
                 'target': target_config.describe(),
@@ -280,6 +308,8 @@ class DefaultMigrationContextFactory:
             progress=progress,
             connections=connections,
             metrics=metrics,
+            source_configs=source_configs,
+            parallel=parallel,
         )
 
 

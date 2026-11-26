@@ -72,6 +72,9 @@ python3 Migracao.py Acme --output hybrid --dry-run
 
 # Carrega no destino durante a geração, sem arquivos de comandos
 python3 Migracao.py Acme --output direct --apply
+
+# Gera as tarefas independentes em 4 processos
+python3 Migracao.py Acme --workers 4 --worker-mode process
 ```
 
 Com `--apply` ou `--dry-run`, o `Migracao.py` aplica a execução que acabou de gerar no banco das chaves `TARGET_*` do `.env`, o mesmo que a geração consulta. A aplicação só começa se a geração terminou com status `success`. Ela funciona como o `Aplicar.py`, descrito em [Aplicando os SQLs no destino](#aplicando-os-sqls-no-destino). O `--on-error` também vale aqui.
@@ -107,6 +110,32 @@ Para alterar a porta exposta no host sem mudar o contrato interno, ajuste `TARGE
 Por exemplo, `TARGET_DB_PUBLISHED_PORT=5434` publica o PostgreSQL como `localhost:5434`,
 mas o container da aplicação continua acessando `target-db:5432`.
 
+
+## Gerando em paralelo
+
+O script do cliente marca os métodos de carga com `@task` (ver [novo-cliente.md](novo-cliente.md#passo-5--respeitar-a-ordem-das-inserções)). Com `--workers` maior que 1, as tarefas da mesma sequência geram ao mesmo tempo:
+
+| Opção | Padrão | Efeito |
+|---|---|---|
+| `--workers N` | 1 | quantas tarefas geram ao mesmo tempo; com 1, a geração roda em sequência como antes |
+| `--worker-mode thread` | sim | threads no mesmo processo; funciona com todos os adapters |
+| `--worker-mode process` | não | processos por `fork`; só em Linux e recusado com MongoDB |
+
+Cada tarefa abre as próprias conexões com a origem e grava num segmento em `tarefas/`. O processo principal junta os segmentos ao arquivo da fase na ordem da sequência e da declaração, assim que as tarefas anteriores terminam. Cada segmento é apagado depois de entrar. O `03_load_transformed_data` sai igual ao da geração em sequência. Com `--output direct` ou `hybrid`, os comandos de cada segmento rodam no destino quando ele entra na fase. As entidades de `compatible_entities()` também viram tarefas (`copy:<entidade>`).
+
+O terminal mostra uma linha por tarefa concluída, no lugar do rodapé de progresso. O `relatorio-geracao.json` lista as tarefas com worker, início, fim e duração. Cada fase mostra a duração ao lado da soma das tarefas: quando a soma passa da duração, as tarefas rodaram juntas.
+
+### Quando ajuda
+
+- Threads sobrepõem a espera da origem: valem quando a origem está longe, como pelo túnel SSH. O trabalho de Python (estratégias e renderização) não roda junto por causa do GIL.
+- Processos usam vários núcleos: valem quando o tempo está em CPU.
+- Na AcmeEdu, que gera em cerca de 1 s contra um banco local, nenhum dos dois ganhou tempo de forma clara. Meça com o `relatorio-geracao.json` numa carga real antes de escolher.
+
+### Cuidados
+
+- Cada worker abre uma conexão com cada origem que usa. Com `--workers 4`, a origem recebe até 4 conexões a mais.
+- Uma tarefa que falha cancela as outras e a geração termina `failed` com o nome dela. Os segmentos que não entraram na fase ficam em `tarefas/`.
+- No modo processo, cada worker é uma cópia do processo principal na memória.
 
 ## Arquivos gerados
 

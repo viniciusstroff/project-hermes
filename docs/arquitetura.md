@@ -367,6 +367,58 @@ resultado `failed`. Qualquer outra exceção, inclusive Ctrl+C, também faz
 O uso pela linha de comando, o formato do relatório e os cuidados de operação
 estão em [execucao.md](execucao.md#aplicando-os-sqls-no-destino).
 
+## Tarefas e paralelismo
+
+O script do cliente declara as cargas como tarefas, com o decorator de
+`core/tasks.py`:
+
+```python
+class Migracao(BaseMigration):
+    @task('courses')
+    def insert_courses(self): ...
+
+    @task('enrollments', sequence=2)
+    def insert_enrollments(self): ...
+```
+
+O nome é único na classe. Uma classe com nome repetido é recusada na
+definição. Tarefas da mesma sequência são independentes. Uma sequência maior
+espera as menores. A ordem de junção segue a sequência. Dentro dela, segue a ordem
+de declaração. O `run_inserts()` padrão do `BaseMigration` chama `run_tasks()`,
+que monta a lista e entrega ao `run_task_list()` de `core/parallel.py`.
+
+Com 1 worker, cada tarefa roda no contexto da execução e escreve direto no
+output, como antes. Com mais, cada tarefa roda num `TaskContext`: conexões de
+origem próprias (o contexto guarda as `source_configs`), um `FileOutput` que
+grava num segmento em `tarefas/<NN>_<fase>/` e um `GenerationMetrics` privado.
+Dentro do worker, `self.context` resolve para esse contexto por uma
+`ContextVar`. O script não muda. Em qualquer número de workers, uma tarefa
+só emite `Insert`, `Comment` e `Native`.
+
+O `_Coordinator` roda no processo principal. Ele recebe os registros dos
+workers (linhas de log, eventos, avisos, cópias nativas e o resultado de cada
+tarefa) e é o único que escreve no log, no terminal e nas métricas. Quando as
+tarefas anteriores a uma já terminaram, ele junta o segmento dela à fase com
+`output.include_file()`, adota as unidades dela no coletor e apaga o segmento.
+
+Os executores:
+
+- `_ThreadRunner`: um `ThreadPoolExecutor`, uma conexão de origem por thread e
+  um evento de cancelamento que o `engine.insert()` confere;
+- `_ProcessRunner`: N processos criados de uma vez pelo contexto `fork`, sem
+  `Pool`, com as tarefas distribuídas por um contador compartilhado e os
+  registros por uma fila. O filho ignora SIGINT, abre conexões novas e nunca
+  fecha as herdadas, que são do processo principal. Antes do fork, o stdout e
+  o buffer do output são descarregados.
+
+Os adapters de origem guardam o processo e a thread que os criou
+(`core/adapters/ownership.py`) e recusam leituras de outro worker. Isso pega
+um engine criado fora da tarefa e usado dentro dela. O modo processo é
+recusado fora do Linux e com MongoDB antes de qualquer conexão, pela
+`ParallelSettings.check()`. A cópia de `compatible_entities()` também vira
+tarefas com mais de um worker, uma por entidade e uma por cópia nativa, cujo
+arquivo do `pg_dump` é o próprio segmento.
+
 ## Métricas da geração
 
 O contexto tem um coletor, `context.metrics`, definido em `core/metrics.py`. O
@@ -407,6 +459,7 @@ Os artefatos ficam em `runs/<cliente>/<YYYYmmdd-HHMMSS>/`:
 - `manifest.json`
 - `logs/migration.log` e `logs/migration.jsonl`
 - `relatorio-geracao.json`
+- `tarefas/`, só durante uma geração com mais de um worker, com os segmentos que ainda não entraram na fase
 - `comandos/00_setup.sql`
 - `comandos/01_prepare_target.sql`
 - `comandos/02_copy_compatible_entities.sql`

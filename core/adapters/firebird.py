@@ -1,5 +1,6 @@
 from typing import Any
 
+from core.adapters.ownership import claim
 from core.adapters.sql_source import SqlSourceAdapter
 from core.dialects import FirebirdDialect
 from core.versions import UnsupportedVersionError, check_server_version, parse_version
@@ -18,6 +19,8 @@ class FirebirdSourceAdapter(SqlSourceAdapter):
         self.connection = connection
         self.dialect = dialect or FirebirdDialect()
         self.server_version = server_version
+        # The connection serves the worker that created the adapter.
+        claim(self)
 
     @classmethod
     def connect(cls, config):

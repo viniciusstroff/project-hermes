@@ -20,6 +20,7 @@ import datetime
 import decimal
 import uuid
 
+from core.adapters.ownership import check_owner, claim
 from core.application import Capabilities, Command, DeferredCommandError
 from core.artifacts import ArtifactFormat
 from core.connections import ConnectionConfigError
@@ -121,6 +122,7 @@ class MongoSourceAdapter:
         self.database = database
         self.client = client
         self.server_version = server_version
+        claim(self)
 
     @classmethod
     def connect(cls, config):
@@ -128,12 +130,14 @@ class MongoSourceAdapter:
         return cls(database, client, version)
 
     def read(self, query):
+        check_owner(self)
         # Build now, so a refused query fails at the call and not at the first row.
         cursor = self._cursor(query)
         fields = self._plain_fields(query)
         return (_row(document, fields) for document in cursor)
 
     def count(self, query):
+        check_owner(self)
         if isinstance(query, SourceQuery) and not _native_fields(query):
             if query.limit == 0:
                 return 0

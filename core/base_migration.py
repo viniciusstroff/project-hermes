@@ -8,10 +8,17 @@ responsibilities to smaller context components.
 
 from core.context import DefaultMigrationContextFactory
 from core.operations import Clear, Comment, ResetIdentity, SuspendConstraints
+from core.parallel import Task, current_task_context, run_task_list
 from core.runner import MigrationRunner
+from core.tasks import declared_tasks
 
 
 class BaseMigration:
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        # A repeated task name is refused when the client class is defined.
+        declared_tasks(cls)
+
     def __init__(self, clientdir: str, context=None):
         self.context = context or DefaultMigrationContextFactory.from_clientdir(clientdir)
         self._clientdir = clientdir
@@ -20,10 +27,23 @@ class BaseMigration:
 
     def __del__(self):
         try:
-            if hasattr(self, 'context'):
-                self.context.close()
+            if '_context' in self.__dict__:
+                self._context.close()
         except Exception:
             pass
+
+    @property
+    def context(self):
+        """Context of the run, or of the running task inside a worker."""
+
+        task_context = current_task_context()
+        if task_context is not None and task_context.parent is self._context:
+            return task_context
+        return self._context
+
+    @context.setter
+    def context(self, value):
+        self._context = value
 
     @property
     def file(self):
@@ -90,8 +110,17 @@ class BaseMigration:
         pass
 
     def run_inserts(self):
-        """Override with the migrations of the load_transformed_data phase."""
-        pass
+        """Run the tasks declared with @task. Override to load the phase another way."""
+        self.run_tasks()
+
+    def run_tasks(self):
+        """Run the tasks declared with @task, in merge order, with the workers of the run."""
+
+        tasks = [
+            Task(spec.name, spec.sequence, lambda _context, method=spec.method: getattr(self, method)())
+            for spec in declared_tasks(type(self))
+        ]
+        run_task_list(self._context, tasks)
 
     def run(self):
-        MigrationRunner(self.context, self).run()
+        MigrationRunner(self._context, self).run()

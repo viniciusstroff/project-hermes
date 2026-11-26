@@ -140,6 +140,29 @@ class Unit:
         self.finished_at = now()
         self.duration_seconds = clock() - self._started
 
+    @classmethod
+    def from_dict(cls, data: dict) -> 'Unit':
+        """Rebuild a finished unit sent by a worker as ``as_dict()``."""
+
+        unit = cls.__new__(cls)
+        unit.label = data['label']
+        unit.source = data.get('source')
+        unit.phase = data.get('phase')
+        unit.state = data['state']
+        unit.rows_read = data['rows_read']
+        unit.inserts = dict(data['inserts'])
+        unit.losses = {}
+        for loss in data.get('losses', ()):
+            group = LossGroup(loss['entity'], loss['column'], loss['strategy'], loss['reason'], loss['reference_map'])
+            group.count = loss['count']
+            group.samples = list(loss['samples'])
+            unit.losses[(group.entity, group.column, group.strategy, group.reason)] = group
+        unit.started_at = _parse_timestamp(data.get('started_at'))
+        unit.finished_at = _parse_timestamp(data.get('finished_at'))
+        unit.duration_seconds = data.get('duration_seconds')
+        unit._started = None
+        return unit
+
     def describe(self) -> str:
         source = f' ({self.source})' if self.source else ''
         state = ', interrompida' if self.state == INTERRUPTED else ''
@@ -185,6 +208,7 @@ class Phase:
         self.name = name
         self.units = []
         self.native_copies = []
+        self.tasks = []
         self.started_at = now()
         self.finished_at = None
         self.duration_seconds = None
@@ -209,6 +233,11 @@ class Phase:
             'duration_seconds': _round(self.duration_seconds),
             **self.totals(),
             'native_copies': list(self.native_copies),
+            'tasks': len(self.tasks),
+            # Next to the phase duration, it shows how much the tasks overlapped.
+            'tasks_duration_seconds': (
+                _round(sum(task['duration_seconds'] or 0 for task in self.tasks)) if self.tasks else None
+            ),
         }
 
 
@@ -228,6 +257,9 @@ class GenerationMetrics:
         self.run_id = run_id
         self.phases = []
         self.units = []
+        self.tasks = []
+        # Workers and worker mode of the run, set by the context.
+        self.parallel = None
         self.status = RUNNING
         self.error = None
         self.started_at = now()
@@ -317,6 +349,34 @@ class GenerationMetrics:
             self._events('data_loss', group.describe(), level='warning', data=group.as_dict())
         self._open_units.remove(unit)
 
+    def adopt(self, units):
+        """Add to the open phase, in merge order, the finished units of a task run in a worker."""
+
+        phase = self.phases[-1] if self._phase_open else None
+        for unit in units:
+            if isinstance(unit, dict):
+                unit = Unit.from_dict(unit)
+            unit.phase = phase.name if phase is not None else None
+            self.units.append(unit)
+            if phase is not None:
+                phase.units.append(unit)
+
+    def task_finished(self, name: str, sequence: int, worker, started_at, finished_at, duration_seconds: float):
+        """Record a finished task in the open phase."""
+
+        record = {
+            'name': name,
+            'sequence': sequence,
+            'phase': self.phase_name,
+            'worker': worker,
+            'started_at': _timestamp(started_at),
+            'finished_at': _timestamp(finished_at),
+            'duration_seconds': _round(duration_seconds),
+        }
+        self.tasks.append(record)
+        if self._phase_open:
+            self.phases[-1].tasks.append(record)
+
     def inserted(self, entity: str):
         """Count an insert in the open unit. Outside a unit, nothing is counted."""
 
@@ -373,8 +433,10 @@ class GenerationMetrics:
                 'inserts': sum(unit.insert_count for unit in self.units),
                 'losses': sum(group.count for unit in self.units for group in unit.losses.values()),
             },
+            'parallel': self.parallel,
             'phases': [phase.as_dict() for phase in self.phases],
             'units': units,
+            'tasks': list(self.tasks),
             'artifacts': [_artifact_size(artifact, run_dir) for artifact in artifacts],
         }
 
@@ -388,6 +450,10 @@ class GenerationMetrics:
 def _artifact_size(artifact: dict, run_dir: str) -> dict:
     path = os.path.join(run_dir, artifact['path']) if run_dir else artifact['path']
     return {**artifact, 'bytes': os.path.getsize(path) if os.path.exists(path) else None}
+
+
+def _parse_timestamp(value):
+    return datetime.datetime.fromisoformat(value) if value else None
 
 
 def _timestamp(value):

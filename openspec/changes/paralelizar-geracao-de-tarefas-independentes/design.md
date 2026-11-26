@@ -96,7 +96,7 @@ Na AcmeEdu, os métodos `insert_*` não dependem do resultado uns dos outros. O 
 
    Workers não usam logger, progresso nem métricas diretamente. Eles mandam registros para o processo principal: linhas de log, eventos, progresso, avisos e as métricas das unidades. O processo principal é o único que escreve no `migration.log`, no `migration.jsonl` e no terminal. O rodapé de progresso sai antes das tarefas e dá lugar a linhas `k de n tarefas concluídas`.
 
-   O `GenerationMetrics` deixa de depender da pilha para contar: o engine guarda a própria `Unit`. O coletor do processo principal adota as unidades das tarefas na ordem de junção, com `Unit.from_dict` para as que vêm de processos. O `warn_once` deduplica no processo principal, porque o conjunto de avisos não é compartilhado entre processos.
+   Cada tarefa tem um `GenerationMetrics` privado, então a pilha de unidades fica por worker e duas tarefas nunca dividem a mesma pilha. O coletor do processo principal adota as unidades de cada tarefa na ordem de junção (`adopt`), a partir do `as_dict()` que a tarefa devolve e do `Unit.from_dict`. A primeira ideia era o engine guardar a própria `Unit`; o coletor privado resolve o mesmo problema sem mudar o engine. O `warn_once` deduplica no processo principal, porque o conjunto de avisos não é compartilhado entre processos.
 
 6. Cópia das entidades compatíveis.
 
@@ -118,7 +118,7 @@ Na AcmeEdu, os métodos `insert_*` não dependem do resultado uns dos outros. O 
 
 ## Risks / Trade-offs
 
-- Ganho incerto com threads -> o GIL limita a CPU. Mitigação: medir a AcmeEdu com 1, 2 e 4 workers nos dois modos e registrar no design antes de arquivar.
+- Ganho incerto com threads -> o GIL limita a CPU. Medido na AcmeEdu, com a V1 e a V2 em PostgreSQL local, gerando sem aplicar. A fase de carga levou 0,89 s a 1,06 s com 1 worker, 1,12 s a 1,84 s com 4 threads e 0,60 s a 1,06 s com 4 processos. Os artefatos saíram iguais nas oito gerações. A geração da AcmeEdu é curta e quase toda CPU, então threads não ganham e processos ficam dentro do ruído. O ganho precisa ser medido numa carga real, com a origem remota.
 - Mais conexões na origem -> N workers abrem até N conexões por origem. Documentar e limitar pelo `--workers`.
 - Fork com conexões herdadas -> o filho nunca fecha nem usa as conexões herdadas. O modo processo é recusado com MongoDB.
 - Script do cliente com estado compartilhado -> uma tarefa que escreve num dicionário lido por outra da mesma sequência gera resultado diferente em paralelo. A regra fica documentada. A sequência resolve a dependência.

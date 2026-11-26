@@ -580,7 +580,9 @@ O Go não deve virar a camada de regra da migração. Ele deve executar trabalho
 
 ## 12 — Adicionar paralelismo e streaming controlados
 
-A parte de paralelismo está proposta na change `paralelizar-geracao-de-tarefas-independentes`. O script do cliente declara tarefas com `@task(nome, sequence=1)`: tarefas da mesma sequência rodam juntas, em threads ou processos. O processo principal junta o resultado delas ao arquivo da fase na ordem declarada, sem mudar os artefatos. O paralelismo fica na geração. A aplicação continua numa transação até existir checkpoint na aplicação. Antes, a change `preservar-quebras-de-linha-nos-artefatos` corrige a leitura dos artefatos, que hoje troca `\r\n` por `\n` dentro dos textos.
+A change `paralelizar-geracao-de-tarefas-independentes` implementou o paralelismo entre tarefas. O script do cliente declara tarefas com `@task(nome, sequence=1)`. As da mesma sequência rodam juntas com `--workers N`, em threads ou em processos (`--worker-mode`). O processo principal junta o resultado delas ao arquivo da fase na ordem declarada, sem mudar os artefatos. Na AcmeEdu, os artefatos saíram iguais com 1, 2 e 4 workers nos dois modos. O tempo não caiu de forma clara, porque a geração dela leva cerca de 1 s contra um banco local.
+
+Ficam para depois: medir numa carga real com a origem remota, a leitura em streaming, o paralelismo dentro de uma tarefa (por faixa de chave ou partição), dependências por `after=` além da sequência e a aplicação paralela, que depende de checkpoint na aplicação.
 
 Hoje a migração é pensada como uma sequência previsível de etapas. Isso favorece rastreabilidade, mas limita desempenho em bases grandes. Futuramente, o motor pode executar partes independentes em paralelo e processar dados em streaming, sem carregar tudo em memória.
 

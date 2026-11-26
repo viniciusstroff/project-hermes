@@ -75,6 +75,7 @@ class ArtifactManager:
         debug_limit: int = None,
         error: str = None,
         output: dict = None,
+        parallel: dict = None,
     ):
         manifest = {
             'client': self.client_name,
@@ -91,6 +92,7 @@ class ArtifactManager:
             'sources': (connections or {}).get('sources', {}),
             'target': (connections or {}).get('target'),
             'output': output,
+            'parallel': parallel,
         }
 
         if error:
