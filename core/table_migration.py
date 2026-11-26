@@ -35,20 +35,20 @@ class TableMigration:
     def source_query(self):
         return with_default_fields(self.source, self.source_select_columns())
 
-    def run_row(self, row: dict, engine: MigrationEngine, fields: list = None):
-        # Python values: the target adapter serializes them when it renders the Insert.
-        engine.insert(self.target, [(field.insert_col, field.raw_value(row)) for field in fields or self.fields])
-
     def run(self, engine: MigrationEngine):
-        query = self.source_query()
-        total = engine.total_rows(query)
-        engine.report_progress(self.target, 0, total)
+        with engine.unit(self.target) as unit:
+            query = self.source_query()
+            total = engine.total_rows(query)
+            engine.report_progress(self.target, 0, total)
+            # Python values: the target adapter serializes them when it renders the Insert.
+            values = engine.field_values(self.target, self.fields)
 
-        processed = 0
-        for row in engine.read(query):
-            self.run_row(row, engine)
-            processed += 1
-            if processed % engine.progress_every == 0:
-                engine.report_progress(self.target, processed, total)
+            processed = 0
+            for row in engine.read(query):
+                unit.row_read()
+                engine.insert(self.target, values(row))
+                processed += 1
+                if processed % engine.progress_every == 0:
+                    engine.report_progress(self.target, processed, total)
 
-        engine.report_progress(self.target, processed, total, done=True)
+            engine.report_progress(self.target, processed, total, done=True)

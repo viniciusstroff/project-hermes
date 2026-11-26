@@ -7,6 +7,7 @@ from dotenv import dotenv_values
 from core.adapters.registry import connect_adapter
 from core.artifacts import ArtifactManager
 from core.connections import ConnectionConfigError, parse_connections
+from core.metrics import GENERATION_REPORT, GenerationMetrics
 from core.migration_engine import MigrationEngine
 from core.operations import SuspendConstraints
 from core.outputs import FileOutput, OutputAdapter
@@ -37,11 +38,13 @@ class MigrationContext:
     logger: MigrationLogger
     progress: MigrationProgress
     connections: dict = field(default_factory=dict)
+    metrics: GenerationMetrics = field(default_factory=GenerationMetrics)
     # Debug mode: row limit applied to every source query.
     debug_limit: int | None = None
     # Entities of each SuspendConstraints emitted; the runner resumes them at the end.
     suspended_constraints: list = field(default_factory=list)
     _loaded_reference_maps: dict = field(default_factory=dict)
+    _summary_logged: bool = False
     _warnings_logged: set = field(default_factory=set)
     _closed: bool = False
 
@@ -70,7 +73,15 @@ class MigrationContext:
             self.debug_limit,
             progress_fn=self.progress.log_table_progress,
             warn_fn=self.warn_once,
+            metrics=self.metrics,
+            source_name=source_name,
         )
+
+    def open_phase(self, phase: str):
+        """Open a phase in the metrics and in the output."""
+
+        self.metrics.open_phase(phase)
+        self.output.open_phase(phase)
 
     def emit(self, operation):
         """Deliver one write operation to the output, the only write path of the run."""
@@ -85,7 +96,7 @@ class MigrationContext:
         if key in self._warnings_logged:
             return
         self._warnings_logged.add(key)
-        self.logger.print_log('[AVISO] ' + message)
+        self.logger.print_log('[AVISO] ' + message, level='warning')
 
     def load_reference_maps(self, declarations):
         """Load every declared reference map by reading the target adapter."""
@@ -113,6 +124,21 @@ class MigrationContext:
                     f'empty-reference-map:{declaration.name}',
                     f'Mapa de referência {declaration.name} carregou vazio. Confira tabela, filtros e banco.',
                 )
+
+    def write_generation_report(self, status: str, error: str = None):
+        """Close the metrics, log the summary once and write relatorio-geracao.json."""
+
+        self.metrics.finish(status, error)
+        if not self._summary_logged:
+            self._summary_logged = True
+            for level, line in self.metrics.summary():
+                self.logger.print_log(line, level=level)
+        self.metrics.write_report(
+            os.path.join(self.artifacts.run_dir, GENERATION_REPORT),
+            debug_limit=self.debug_limit,
+            artifacts=self.artifacts.artifacts(),
+            run_dir=self.artifacts.run_dir,
+        )
 
     def close_target_reads(self):
         """End target reads: from here on the generation does not query the target."""
@@ -148,6 +174,8 @@ class DefaultMigrationContextFactory:
         logger = MigrationLogger(artifacts)
         progress = MigrationProgress(logger)
         logger.progress = progress
+        metrics = GenerationMetrics(logger.run_id, events=logger.event)
+        logger.metrics = metrics
 
         connections = {}
         opened = []
@@ -176,9 +204,10 @@ class DefaultMigrationContextFactory:
 
             # The artifact format, and so the file extension, comes from the target adapter.
             output = FileOutput(artifacts, target)
+            metrics.open_phase('setup')
             output.open_phase('setup')
         except Exception as exc:
-            logger.print_log('[ERRO] ' + str(exc))
+            logger.print_log('[ERRO] ' + str(exc), level='error')
             artifacts.write_manifest(
                 status='failed',
                 connections=connections,
@@ -201,6 +230,7 @@ class DefaultMigrationContextFactory:
             logger=logger,
             progress=progress,
             connections=connections,
+            metrics=metrics,
         )
 
 

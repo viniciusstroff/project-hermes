@@ -664,6 +664,18 @@ Permitir retomada segura, diagnóstico de falhas e execução incremental contro
 
 O projeto já gera `logs/migration.log` e `manifest.json`, mas pode evoluir para observabilidade operacional completa.
 
+### O que foi implementado
+
+A change `registrar-metricas-da-geracao` entregou a primeira parte:
+
+- o `relatorio-geracao.json`, com linhas lidas, inserts por entidade, duração e situação de cada unidade, duração e totais de cada fase, cópias nativas e tamanho dos artefatos;
+- a contagem de perda de dado no `Lookup`, no `DateConvert` e no `EmailExtract`, com até 20 exemplos por grupo;
+- o `logs/migration.jsonl`, com execução, nível, fase e unidade em cada evento;
+- o resumo no fim do `migration.log`;
+- os níveis `info`, `warning` e `error` no `print_log()`.
+
+Na `AcmeEdu`, o relatório mostrou 50 datas de nascimento e 61 datas de matrícula impossíveis que viravam `NULL` sem aviso. Ficam para depois: tempo por lote, vazão, memória, novas tentativas, o nível `debug`, perdas nas estratégias de limpeza, a opção de gravar só contagens sem exemplos, comparação entre origem e destino fora da `AcmeEdu` e exportação em Markdown ou HTML.
+
 ### Objetivo
 
 Dar visibilidade objetiva sobre duração, volume, gargalos, falhas e qualidade da migração.

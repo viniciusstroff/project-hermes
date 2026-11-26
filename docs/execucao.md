@@ -108,6 +108,8 @@ Após a execução, os artefatos ficam em `runs/<cliente>/<YYYYmmdd-HHMMSS>/`:
 |---|---|
 | `manifest.json` | Metadados da execução: modo debug, output, conexões sem senha com a versão de cada servidor e a lista de artefatos com fase, caminho e formato |
 | `logs/migration.log` | Log da geração feita pelo Python |
+| `logs/migration.jsonl` | O mesmo log em JSON Lines, um evento por linha, com fase, unidade e nível |
+| `relatorio-geracao.json` | Linhas lidas, inserts, duração e perdas de dado de cada unidade e de cada fase |
 | `comandos/00_setup.sql` | Arquivo inicial da execução |
 | `comandos/01_prepare_target.sql` | Limpeza da V2 e desativação de triggers |
 | `comandos/02_copy_compatible_entities.sql` | Cópia das entidades de `compatible_entities()`, linha a linha ou pelo `pg_dump` |
@@ -116,6 +118,37 @@ Após a execução, os artefatos ficam em `runs/<cliente>/<YYYYmmdd-HHMMSS>/`:
 | `aplicacoes/<YYYYmmdd-HHMMSS>-<modo>/` | Relatório de cada aplicação no destino, criado pelo `Aplicar.py` |
 
 A extensão dos arquivos de `comandos/` vem do adapter de destino. Com destino PostgreSQL, ela é `.sql`.
+
+### Relatório da geração
+
+Cada `TableMigration`, `ExpandMigration`, `MultiTargetMigration` e entidade copiada linha a linha é uma unidade. O `relatorio-geracao.json` traz, para cada unidade, a origem, a fase, as linhas lidas, os inserts por entidade de destino, a duração e a situação (`done` ou `interrupted`). Por fase, traz a duração e os totais. Uma cópia com `pg_dump` aparece na fase `copy_compatible_entities` com as entidades, a duração e o tamanho do arquivo. No fim vem o tamanho de cada artefato de `comandos/`. Numa execução que falhou, o relatório traz também a mensagem do erro.
+
+O relatório é gravado no sucesso e na falha, antes do `manifest.json`. Uma falha no meio de uma unidade deixa essa unidade como `interrupted`, com as linhas lidas até ali.
+
+O relatório também conta as perdas de dado: valores da origem que uma estratégia trocou por `NULL` ou pelo `fallback`. Hoje contam três estratégias:
+
+| Estratégia | Motivo | Quando conta |
+|---|---|---|
+| `Lookup` | `lookup_miss` | a chave não está no mapa |
+| `DateConvert` | `invalid_date` | o texto não segue o formato, como `31/02/2001` |
+| `EmailExtract` | `email_not_found` | o texto não tem e-mail |
+
+Valor nulo ou vazio na origem não conta: a origem já não tinha o dado. Cada grupo de perda (entidade, coluna, estratégia e motivo) guarda o total e até 20 valores originais de exemplo, com até 100 caracteres cada. Esses exemplos são dados da origem, como datas de nascimento e trechos de texto livre. O relatório tem a mesma sensibilidade dos arquivos de `comandos/`.
+
+O fim do `migration.log` resume a execução, com uma linha por unidade e um aviso por grupo de perda:
+
+```text
+[26/11/2026 16:08:50] ----- Resumo da geração -----
+[26/11/2026 16:08:50] students (v1): 1500 linhas lidas, 4580 inserts, 0.26 s
+[26/11/2026 16:08:50] enrollments (v1): 6000 linhas lidas, 6000 inserts, 0.43 s
+[26/11/2026 16:08:50] [AVISO] people.birth_date: 50 datas inválidas (ex.: '31/02/2001')
+```
+
+O `migration.jsonl` tem uma linha JSON por evento, com `ts`, `run_id`, `level` (`info`, `warning` ou `error`), `phase`, `unit`, `event`, `message` e `data`. Cada linha do `migration.log` vira um evento `log`. As métricas acrescentam `phase_started`, `phase_finished`, `unit_started`, `unit_finished` e `data_loss`. Para ver só os erros de uma execução:
+
+```bash
+jq -c 'select(.level == "error")' runs/AcmeEdu/20261126-160849/logs/migration.jsonl
+```
 
 ---
 

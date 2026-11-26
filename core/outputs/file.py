@@ -43,7 +43,10 @@ class FileOutput:
 
     def finish(self, success: bool):
         # Artifacts are kept for audit: a failed run keeps its partial files.
+        # Flushing the file too lets the generation report read the final sizes.
         self.flush()
+        if self.file:
+            self.file.flush()
 
     def describe(self) -> dict:
         return {'type': 'file', 'format': self.format.name}

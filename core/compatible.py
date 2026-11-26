@@ -12,6 +12,7 @@ debug mode, go through the row by row copy, which honors the debug limit.
 """
 
 import os
+import time
 from dataclasses import dataclass
 
 from core.queries import SourceQuery
@@ -47,17 +48,19 @@ class CopyEntity:
 
         query = SourceQuery(self.entity, order_by=self.order_by)
         label = self.target_entity
-        total = engine.total_rows(query)
-        engine.report_progress(label, 0, total)
+        with engine.unit(label) as unit:
+            total = engine.total_rows(query)
+            engine.report_progress(label, 0, total)
 
-        processed = 0
-        for row in engine.read(query):
-            engine.insert(label, row.items())
-            processed += 1
-            if processed % engine.progress_every == 0:
-                engine.report_progress(label, processed, total)
+            processed = 0
+            for row in engine.read(query):
+                unit.row_read()
+                engine.insert(label, row.items())
+                processed += 1
+                if processed % engine.progress_every == 0:
+                    engine.report_progress(label, processed, total)
 
-        engine.report_progress(label, processed, total, done=True)
+            engine.report_progress(label, processed, total, done=True)
 
 
 def copy_compatible_entities(context, entities):
@@ -101,7 +104,12 @@ def _native_copy(context, source_name, native, entities):
     names = [entity.entity for entity in entities]
     context.logger.print_log(f'Copiando com {native.name} da origem {source_name}: {", ".join(names)}')
     path = os.path.join(context.artifacts.run_dir, f'{source_name}.{native.name}.tmp')
+    started = time.monotonic()
     native.copy(names, path)
+    size = os.path.getsize(path)
     context.output.include_file(path)
     os.remove(path)
+    metrics = getattr(context, 'metrics', None)
+    if metrics is not None:
+        metrics.native_copy(source_name, native.name, names, time.monotonic() - started, size)
     context.logger.print_log(f'Cópia com {native.name} da origem {source_name} incluída')

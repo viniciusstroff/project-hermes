@@ -16,7 +16,7 @@ Cada cliente tem um diretório com o próprio script de migração e o `.env` de
 | `comandos/03_load_transformed_data.sql` | `INSERT`s gerados em Python para as tabelas que precisam de mapeamento |
 | `comandos/04_finalize_target.sql` | Ajuste de sequences e reativação de triggers |
 
-Os arquivos ficam em `runs/<cliente>/<AAAAmmdd-HHMMSS>/`, junto com `manifest.json` e `logs/migration.log`. A extensão vem do adapter de destino: `.sql` no PostgreSQL. O manifesto lista cada artefato com fase, caminho e formato. Ele também registra a versão de cada servidor. O diretório `runs/` é ignorado pelo Git.
+Os arquivos ficam em `runs/<cliente>/<AAAAmmdd-HHMMSS>/`, junto com `manifest.json`, `logs/migration.log` e `relatorio-geracao.json`, que traz linhas lidas, inserts, duração e perdas de dado de cada tabela. A extensão vem do adapter de destino: `.sql` no PostgreSQL. O manifesto lista cada artefato com fase, caminho e formato. Ele também registra a versão de cada servidor. O diretório `runs/` é ignorado pelo Git.
 
 O núcleo em `core/` trabalha com contratos em vez de drivers. A origem é lida por um `SourceAdapter` com consultas neutras. A migração emite operações (`Insert`, `Clear`, `SuspendConstraints`, `ResetIdentity`...). O adapter de destino traduz cada uma para o formato dele. Hoje existem adapters para PostgreSQL, Firebird e MongoDB. Do lado da saída há o `FileOutput` (o padrão) e o `MirrorOutput`, que repassa as mesmas operações para mais de um output. Os detalhes estão em [docs/arquitetura.md](docs/arquitetura.md).
 

@@ -183,14 +183,14 @@ class RunnerFailureTest(unittest.TestCase):
         lines = []
         context = MigrationContext(
             clientdir='x', config={}, artifacts=None, sources={}, target=None,
-            output=None, logger=types.SimpleNamespace(print_log=lines.append), progress=None,
+            output=None, logger=types.SimpleNamespace(print_log=lambda line, level='info': lines.append((level, line))), progress=None,
         )
 
         context.warn_once('binary:public.documents.f_content', 'mensagem')
         context.warn_once('binary:public.documents.f_content', 'mensagem')
         context.warn_once('binary:public.documents.f_other', 'outra')
 
-        self.assertEqual(lines, ['[AVISO] mensagem', '[AVISO] outra'])
+        self.assertEqual(lines, [('warning', '[AVISO] mensagem'), ('warning', '[AVISO] outra')])
 
 
 if __name__ == '__main__':
