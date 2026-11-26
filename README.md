@@ -131,7 +131,7 @@ Os testes trocam `psycopg2` e `firebirdsql` por módulos falsos. Não precisam d
 
 ## Adicionando um cliente
 
-Cada cliente é um diretório `<Cliente>/` com um `<Cliente>.py` de mesmo nome, que define a classe `Migracao` herdando de `BaseMigration`. O script declara as tabelas fora do `pg_dump` e a ordem das cargas. As transformações de campo usam as estratégias do core (`Copy`, `Rename`, `Lookup`, `DateConvert` e outras). O passo a passo está em [docs/novo-cliente.md](docs/novo-cliente.md) e o catálogo de estratégias em [docs/estrategias.md](docs/estrategias.md).
+Cada cliente é um diretório `<Cliente>/` com um `<Cliente>.py` de mesmo nome, que define a classe `Migracao` herdando de `BaseMigration`. O script lista as tabelas que passam sem transformação (`compatible_entities()`) e a ordem das cargas. As transformações de campo usam as estratégias do core (`Copy`, `Rename`, `Lookup`, `DateConvert` e outras). O passo a passo está em [docs/novo-cliente.md](docs/novo-cliente.md) e o catálogo de estratégias em [docs/estrategias.md](docs/estrategias.md).
 
 Para ver um cliente completo rodando, use a [AcmeEdu](AcmeEdu/README.md), uma instituição de ensino fictícia com V1 e V2 em Docker. Ela gera, aplica e confere a migração de ponta a ponta, com renomeação de tabelas e dados agrupados e separados.
 
@@ -161,17 +161,16 @@ rodar2.sh        alternativa ao Aplicar.py, com psql
 - [docs/execucao.md](docs/execucao.md): passo a passo operacional, do túnel SSH à verificação dos logs
 - [docs/novo-cliente.md](docs/novo-cliente.md): checklist para criar a migração de um cliente
 - [docs/estrategias.md](docs/estrategias.md): estratégias de transformação de campo
+- [docs/conversao-clientes.md](docs/conversao-clientes.md): como levar um cliente do `.env` e da API antigos para o core desacoplado
 - [docs/melhorias-futuras.md](docs/melhorias-futuras.md): plano de evolução com contexto e riscos de cada item
 
 ## Planos futuros
 
-Os contratos de adapters, o `OutputAdapter` (com `FileOutput` e `MirrorOutput`) e a aplicação no destino com dry run já estão implementados. O plano completo, com a justificativa de cada item, está em [docs/melhorias-futuras.md](docs/melhorias-futuras.md).
+O core já não depende de um banco nem de uma versão: a change `desacoplar-migracao-de-banco-e-versao` trouxe conexões nomeadas, consultas neutras, escrita por operações, artefatos no formato do destino, aplicação guiada por capacidades e os adapters de PostgreSQL, Firebird e MongoDB. A AcmeEdu roda sem SQL próprio em seis caminhos de banco e versão. O plano completo, com a justificativa de cada item, está em [docs/melhorias-futuras.md](docs/melhorias-futuras.md).
 
 ### Próximo passo
 
-A próxima change é a `desacoplar-migracao-de-banco-e-versao`. Ela tira do core a dependência de PostgreSQL, de Firebird e de uma versão específica, para que qualquer banco com adapter sirva de origem ou destino. As duas changes que ela pedia antes já foram feitas: as strategies não geram mais SQL e os mapas de referência são declarados e carregados antes da primeira fase.
-
-O `DirectDatabaseOutput`, que executaria os comandos durante a geração, deixou de esbarrar na leitura do destino no meio da carga. A change `introduzir-direct-database-output` ainda precisa ser revista para o modelo de operações da `desacoplar`.
+O `DirectDatabaseOutput`, que executaria os comandos durante a geração, deixou de esbarrar na leitura do destino no meio da carga. A change `introduzir-direct-database-output` precisa ser reescrita sobre a `TargetSession` e as operações antes de ser implementada.
 
 ### Depois
 

@@ -18,7 +18,7 @@ Também inclui um plano para desacoplar a forma de saída da migração. Hoje o 
 
 | # | Melhoria | Esforço | Impacto |
 |---|---|---|---|
-| 1 | Tornar a migração agnóstica de adapter de origem/destino | Alto | Muito alto |
+| 1 | Tornar a migração agnóstica de adapter de origem/destino (feito) | Alto | Muito alto |
 | 2 | Tornar a saída configurável: migração direta vs gerar arquivos | Alto | Muito alto |
 | 3 | Migrar outros Acmes para a nova arquitetura | Alto | Muito alto |
 | 4 | Testes unitários e de contrato do core | Médio | Alto |
@@ -38,12 +38,19 @@ Também inclui um plano para desacoplar a forma de saída da migração. Hoje o 
 
 ## 1 — Tornar a migração agnóstica de adapter de origem/destino
 
-O projeto já separa o runtime de migração por adapters e providers, mas essa
-camada ainda pode evoluir para novos bancos e novos tipos de saída:
+Feito pela change `desacoplar-migracao-de-banco-e-versao`. O core não depende mais de PostgreSQL, de Firebird nem de uma versão fixa:
 
-- o `.env` já declara as conexões por nome e adapter, com adapters de PostgreSQL, Firebird e MongoDB
-- a saída padrão grava arquivos no formato do adapter de destino, mas só existe o formato SQL
-- novos bancos ainda exigem adapters concretos
+- conexões nomeadas no `.env` (`SOURCE_<NOME>_*` e `TARGET_*`) e registro de adapters (`postgres`, `firebird`, `mongodb` ou `pacote.modulo:Classe`), com o driver importado só ao conectar;
+- leitura por `SourceQuery`, `NativeQuery` e `NativeField`;
+- escrita por operações (`Insert`, `Clear`, `SuspendConstraints`, `ResumeConstraints`, `ResetIdentity`, `Native` e `Comment`) traduzidas pelo adapter de destino;
+- artefatos no formato do destino em `comandos/` (`.sql` ou `.jsonl`), listados no manifesto com a versão de cada servidor;
+- cópia das entidades compatíveis por lista de inclusão, com o `pg_dump` como atalho opcional e versão conferida;
+- aplicação pela sessão do adapter, guiada pelas capacidades (transação e savepoint);
+- faixa de versão declarada por adapter e conferida ao conectar;
+- `Dockerfile` sem cliente PostgreSQL fixo;
+- adapter MongoDB nos dois lados.
+
+A AcmeEdu, sem SQL próprio, passou numa matriz de seis caminhos: PostgreSQL 9.6 para 16, 17 para 17, PostgreSQL para MongoDB, MongoDB para PostgreSQL e Firebird 3 e 5 para PostgreSQL. O guia para converter os clientes privados está em [conversao-clientes.md](conversao-clientes.md).
 
 ### Contrato de infraestrutura local
 
@@ -58,48 +65,19 @@ Assim, trocar o container de destino não exige alterar o container da aplicaç�
 do app continua sendo "conectar no host lógico do adapter"; o detalhe de imagem, volume e
 porta publicada fica no compose específico do banco, como `docker-compose.postgres.yml`.
 
-### Objetivo
+### O que ficou de fora
 
-Permitir que o núcleo da migração trabalhe com contratos abstratos, e que PostgreSQL/Firebird sejam apenas implementações concretas desses contratos.
-
-### Direção de design
-
-Criar quatro camadas explícitas:
-
-1. `SourceAdapter`
-   Responsável por leitura de dados da origem.
-   Ex.: PostgreSQL V1, Firebird V1, outro banco legado.
-
-2. `TargetAdapter`
-   Responsável por representar o destino.
-   Ex.: PostgreSQL V2 hoje; no futuro, outro banco ou outro tipo de sink.
-
-3. `Dialect`
-   Responsável por diferenças de sintaxe e serialização.
-   Ex.: `LIMIT`, escape de string, quoting de identificadores, sequences, funções SQL específicas.
-
-4. Operações de escrita
-   O `MetadataProvider` saiu na fase 4 da `desacoplar-migracao-de-banco-e-versao`.
-   Limpar tabelas, suspender triggers e ajustar sequences viraram operações
-   (`Clear`, `SuspendConstraints`, `ResetIdentity`) traduzidas pelo adapter de
-   destino. Os mapas de referência são lidos pelo `read()` dele.
-
-### Estrutura atual
-
-A estrutura e os contratos que já existem estão em [arquitetura.md](arquitetura.md). Os adapters ficam em `core/adapters/`, os dialetos em `core/dialects/`, as consultas neutras em `core/queries.py`, as operações de escrita em `core/operations.py` e os outputs em `core/outputs/`. As migrações (`TableMigration`, `ExpandMigration` e `MultiTargetMigration`) ficam na raiz de `core/`. A leitura e a escrita já não trafegam SQL. A aplicação dos artefatos passa pela sessão do adapter de destino, guiada pelas capacidades dele, com sessões de PostgreSQL e de MongoDB.
-
-### O que precisa mudar
-
-- adicionar adapters concretos para outros bancos quando houver demanda real
-- evoluir a saída para outros targets além de SQL PostgreSQL em arquivo
-- manter novos Acmes usando adapters, operações e helpers do core em vez de cursores diretos
+- adapters para outros bancos, quando houver demanda real; cada um é um módulo com o contrato do papel, descrito em [arquitetura.md](arquitetura.md#contratos-por-papel);
+- um segundo destino relacional (MySQL ou SQL Server) para provar que os contratos não ficaram com cara de PostgreSQL, deixado em aberto no design da change;
+- aplicação sem transação num MongoDB fora de replica set, também em aberto;
+- o output direto no banco, que é o item 2.
 
 ### Benefício real
 
-Não significa “migrar para qualquer banco em um clique”. Significa que:
-- trocar PostgreSQL V1 por outro source deixa de exigir refatoração geral
-- trocar o destino por outro target viável passa a ser projeto de adapter, não reescrita do Acme
-- Acme e os próximos Acmes deixam de misturar regra de negócio com detalhes do driver
+Não significa "migrar para qualquer banco em um clique". Significa que:
+- trocar o banco da V1 deixa de exigir refatoração geral, só um `.env` e, no máximo, as `NativeQuery` do cliente
+- trocar o destino passa a ser projeto de adapter, não reescrita do cliente
+- os clientes deixam de misturar regra de negócio com detalhes do driver
 
 ---
 
