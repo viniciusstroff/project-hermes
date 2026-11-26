@@ -1,21 +1,24 @@
-"""Apply the SQL artifacts of a generated run in a single transaction.
+"""Apply the artifacts of a generated run in a single transaction.
 
-The applier runs the artifacts in phase order on one connection and one
-transaction. Two choices shape an application, each one a small object:
+The applier runs the artifacts listed in the manifest in phase order, in one
+session of the target adapter and one transaction. It knows no database
+language: the session reads each artifact into commands, marks the ones it
+does not execute and runs the others. Two choices shape an application, each
+one a small object:
 
 - the mode (``apply`` or ``dry-run``) decides how the transaction ends and
-  which statements are skipped;
+  the default error policy;
 - the error policy (``stop`` or ``continue``) decides what happens when a
-  statement fails.
+  command fails.
 """
 
-import re
 from dataclasses import dataclass
 from typing import Callable
 
+from core.adapters.registry import resolve_adapter
+from core.application import ArtifactReadError, CapabilityError, Command, check_capabilities
 from core.apply.report import ApplicationReport
-from core.apply.run import GeneratedRun
-from core.apply.splitter import META_COMMAND, Statement, UnterminatedLiteralError, split_sql_file
+from core.apply.run import GeneratedRun, IncompleteRunError
 
 APPLY = 'apply'
 DRY_RUN = 'dry-run'
@@ -40,48 +43,18 @@ class ApplicationError(Exception):
 
 
 class StatementFailedError(ApplicationError):
-    """A statement failed under the ``stop`` policy."""
+    """A command failed under the ``stop`` policy."""
 
 
 class UnsupportedStatementError(ApplicationError):
-    """An artifact has a statement the applier cannot run."""
+    """An artifact has a command the target session cannot run."""
 
 
 class CommitFailedError(ApplicationError):
-    """The final COMMIT failed, for example on a deferred constraint."""
+    """The final commit failed, for example on a deferred constraint."""
 
 
-_EXPECTED_FAILURES = (ApplicationError, UnterminatedLiteralError)
-
-
-# ---------------------------------------------------------------------------
-# Statements the applier does not send to the server
-# ---------------------------------------------------------------------------
-
-_TRANSACTION_CONTROL = re.compile(r'(?:BEGIN|START\s+TRANSACTION|COMMIT|END|ROLLBACK|ABORT)\b', re.IGNORECASE)
-_SEQUENCE_CHANGE = re.compile(r'SELECT\s+(?:pg_catalog\s*\.\s*)?setval\s*\(', re.IGNORECASE)
-_COPY_FROM_STDIN = re.compile(r'COPY\b.*\bFROM\s+STDIN\b', re.IGNORECASE | re.DOTALL)
-
-
-@dataclass(frozen=True)
-class _SkipRule:
-    """A kind of statement that is counted in the report instead of executed."""
-
-    reason: str
-    matches: Callable[[Statement], bool]
-
-
-_META_COMMAND_RULE = _SkipRule('meta_command', lambda statement: statement.kind == META_COMMAND)
-# A COMMIT from pg_dump around large objects would end the transaction early.
-_TRANSACTION_CONTROL_RULE = _SkipRule(
-    'transaction_control',
-    lambda statement: _TRANSACTION_CONTROL.match(statement.text) is not None,
-)
-# setval is not undone by ROLLBACK, so a dry run must not call it.
-_SEQUENCE_CHANGE_RULE = _SkipRule(
-    'sequence_change',
-    lambda statement: _SEQUENCE_CHANGE.match(statement.text) is not None,
-)
+_EXPECTED_FAILURES = (ApplicationError, ArtifactReadError, CapabilityError)
 
 
 # ---------------------------------------------------------------------------
@@ -91,16 +64,11 @@ _SEQUENCE_CHANGE_RULE = _SkipRule(
 
 class _Mode:
     name = ''
-    default_on_error = ''
-    skip_rules = ()
 
-    def skip_reason(self, statement: Statement):
-        for rule in self.skip_rules:
-            if rule.matches(statement):
-                return rule.reason
-        return None
+    def default_on_error(self, capabilities) -> str:
+        raise NotImplementedError
 
-    def end_transaction(self, connection) -> str:
+    def end_transaction(self, session) -> str:
         """End the transaction and return the report result."""
 
         raise NotImplementedError
@@ -108,12 +76,13 @@ class _Mode:
 
 class _ApplyMode(_Mode):
     name = APPLY
-    default_on_error = STOP
-    skip_rules = (_META_COMMAND_RULE, _TRANSACTION_CONTROL_RULE)
 
-    def end_transaction(self, connection) -> str:
+    def default_on_error(self, capabilities) -> str:
+        return STOP
+
+    def end_transaction(self, session) -> str:
         try:
-            connection.commit()
+            session.commit()
         except Exception as exc:
             raise CommitFailedError(f'COMMIT falhou: {str(exc).strip()}') from exc
         return COMMITTED
@@ -121,12 +90,13 @@ class _ApplyMode(_Mode):
 
 class _DryRunMode(_Mode):
     name = DRY_RUN
-    # A dry run lists every error at once.
-    default_on_error = CONTINUE
-    skip_rules = (_META_COMMAND_RULE, _TRANSACTION_CONTROL_RULE, _SEQUENCE_CHANGE_RULE)
 
-    def end_transaction(self, connection) -> str:
-        connection.rollback()
+    def default_on_error(self, capabilities) -> str:
+        # A dry run lists every error at once, when the target can undo one command.
+        return CONTINUE if capabilities.savepoints else STOP
+
+    def end_transaction(self, session) -> str:
+        session.rollback()
         return ROLLED_BACK
 
 
@@ -140,28 +110,28 @@ _MODES = {mode.name: mode for mode in (_ApplyMode(), _DryRunMode())}
 
 @dataclass(frozen=True)
 class _Item:
-    """A statement with its place in the run, as the report shows it."""
+    """A command with its place in the run, as the report shows it."""
 
     file: str
     number: int
-    statement: Statement
+    command: Command
 
     def location(self) -> str:
-        return f'{self.file}, comando {self.number}, linha {self.statement.line}'
+        return f'{self.file}, comando {self.number}, linha {self.command.line}'
 
 
 class _StopPolicy:
-    """The first failing statement ends the application."""
+    """The first failing command ends the application."""
 
-    def __init__(self, cursor, report: ApplicationReport, batch_size: int):
-        self._cursor = cursor
+    def __init__(self, session, report: ApplicationReport, batch_size: int):
+        self._session = session
         self._report = report
 
     def execute(self, item: _Item):
         try:
-            self._cursor.execute(item.statement.text)
+            self._session.execute(item.command)
         except Exception as exc:
-            self._report.record_error(item.file, item.number, item.statement, exc)
+            self._report.record_error(item.file, item.number, item.command, exc, self._session.error_code(exc))
             message = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
             raise StatementFailedError(f'{item.location()}: {message}') from exc
         self._report.record_executed(item.file)
@@ -171,31 +141,31 @@ class _StopPolicy:
 
 
 class _ContinuePolicy:
-    """Failing statements are rolled back and recorded, the others stay.
+    """Failing commands are rolled back and recorded, the others stay.
 
-    Statements run inside a savepoint per batch. When one fails, the batch
-    goes back to its savepoint and is replayed one statement at a time,
-    each with its own savepoint. The next statement opens a new batch.
+    Commands run inside a savepoint per batch. When one fails, the batch
+    goes back to its savepoint and is replayed one command at a time, each
+    with its own savepoint. The next command opens a new batch.
     """
 
     BATCH_SAVEPOINT = 'hermes_lote'
     STATEMENT_SAVEPOINT = 'hermes_comando'
 
-    def __init__(self, cursor, report: ApplicationReport, batch_size: int):
-        self._cursor = cursor
+    def __init__(self, session, report: ApplicationReport, batch_size: int):
+        self._session = session
         self._report = report
         self._batch_size = batch_size
         self._batch = []
 
     def execute(self, item: _Item):
         if not self._batch:
-            self._cursor.execute(f'SAVEPOINT {self.BATCH_SAVEPOINT}')
+            self._session.savepoint(self.BATCH_SAVEPOINT)
         self._batch.append(item)
 
         try:
-            self._cursor.execute(item.statement.text)
+            self._session.execute(item.command)
         except Exception:
-            self._cursor.execute(f'ROLLBACK TO SAVEPOINT {self.BATCH_SAVEPOINT}')
+            self._session.rollback_to(self.BATCH_SAVEPOINT)
             self._replay_batch()
             return
 
@@ -205,7 +175,7 @@ class _ContinuePolicy:
     def flush(self):
         if not self._batch:
             return
-        self._cursor.execute(f'RELEASE SAVEPOINT {self.BATCH_SAVEPOINT}')
+        self._session.release(self.BATCH_SAVEPOINT)
         for item in self._batch:
             self._report.record_executed(item.file)
         self._batch = []
@@ -213,16 +183,16 @@ class _ContinuePolicy:
     def _replay_batch(self):
         batch, self._batch = self._batch, []
         for item in batch:
-            self._cursor.execute(f'SAVEPOINT {self.STATEMENT_SAVEPOINT}')
+            self._session.savepoint(self.STATEMENT_SAVEPOINT)
             try:
-                self._cursor.execute(item.statement.text)
+                self._session.execute(item.command)
             except Exception as exc:
-                self._cursor.execute(f'ROLLBACK TO SAVEPOINT {self.STATEMENT_SAVEPOINT}')
-                self._report.record_error(item.file, item.number, item.statement, exc)
+                self._session.rollback_to(self.STATEMENT_SAVEPOINT)
+                self._report.record_error(item.file, item.number, item.command, exc, self._session.error_code(exc))
             else:
                 self._report.record_executed(item.file)
-            self._cursor.execute(f'RELEASE SAVEPOINT {self.STATEMENT_SAVEPOINT}')
-        self._cursor.execute(f'RELEASE SAVEPOINT {self.BATCH_SAVEPOINT}')
+            self._session.release(self.STATEMENT_SAVEPOINT)
+        self._session.release(self.BATCH_SAVEPOINT)
 
 
 _POLICIES = {STOP: _StopPolicy, CONTINUE: _ContinuePolicy}
@@ -233,21 +203,24 @@ _POLICIES = {STOP: _StopPolicy, CONTINUE: _ContinuePolicy}
 # ---------------------------------------------------------------------------
 
 
-class SqlArtifactApplier:
-    """Applies the artifacts of ``run_dir`` to the target.
+class ArtifactApplier:
+    """Applies the artifacts of a generated run to the target, in one session.
 
-    ``connect`` is called without arguments and returns a DB-API connection
-    (psycopg2 in production). It is called only after the run directory was
-    checked, so an incomplete run never opens a connection.
+    ``run`` is the run directory or a loaded ``GeneratedRun``. The target
+    adapter comes from the manifest. Its declared capabilities pick the
+    default error policy and refuse a mode or policy the target cannot
+    honor, before any connection. ``open_session`` is called without
+    arguments and returns a ``TargetSession`` of that adapter. It is called
+    only after the run was checked, so an incomplete run never connects.
 
     ``log`` receives progress messages: the start and the counters of each
-    artifact, and a line every ``progress_every`` statements read.
+    artifact, and a line every ``progress_every`` commands read.
     """
 
     def __init__(
         self,
-        run_dir: str,
-        connect: Callable,
+        run,
+        open_session: Callable,
         mode: str = APPLY,
         on_error: str = None,
         batch_size: int = DEFAULT_BATCH_SIZE,
@@ -257,91 +230,96 @@ class SqlArtifactApplier:
     ):
         if mode not in _MODES:
             raise ValueError(f'modo inválido: {mode!r}. Use {APPLY} ou {DRY_RUN}.')
-        self._mode = _MODES[mode]
-        self.on_error = on_error or self._mode.default_on_error
-        if self.on_error not in _POLICIES:
-            raise ValueError(f'política de erro inválida: {self.on_error!r}. Use {STOP} ou {CONTINUE}.')
         if batch_size < 1 or progress_every < 1:
             raise ValueError('batch_size e progress_every precisam ser maiores que zero')
 
-        self.run_dir = run_dir
+        self.run = run if isinstance(run, GeneratedRun) else GeneratedRun.load(run)
+        self.adapter = resolve_adapter(self.run.target_adapter, 'target')
+        self.capabilities = getattr(self.adapter, 'capabilities', None)
+        if self.capabilities is None or not callable(getattr(self.adapter, 'session', None)):
+            raise CapabilityError(f"O adapter '{self.run.target_adapter}' não aplica artefatos: falta session().")
+        self._check_formats()
+
+        self._mode = _MODES[mode]
+        self.on_error = on_error or self._mode.default_on_error(self.capabilities)
+        if self.on_error not in _POLICIES:
+            raise ValueError(f'política de erro inválida: {self.on_error!r}. Use {STOP} ou {CONTINUE}.')
+        check_capabilities(self.capabilities, self.run.target_adapter, mode, self.on_error)
+
+        self.run_dir = self.run.run_dir
         self.mode = mode
         self.batch_size = batch_size
         self.progress_every = progress_every
-        self._connect = connect
+        self._open_session = open_session
         self._report_options = {'clock': report_clock} if report_clock else {}
         self._log = log or (lambda message: None)
+
+    def _check_formats(self):
+        expected = self.adapter.artifact_format.name
+        for artifact in self.run.artifacts:
+            if artifact.format != expected:
+                raise IncompleteRunError(
+                    f"{self.run.run_dir}: {artifact.name} tem formato {artifact.format!r}, "
+                    f"mas o adapter '{self.run.target_adapter}' lê {expected!r}."
+                )
 
     def apply(self) -> ApplicationReport:
         """Apply the run and return its report.
 
-        Expected failures (a statement under ``stop``, an unsupported
-        statement, a failed COMMIT) end with result ``failed`` and no
-        exception. Anything else, including an interruption, also rolls back
-        and writes the report, then propagates.
+        Expected failures (a command under ``stop``, an unsupported command,
+        a failed commit, a capability the session lacks) end with result
+        ``failed`` and no exception. Anything else, including an
+        interruption, also rolls back and writes the report, then propagates.
         """
 
-        run = GeneratedRun.load(self.run_dir)
-        connection = self._connect()
+        session = self._open_session()
         try:
-            return self._apply(run, connection)
+            return self._apply(session)
         finally:
-            connection.close()
+            session.close()
 
-    def _apply(self, run: GeneratedRun, connection) -> ApplicationReport:
-        connection.autocommit = False
-        report = ApplicationReport(
-            run.run_dir,
-            self.mode,
-            self.on_error,
-            _describe_target(connection),
-            **self._report_options,
-        )
+    def _apply(self, session) -> ApplicationReport:
+        report = ApplicationReport(self.run_dir, self.mode, self.on_error, session.describe(), **self._report_options)
 
         try:
-            self._apply_artifacts(run, connection, report)
-            result = self._mode.end_transaction(connection)
+            # The session may know less than the declaration (a MongoDB server outside a replica set).
+            check_capabilities(session.capabilities, self.run.target_adapter, self.mode, self.on_error)
+            session.begin()
+            self._apply_artifacts(session, report)
+            result = self._mode.end_transaction(session)
         except _EXPECTED_FAILURES as exc:
-            _rollback_quietly(connection)
+            _rollback_quietly(session)
             report.finish(FAILED, str(exc))
         except BaseException as exc:
-            _rollback_quietly(connection)
+            _rollback_quietly(session)
             report.finish(FAILED, _describe_unexpected(exc))
             raise
         else:
             report.finish(result)
         return report
 
-    def _apply_artifacts(self, run: GeneratedRun, connection, report: ApplicationReport):
-        cursor = connection.cursor()
-        standard_conforming_strings = _server_standard_conforming_strings(cursor)
-        policy = _POLICIES[self.on_error](cursor, report, self.batch_size)
+    def _apply_artifacts(self, session, report: ApplicationReport):
+        policy = _POLICIES[self.on_error](session, report, self.batch_size)
+        dry_run = self.mode == DRY_RUN
 
-        for artifact in run.artifacts:
+        for artifact in self.run.artifacts:
             self._log(f'Aplicando {artifact.name}')
             report.start_file(artifact.name)
-            statements = split_sql_file(artifact.path, standard_conforming_strings=standard_conforming_strings)
-            for number, statement in enumerate(statements, 1):
-                self._apply_statement(policy, report, _Item(artifact.name, number, statement))
+            for number, command in enumerate(session.commands(artifact.path, dry_run), 1):
+                self._apply_command(policy, report, _Item(artifact.name, number, command))
                 if number % self.progress_every == 0:
                     self._log(f'  {artifact.name}: {number} comandos lidos')
             policy.flush()
-            # Each artifact used to run in its own psql session. Settings
-            # changed by one (search_path from pg_dump) must not reach the next.
-            cursor.execute('RESET ALL')
+            session.end_artifact()
             report.end_file(artifact.name)
             self._log(_summarize_file(report.file_counters(artifact.name)))
 
-    def _apply_statement(self, policy, report: ApplicationReport, item: _Item):
-        reason = self._mode.skip_reason(item.statement)
-        if reason:
-            report.record_skipped(item.file, reason)
+    def _apply_command(self, policy, report: ApplicationReport, item: _Item):
+        if item.command.skip:
+            report.record_skipped(item.file, item.command.skip)
             return
-        if _COPY_FROM_STDIN.match(item.statement.text):
-            raise UnsupportedStatementError(
-                f'{item.location()}: COPY ... FROM stdin não é suportado, '
-                'porque os dados viriam no formato do psql. Gere o dump com --column-inserts.'
-            )
+        if item.command.error:
+            raise UnsupportedStatementError(f'{item.location()}: {item.command.error}')
         policy.execute(item)
 
 
@@ -353,26 +331,9 @@ def _summarize_file(counters: dict) -> str:
     )
 
 
-def _server_standard_conforming_strings(cursor) -> bool:
-    cursor.execute('SHOW standard_conforming_strings')
-    return cursor.fetchone()[0] == 'on'
-
-
-def _describe_target(connection) -> dict:
-    # get_dsn_parameters() already leaves the password out. Picking the keys
-    # keeps it out even if a driver includes it.
-    parameters = connection.get_dsn_parameters()
-    return {
-        'host': parameters.get('host'),
-        'port': parameters.get('port'),
-        'database': parameters.get('dbname'),
-        'user': parameters.get('user'),
-    }
-
-
-def _rollback_quietly(connection):
+def _rollback_quietly(session):
     try:
-        connection.rollback()
+        session.rollback()
     except Exception:
         # A broken connection rolls back on the server when it closes.
         pass

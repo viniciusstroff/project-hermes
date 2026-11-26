@@ -1,22 +1,20 @@
 """Console flow shared by ``Aplicar.py`` and ``Migracao.py --apply``.
 
-Both entry points show the target and the mode, run the applier and turn
-the report into an exit code. They differ only in where the connection
-comes from: libpq environment variables in ``Aplicar.py`` and the
-``TARGET_*`` keys of the client ``.env`` in ``Migracao.py``.
+Both entry points take the target adapter from the run manifest and the
+connection from ``TARGET_*`` keys: the environment in ``Aplicar.py`` and the
+client ``.env`` in ``Migracao.py``. Then they show the target and the mode,
+run the applier and turn the report into an exit code.
 """
 
-import getpass
-import os
+import dataclasses
 import traceback
 from typing import Callable
 
-from core.apply.applier import COMMITTED, FAILED, ROLLED_BACK, SqlArtifactApplier
-from core.apply.run import IncompleteRunError
-from core.connections import parse_connections
-
-# libpq reads these when psycopg2.connect() gets no host or database.
-REQUIRED_LIBPQ_VARIABLES = ('PGHOST', 'PGDATABASE')
+from core.adapters.registry import AdapterResolutionError, resolve_adapter
+from core.application import CapabilityError
+from core.apply.applier import COMMITTED, FAILED, ROLLED_BACK, ArtifactApplier
+from core.apply.run import GeneratedRun, IncompleteRunError
+from core.connections import ConnectionConfig, ConnectionConfigError
 
 _RESULT_MESSAGES = {
     COMMITTED: 'COMMIT executado, carga gravada no destino',
@@ -24,112 +22,107 @@ _RESULT_MESSAGES = {
     FAILED: 'ROLLBACK executado, nada da carga foi gravado',
 }
 
-
-class MissingTargetError(Exception):
-    """The environment does not name the target database."""
+# Exit codes: 1 for a failed or refused application, 2 for a target
+# configuration to fix, 130 for an interruption.
+EXIT_FAILED = 1
+EXIT_CONFIGURATION = 2
+EXIT_INTERRUPTED = 130
 
 
 class TargetConnectionError(Exception):
     """The target database refused the connection."""
 
 
-def libpq_target(environ=None) -> dict:
-    environ = os.environ if environ is None else environ
-    missing = [name for name in REQUIRED_LIBPQ_VARIABLES if not environ.get(name)]
-    if missing:
-        raise MissingTargetError(
-            f'Defina {" e ".join(missing)} com o banco de destino. '
-            'PGPORT, PGUSER e PGPASSWORD são opcionais, como no psql.'
-        )
-    return {
-        'host': environ['PGHOST'],
-        'port': environ.get('PGPORT') or '5432',
-        'database': environ['PGDATABASE'],
-        'user': environ.get('PGUSER') or getpass.getuser(),
-    }
+def target_label(config: ConnectionConfig) -> str:
+    """Where the application goes, without password: ``user@host:port/name`` when there is one."""
+
+    host, name = config.get('host'), config.get('name')
+    if host and name:
+        port = f":{config.get('port')}" if config.get('port') else ''
+        user = f"{config.get('user')}@" if config.get('user') else ''
+        return f'{user}{host}{port}/{name}'
+    return ', '.join(f'{key}={value}' for key, value in config.describe().items() if key != 'adapter')
 
 
-def libpq_connect():
-    return _connect()
+def session_opener(adapter_class, config: ConnectionConfig) -> Callable:
+    """Function that connects the target adapter and opens its application session."""
 
+    def open_session():
+        try:
+            adapter = adapter_class.connect(config)
+        except ConnectionConfigError:
+            raise
+        except Exception as exc:
+            raise TargetConnectionError(f'Não foi possível conectar ao destino: {str(exc).strip()}') from exc
+        return adapter.session()
 
-def _target_config(config: dict):
-    """Target connection of the client .env. The applier only handles PostgreSQL for now."""
-
-    _, target = parse_connections(config)
-    if target.adapter != 'postgres':
-        raise TargetConnectionError(
-            f"O destino usa o adapter '{target.adapter}'. A aplicação de artefatos ainda só trata PostgreSQL."
-        )
-    target.require('host', 'name', 'user')
-    return target
-
-
-def config_target(config: dict) -> dict:
-    target = _target_config(config)
-    return {
-        'host': target.get('host'),
-        'port': target.get('port', '5432'),
-        'database': target.get('name'),
-        'user': target.get('user'),
-    }
-
-
-def config_connect(config: dict) -> Callable:
-    target = _target_config(config)
-
-    def connect():
-        return _connect(
-            host=target.get('host'),
-            port=target.get('port', '5432'),
-            dbname=target.get('name'),
-            user=target.get('user'),
-            password=target.get('pass'),
-        )
-
-    return connect
+    return open_session
 
 
 def run_application(
     run_dir: str,
-    connect: Callable,
-    target: dict,
+    config: ConnectionConfig,
     mode: str,
     on_error: str = None,
-    log: Callable[[str], None] = print,
+    log: Callable[[str], None] = None,
+    open_session: Callable = None,
 ) -> int:
-    """Apply ``run_dir`` and return the process exit code."""
+    """Apply ``run_dir`` to the target of ``config`` and return the process exit code.
 
-    applier = SqlArtifactApplier(run_dir, connect, mode=mode, on_error=on_error, log=log)
-    log(f'Destino: {target["user"]}@{target["host"]}:{target["port"]}/{target["database"]}')
+    ``log`` defaults to ``print``. ``open_session`` replaces the real connection in tests.
+    """
+
+    log = log or print
+
+    try:
+        run = GeneratedRun.load(run_dir)
+        adapter_class = resolve_adapter(run.target_adapter, 'target')
+        config = _config_for_run(config, run.target_adapter, adapter_class)
+        applier = ArtifactApplier(
+            run,
+            open_session or session_opener(adapter_class, config),
+            mode=mode,
+            on_error=on_error,
+            log=log,
+        )
+    except ConnectionConfigError as exc:
+        log(f'[ERRO] {exc}')
+        return EXIT_CONFIGURATION
+    except (IncompleteRunError, AdapterResolutionError, CapabilityError) as exc:
+        log(f'[ERRO] {exc}')
+        return EXIT_FAILED
+
+    log(f'Destino ({run.target_adapter}): {target_label(config)}')
     log(f'Modo: {mode}, política de erro: {applier.on_error}')
 
     try:
         report = applier.apply()
-    except (IncompleteRunError, TargetConnectionError) as exc:
+    except (TargetConnectionError, ConnectionConfigError) as exc:
         log(f'[ERRO] {exc}')
-        return 1
+        return EXIT_FAILED
     except KeyboardInterrupt:
         log('[ERRO] Aplicação interrompida. A transação foi desfeita.')
-        return 130
+        return EXIT_INTERRUPTED
     except Exception as exc:
         log(f'[ERRO] {exc}')
         log(traceback.format_exc())
-        return 1
+        return EXIT_FAILED
 
     log(f'Resultado: {report.result}. {_RESULT_MESSAGES[report.result]}.')
     if report.failure:
         log(f'Motivo: {report.failure}')
     log(f'Comandos com erro: {report.error_count}')
     log(f'Relatório: {report.directory}')
-    return 1 if report.result == FAILED else 0
+    return EXIT_FAILED if report.result == FAILED else 0
 
 
-def _connect(**parameters):
-    import psycopg2
+def _config_for_run(config: ConnectionConfig, adapter: str, adapter_class) -> ConnectionConfig:
+    """The target config with the adapter of the manifest and its required keys present."""
 
-    try:
-        # The generated files and pg_dump -E utf-8 are UTF-8.
-        return psycopg2.connect(client_encoding='UTF8', **parameters)
-    except psycopg2.Error as exc:
-        raise TargetConnectionError(f'Não foi possível conectar ao destino: {str(exc).strip()}') from exc
+    if config.adapter and config.adapter != adapter:
+        raise ConnectionConfigError(
+            f"O manifesto registra o destino '{adapter}', mas a conexão de destino usa '{config.adapter}'."
+        )
+    config = dataclasses.replace(config, adapter=adapter)
+    config.require(*getattr(adapter_class, 'required_parameters', ()))
+    return config

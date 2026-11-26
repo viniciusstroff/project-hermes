@@ -15,6 +15,26 @@ The applier SHALL apply the artifacts listed in the run manifest in phase order,
 - **WHEN** the manifest records a `mongodb` target with `jsonl` artifacts and the target is a replica set
 - **THEN** the applier reads one command per line and executes them in one session transaction
 
+### Requirement: Applier refuses incomplete runs
+The applier SHALL refuse a run directory before connecting to the target when the manifest status is not `success`, when the manifest does not record the target adapter or lists no artifact, when a listed artifact is missing or lies outside the run directory, or when an artifact format differs from the format of the target adapter.
+
+#### Scenario: Generation failed
+- **WHEN** the run manifest status is `failed` or `running`
+- **THEN** the applier stops with an error naming the status
+- **AND** no connection to the target is opened
+
+#### Scenario: Listed artifact missing
+- **WHEN** the manifest lists `comandos/02_copy_compatible_entities.sql` and the file does not exist
+- **THEN** the applier stops with an error naming the missing artifact
+
+#### Scenario: Format of another adapter
+- **WHEN** the manifest lists a `jsonl` artifact and records a `postgres` target
+- **THEN** the applier stops with an error naming the artifact and both formats
+
+#### Scenario: Artifact outside the run
+- **WHEN** a listed artifact path points outside the run directory
+- **THEN** the applier stops without reading it
+
 ### Requirement: Applier controls transaction and session state
 When the target adapter is PostgreSQL, the application SHALL skip transaction control statements and psql meta-commands found in artifacts, SHALL reset session settings after each artifact, and SHALL skip `setval` calls in dry-run mode, counting each skipped statement by reason in the report. These rules SHALL live in the PostgreSQL adapter and SHALL NOT apply to other adapters.
 
@@ -33,6 +53,25 @@ When the target adapter is PostgreSQL, the application SHALL skip transaction co
 #### Scenario: Dry run meets setval
 - **WHEN** a PostgreSQL `dry-run` application reaches a statement that calls `setval`
 - **THEN** the statement is not executed and is counted as a skipped sequence change
+
+### Requirement: Statements are split by PostgreSQL lexical rules
+The PostgreSQL target session SHALL split `.sql` artifacts into commands, ending a statement only at a semicolon outside string literals, escape string literals, quoted identifiers, dollar-quoted strings and comments, and following the `standard_conforming_strings` setting of the server.
+
+#### Scenario: Semicolons inside literals
+- **WHEN** an artifact contains `INSERT INTO t VALUES ('a;b', E'c\';d', $x$e;f$x$);` followed by another statement
+- **THEN** the splitter yields two statements and the first one keeps its literals intact
+
+#### Scenario: Statement without final semicolon
+- **WHEN** an artifact ends with a statement without a semicolon
+- **THEN** the splitter yields it as the last statement
+
+#### Scenario: Unterminated literal
+- **WHEN** an artifact ends inside an unterminated string literal
+- **THEN** the application fails with an error naming the file and the line where the literal starts
+
+#### Scenario: Splitter belongs to the adapter
+- **WHEN** code looks for the splitter in `core.apply`
+- **THEN** it is not there, because it lives in the PostgreSQL adapter
 
 ### Requirement: Continue policy records errors and keeps going
 With the `continue` policy the applier SHALL roll back only the failing commands, record each failure and keep applying the remaining commands. The default policy SHALL be `stop` for `apply`, and for `dry-run` it SHALL be `continue` when the target supports savepoints and `stop` otherwise.
@@ -63,7 +102,7 @@ Each application SHALL write `aplicacoes/<YYYYmmdd-HHMMSS>-<apply|dry-run>/relat
 ## ADDED Requirements
 
 ### Requirement: Applier refuses modes the target cannot honor
-The applier SHALL check the capabilities of the target adapter before connecting for the application and SHALL refuse a mode or policy the target cannot honor, naming the missing capability.
+The applier SHALL check the capabilities declared by the target adapter before connecting, and the capabilities of the opened session before executing any command, and SHALL refuse a mode or policy the target cannot honor, naming the missing capability.
 
 #### Scenario: Dry run without transactions
 - **WHEN** a dry run is requested for a MongoDB target that is a standalone server
@@ -75,6 +114,11 @@ The applier SHALL check the capabilities of the target adapter before connecting
 - **THEN** the application is refused
 - **AND** the error states that the target does not support savepoints
 
+#### Scenario: Session with less than declared
+- **WHEN** the opened session reports no transactions although the adapter declares them
+- **THEN** the application ends with result `failed` naming the missing capability
+- **AND** no command of the artifacts is executed
+
 ### Requirement: Target connection comes from the target keys
 `Aplicar.py` SHALL take the target adapter from the run manifest and its connection parameters from `TARGET_*` environment variables, with the same names used in the client `.env`, and SHALL NOT read libpq variables.
 
@@ -85,3 +129,11 @@ The applier SHALL check the capabilities of the target adapter before connecting
 #### Scenario: Target keys missing
 - **WHEN** the parameters required by the target adapter are not set
 - **THEN** `Aplicar.py` exits with code 2 naming the missing `TARGET_*` keys
+
+#### Scenario: Libpq variables are ignored
+- **WHEN** only `PGHOST`, `PGDATABASE`, `PGUSER` and `PGPASSWORD` are set
+- **THEN** `Aplicar.py` exits with code 2 naming the missing `TARGET_*` keys
+
+#### Scenario: Target adapter differs from the manifest
+- **WHEN** `TARGET_ADAPTER` names an adapter other than the one recorded in the manifest
+- **THEN** `Aplicar.py` exits with code 2 naming both adapters

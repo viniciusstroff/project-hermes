@@ -2,7 +2,7 @@
 
 Each application gets ``aplicacoes/<YYYYmmdd-HHMMSS>-<mode>/`` with:
 
-- ``relatorio.json``: mode, error policy, target without password,
+- ``relatorio.json``: mode, error policy, target adapter and connection without password,
   timestamps, result and counters per file;
 - ``erros.txt``: one block per failing statement, written as the errors
   happen, so it can be read during a long application.
@@ -88,17 +88,18 @@ class ApplicationReport:
         skipped = self._files[name].skipped
         skipped[reason] = skipped.get(reason, 0) + 1
 
-    def record_error(self, name: str, number: int, statement, exc: BaseException):
+    def record_error(self, name: str, number: int, command, exc: BaseException, code=None):
+        """Write one failing command. ``code`` is the error code given by the target adapter."""
+
         self._files[name].errors += 1
         self.error_count += 1
 
-        pgcode = getattr(exc, 'pgcode', None)
-        sqlstate = f'SQLSTATE {pgcode}' if pgcode else 'sem SQLSTATE'
+        code_text = f'código {code}' if code else 'sem código'
         self._errors_file.write(
-            f'== {name}, comando {number}, linha {statement.line}, {sqlstate}\n'
+            f'== {name}, comando {number}, linha {command.line}, {code_text}\n'
             f'{str(exc).strip()}\n'
             f'-- comando:\n'
-            f'{_preview(statement.text)}\n\n'
+            f'{_preview(command.text)}\n\n'
         )
         self._errors_file.flush()
 

@@ -36,10 +36,10 @@
 
 ## 6. Application by Capabilities
 
-- [ ] 6.1 Add `Capabilities`, `ArtifactFormat` readers and the `TargetSession` contract.
-- [ ] 6.2 Move the splitter, skipped statements, `RESET ALL` and `standard_conforming_strings` into the PostgreSQL adapter.
-- [ ] 6.3 Make the applier read artifacts from the manifest, refuse modes the target cannot honor and pick the default dry-run policy from the capabilities.
-- [ ] 6.4 Make `Aplicar.py` read the adapter from the manifest and the connection from `TARGET_*`, make `Migracao.py --apply` and `--dry-run` use the target connection of the client `.env`, and report adapter error codes instead of `SQLSTATE`.
+- [x] 6.1 Add `Capabilities`, `ArtifactFormat` readers and the `TargetSession` contract. (The reader is `commands()` of the session, because splitting SQL depends on a server setting.)
+- [x] 6.2 Move the splitter, skipped statements, `RESET ALL` and `standard_conforming_strings` into the PostgreSQL adapter.
+- [x] 6.3 Make the applier read artifacts from the manifest, refuse modes the target cannot honor and pick the default dry-run policy from the capabilities.
+- [x] 6.4 Make `Aplicar.py` read the adapter from the manifest and the connection from `TARGET_*`, make `Migracao.py --apply` and `--dry-run` use the target connection of the client `.env`, and report adapter error codes instead of `SQLSTATE`.
 
 ## 7. Version Independence
 

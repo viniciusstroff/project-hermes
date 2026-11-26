@@ -98,3 +98,24 @@ def parse_connections(config: Mapping[str, str]):
     }
     target = ConnectionConfig('TARGET', 'target', target_adapter, target_params)
     return sources, target
+
+
+def target_connection(config: Mapping[str, str], adapter: str = None) -> ConnectionConfig:
+    """The ``TARGET_*`` keys alone, as ``Aplicar.py`` reads them from the environment.
+
+    ``adapter`` comes from the run manifest. A ``TARGET_ADAPTER`` that names
+    another adapter is refused.
+    """
+
+    values = {key: ('' if value is None else str(value).strip()) for key, value in config.items()}
+    declared = values.get('TARGET_ADAPTER', '')
+    if adapter and declared and declared != adapter:
+        raise ConnectionConfigError(
+            f"O manifesto registra o destino '{adapter}', mas TARGET_ADAPTER={declared}."
+        )
+    params = {
+        key[len('TARGET_'):].lower(): value
+        for key, value in values.items()
+        if key.startswith('TARGET_') and key != 'TARGET_ADAPTER'
+    }
+    return ConnectionConfig('TARGET', 'target', adapter or declared, params)

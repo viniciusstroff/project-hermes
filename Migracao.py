@@ -25,9 +25,9 @@ _rootdir = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, _rootdir)
 
 from core.apply import APPLY, CONTINUE, DRY_RUN, STOP
-from core.apply.cli import TargetConnectionError, config_connect, config_target, run_application
+from core.apply.cli import run_application
 from core.adapters.registry import AdapterResolutionError
-from core.connections import ConnectionConfigError
+from core.connections import ConnectionConfigError, parse_connections
 
 DEFAULT_DEBUG_LIMIT = 100
 
@@ -95,16 +95,14 @@ def generate(migration, debug_limit):
 
 
 def apply_generated_run(migration, mode: str, on_error: str = None, log=print) -> int:
-    # The SQL files are only complete on disk after the output is closed.
+    # The artifacts are only complete on disk after the output is closed.
     migration.context.close()
-    config = migration.config
     try:
-        connect = config_connect(config)
-        target = config_target(config)
-    except (TargetConnectionError, ConnectionConfigError) as exc:
+        _, target = parse_connections(migration.config)
+    except ConnectionConfigError as exc:
         log(f'[ERRO] {exc}')
         return 1
-    return run_application(migration.artifacts.run_dir, connect, target, mode, on_error, log=log)
+    return run_application(migration.artifacts.run_dir, target, mode, on_error, log=log)
 
 
 def main(argv=None) -> int:

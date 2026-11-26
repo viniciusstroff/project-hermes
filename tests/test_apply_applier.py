@@ -1,6 +1,7 @@
 import datetime
 import json
 import os
+import pathlib
 import tempfile
 import unittest
 from unittest.mock import Mock
@@ -13,9 +14,11 @@ from core.apply import (
     FAILED,
     ROLLED_BACK,
     STOP,
+    ArtifactApplier,
     IncompleteRunError,
-    SqlArtifactApplier,
 )
+from core.application import Capabilities, CapabilityError
+from core.artifacts import ArtifactFormat
 from tests.apply_fakes import (
     DEFAULT_FILES,
     COPY,
@@ -26,6 +29,7 @@ from tests.apply_fakes import (
     Clock,
     FakeConnection,
     make_run,
+    session_of,
 )
 
 DUPLICATE = ('duplicate key value violates unique constraint "b_pkey"\nDETAIL:  Key (id)=(5) already exists.', '23505')
@@ -54,7 +58,7 @@ class ApplierTestCase(unittest.TestCase):
     def apply(self, connection, files=None, **options):
         run_dir = make_run(self.tmpdir, files)
         options.setdefault('report_clock', Clock(datetime.datetime(2026, 11, 24, 10, 15, 0)))
-        report = SqlArtifactApplier(run_dir, lambda: connection, **options).apply()
+        report = ArtifactApplier(run_dir, session_of(connection), **options).apply()
         return report
 
 
@@ -95,22 +99,22 @@ class IncompleteRunTest(ApplierTestCase):
                 connect = Mock()
 
                 with self.assertRaises(IncompleteRunError) as raised:
-                    SqlArtifactApplier(run_dir, connect).apply()
+                    ArtifactApplier(run_dir, connect).apply()
 
                 self.assertIn(repr(status), str(raised.exception))
                 connect.assert_not_called()
 
-    def test_refuses_run_without_copy_artifact_even_in_debug(self):
-        # The copy phase always has an artifact now: debug mode copies a limited number of rows.
+    def test_refuses_run_whose_listed_artifact_is_missing_even_in_debug(self):
+        # The manifest lists the copy artifact in debug mode too: it copies a limited number of rows.
         for debug in (False, True):
             with self.subTest(debug=debug), tempfile.TemporaryDirectory() as tmpdir:
                 files = dict(DEFAULT_FILES)
                 del files[COPY]
-                run_dir = make_run(tmpdir, files, debug=debug)
+                run_dir = make_run(tmpdir, files, debug=debug, listed=list(DEFAULT_FILES))
                 connect = Mock()
 
                 with self.assertRaises(IncompleteRunError) as raised:
-                    SqlArtifactApplier(run_dir, connect).apply()
+                    ArtifactApplier(run_dir, connect).apply()
 
                 self.assertIn(COPY, str(raised.exception))
                 connect.assert_not_called()
@@ -119,7 +123,7 @@ class IncompleteRunTest(ApplierTestCase):
         connect = Mock()
 
         with self.assertRaises(IncompleteRunError) as raised:
-            SqlArtifactApplier(self.tmpdir, connect).apply()
+            ArtifactApplier(self.tmpdir, connect).apply()
 
         self.assertIn('manifest.json', str(raised.exception))
         connect.assert_not_called()
@@ -141,18 +145,20 @@ class ModeTest(ApplierTestCase):
         self.assertEqual(finalize['executed'], 0)
 
     def test_default_policies(self):
-        self.assertEqual(SqlArtifactApplier('run', Mock(), mode=APPLY).on_error, STOP)
-        self.assertEqual(SqlArtifactApplier('run', Mock(), mode=DRY_RUN).on_error, CONTINUE)
-        self.assertEqual(SqlArtifactApplier('run', Mock(), mode=APPLY, on_error=CONTINUE).on_error, CONTINUE)
-        self.assertEqual(SqlArtifactApplier('run', Mock(), mode=DRY_RUN, on_error=STOP).on_error, STOP)
+        run_dir = make_run(self.tmpdir)
+        self.assertEqual(ArtifactApplier(run_dir, Mock(), mode=APPLY).on_error, STOP)
+        self.assertEqual(ArtifactApplier(run_dir, Mock(), mode=DRY_RUN).on_error, CONTINUE)
+        self.assertEqual(ArtifactApplier(run_dir, Mock(), mode=APPLY, on_error=CONTINUE).on_error, CONTINUE)
+        self.assertEqual(ArtifactApplier(run_dir, Mock(), mode=DRY_RUN, on_error=STOP).on_error, STOP)
 
     def test_rejects_invalid_options(self):
+        run_dir = make_run(self.tmpdir)
         with self.assertRaises(ValueError):
-            SqlArtifactApplier('run', Mock(), mode='commit')
+            ArtifactApplier(run_dir, Mock(), mode='commit')
         with self.assertRaises(ValueError):
-            SqlArtifactApplier('run', Mock(), on_error='ignore')
+            ArtifactApplier(run_dir, Mock(), on_error='ignore')
         with self.assertRaises(ValueError):
-            SqlArtifactApplier('run', Mock(), batch_size=0)
+            ArtifactApplier(run_dir, Mock(), batch_size=0)
 
 
 class StopPolicyTest(ApplierTestCase):
@@ -209,7 +215,7 @@ class ContinuePolicyTest(ApplierTestCase):
         self.assertEqual((load['file'], load['executed'], load['errors']), (LOAD, 4, 1))
         with open(report.errors_path, encoding='utf-8') as errors_file:
             errors = errors_file.read()
-        self.assertIn(f'== {LOAD}, comando 5, linha 5, SQLSTATE 23505\n', errors)
+        self.assertIn(f'== {LOAD}, comando 5, linha 5, código 23505\n', errors)
         self.assertIn('duplicate key value violates unique constraint "b_pkey"', errors)
         self.assertIn('INSERT INTO b VALUES (5)', errors)
 
@@ -310,7 +316,7 @@ class FailureTest(ApplierTestCase):
         run_dir = make_run(self.tmpdir)
 
         with self.assertRaises(KeyboardInterrupt):
-            SqlArtifactApplier(run_dir, lambda: connection).apply()
+            ArtifactApplier(run_dir, session_of(connection)).apply()
 
         self.assertEqual(connection.log[-1], '<rollback>')
         self.assertEqual(connection.committed, [])
@@ -321,6 +327,131 @@ class FailureTest(ApplierTestCase):
         self.assertEqual(saved['result'], FAILED)
         self.assertEqual(saved['failure'], 'aplicação interrompida')
         self.assertIsNotNone(saved['files'][-1]['duration_seconds'])
+
+
+
+class SavepointlessTarget:
+    """Target adapter that has transactions but no savepoints, like MongoDB."""
+
+    name = 'sem-savepoint'
+    artifact_format = ArtifactFormat('sql', 'sql')
+    capabilities = Capabilities(transactions=True, savepoints=False, suspend_constraints=False)
+
+    @classmethod
+    def connect(cls, config):
+        return cls()
+
+    def render(self, operation):
+        return []
+
+    def read(self, query):
+        return iter(())
+
+    def session(self):
+        pass
+
+    def close(self):
+        pass
+
+
+class NoTransactionTarget(SavepointlessTarget):
+    """Target adapter without transactions, like a MongoDB server outside a replica set."""
+
+    capabilities = Capabilities(transactions=False, savepoints=False, suspend_constraints=False)
+
+
+class CapabilitiesTest(ApplierTestCase):
+    def test_dry_run_defaults_to_stop_without_savepoints(self):
+        run_dir = make_run(self.tmpdir, target=f'{__name__}:SavepointlessTarget')
+
+        self.assertEqual(ArtifactApplier(run_dir, Mock(), mode=DRY_RUN).on_error, STOP)
+
+    def test_continue_policy_needs_savepoints(self):
+        run_dir = make_run(self.tmpdir, target=f'{__name__}:SavepointlessTarget')
+        connect = Mock()
+
+        with self.assertRaises(CapabilityError) as raised:
+            ArtifactApplier(run_dir, connect, mode=APPLY, on_error=CONTINUE)
+
+        self.assertIn('savepoints', str(raised.exception))
+        connect.assert_not_called()
+
+    def test_target_without_transactions_is_refused_before_connecting(self):
+        run_dir = make_run(self.tmpdir, target=f'{__name__}:NoTransactionTarget')
+        connect = Mock()
+
+        for mode in (APPLY, DRY_RUN):
+            with self.subTest(mode=mode), self.assertRaises(CapabilityError) as raised:
+                ArtifactApplier(run_dir, connect, mode=mode)
+            self.assertIn('transações', str(raised.exception))
+        connect.assert_not_called()
+
+    def test_session_with_less_than_declared_fails_before_any_command(self):
+        connection = FakeConnection()
+        session_open = session_of(connection)
+
+        def weaker_session():
+            session = session_open()
+            session.capabilities = Capabilities(transactions=False, savepoints=False, suspend_constraints=False)
+            return session
+
+        run_dir = make_run(self.tmpdir)
+        report = ArtifactApplier(run_dir, weaker_session).apply()
+
+        self.assertEqual(report.result, FAILED)
+        self.assertIn('transações', report.failure)
+        self.assertEqual(connection.statements(), ['<rollback>'])
+
+
+class NeutralApplierTest(unittest.TestCase):
+    def test_applier_has_no_postgresql_rules(self):
+        for path in ('core/apply/applier.py', 'core/apply/cli.py', 'core/apply/run.py'):
+            source = pathlib.Path(path).read_text(encoding='utf-8')
+            with self.subTest(path=path):
+                for fragment in ('psycopg2', 'RESET ALL', 'SHOW ', 'ROLLBACK TO', 'RELEASE SAVEPOINT', 'setval',
+                                 'pgcode', 'PGHOST', 'splitter'):
+                    self.assertFalse(fragment in source, f'{path} contém {fragment!r}')
+
+
+class ManifestTest(ApplierTestCase):
+    def test_artifacts_come_from_the_manifest_in_phase_order(self):
+        connection = FakeConnection()
+        files = {LOAD: 'INSERT INTO b VALUES (1);\n', SETUP: '-- abertura\n'}
+
+        report = self.apply(connection, files=files)
+
+        self.assertEqual([entry['file'] for entry in report.as_dict()['files']], [SETUP, LOAD])
+
+    def test_refuses_manifest_problems_without_connecting(self):
+        cases = {
+            'formato': dict(target=f'{__name__}:SavepointlessTarget', files={'00_setup.jsonl': ''}),
+            'adapter': dict(target=None),
+            'fase desconhecida': dict(files={'09_outra.sql': ''}),
+        }
+        for expected, options in cases.items():
+            with self.subTest(case=expected), tempfile.TemporaryDirectory() as tmpdir:
+                run_dir = make_run(tmpdir, **options)
+                connect = Mock()
+
+                with self.assertRaises(IncompleteRunError) as raised:
+                    ArtifactApplier(run_dir, connect)
+
+                self.assertIn(expected, str(raised.exception))
+                connect.assert_not_called()
+
+    def test_refuses_artifact_outside_the_run(self):
+        run_dir = make_run(self.tmpdir)
+        manifest_path = os.path.join(run_dir, 'manifest.json')
+        with open(manifest_path, encoding='utf-8') as manifest_file:
+            manifest = json.load(manifest_file)
+        manifest['artifacts'][0]['path'] = '../../../segredo.sql'
+        with open(manifest_path, 'w', encoding='utf-8') as manifest_file:
+            json.dump(manifest, manifest_file)
+
+        with self.assertRaises(IncompleteRunError) as raised:
+            ArtifactApplier(run_dir, Mock())
+
+        self.assertIn('fora da execução', str(raised.exception))
 
 
 if __name__ == '__main__':

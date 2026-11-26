@@ -5,11 +5,11 @@ import os
 import tempfile
 import unittest
 
-from core.apply import APPLY, DRY_RUN, ApplicationReport, SqlArtifactApplier, Statement
-from core.apply.splitter import SQL
-from tests.apply_fakes import DEFAULT_FILES, Clock, FakeConnection, FakeDatabaseError, make_run
+from core.application import Command
+from core.apply import APPLY, DRY_RUN, ApplicationReport, ArtifactApplier
+from tests.apply_fakes import DEFAULT_FILES, Clock, FakeConnection, FakeDatabaseError, make_run, session_of
 
-TARGET = {'host': 'target-db', 'port': '5432', 'database': 'tenant', 'user': 'tenant'}
+TARGET = {'adapter': 'postgres', 'host': 'target-db', 'port': '5432', 'database': 'tenant', 'user': 'tenant'}
 
 
 def fingerprint(run_dir):
@@ -34,7 +34,7 @@ class ReportFileTest(unittest.TestCase):
         run_dir = make_run(self.tmpdir)
         clock = Clock(datetime.datetime(2026, 11, 24, 10, 15, 0), datetime.datetime(2026, 11, 24, 10, 17, 30))
 
-        report = SqlArtifactApplier(run_dir, lambda: FakeConnection(), mode=DRY_RUN, report_clock=clock).apply()
+        report = ArtifactApplier(run_dir, session_of(FakeConnection()), mode=DRY_RUN, report_clock=clock).apply()
 
         with open(report.report_path, encoding='utf-8') as report_file:
             raw = report_file.read()
@@ -67,12 +67,12 @@ class ReportFileTest(unittest.TestCase):
         run_dir = make_run(self.tmpdir)
         before = fingerprint(run_dir)
 
-        dry_run = SqlArtifactApplier(
-            run_dir, lambda: FakeConnection(), mode=DRY_RUN,
+        dry_run = ArtifactApplier(
+            run_dir, session_of(FakeConnection()), mode=DRY_RUN,
             report_clock=Clock(datetime.datetime(2026, 11, 24, 10, 15, 0)),
         ).apply()
-        apply = SqlArtifactApplier(
-            run_dir, lambda: FakeConnection(), mode=APPLY,
+        apply = ArtifactApplier(
+            run_dir, session_of(FakeConnection()), mode=APPLY,
             report_clock=Clock(datetime.datetime(2026, 11, 24, 10, 16, 0)),
         ).apply()
 
@@ -101,16 +101,16 @@ class ReportFileTest(unittest.TestCase):
 
 
 class ErrorsFileTest(unittest.TestCase):
-    def test_errors_file_lists_location_sqlstate_message_and_truncated_statement(self):
+    def test_errors_file_lists_location_code_message_and_truncated_command(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             report = ApplicationReport(tmpdir, DRY_RUN, 'continue', TARGET)
             report.start_file('03_load_transformed_data.sql')
-            long_statement = Statement(SQL, 'INSERT INTO b VALUES (' + 'x' * 600 + ')', 40)
-            short_statement = Statement(SQL, 'SELEC 1', 41)
+            long_statement = Command('INSERT INTO b VALUES (' + 'x' * 600 + ')', 40)
+            short_statement = Command('SELEC 1', 41)
 
             report.record_error(
                 '03_load_transformed_data.sql', 12, long_statement,
-                FakeDatabaseError('value too long for type character varying(10)\n', '22001'),
+                FakeDatabaseError('value too long for type character varying(10)\n', '22001'), '22001',
             )
             report.record_error('03_load_transformed_data.sql', 13, short_statement, RuntimeError('sem código'))
             report.finish('rolled_back')
@@ -120,7 +120,7 @@ class ErrorsFileTest(unittest.TestCase):
 
         blocks = content.split('\n\n')
         self.assertTrue(blocks[0].startswith(
-            '== 03_load_transformed_data.sql, comando 12, linha 40, SQLSTATE 22001\n'
+            '== 03_load_transformed_data.sql, comando 12, linha 40, código 22001\n'
             'value too long for type character varying(10)\n'
             '-- comando:\n'
             'INSERT INTO b VALUES (xxx'
@@ -128,7 +128,7 @@ class ErrorsFileTest(unittest.TestCase):
         self.assertTrue(blocks[0].endswith(' ... [truncado, 623 caracteres]'))
         self.assertEqual(
             blocks[1],
-            '== 03_load_transformed_data.sql, comando 13, linha 41, sem SQLSTATE\n'
+            '== 03_load_transformed_data.sql, comando 13, linha 41, sem código\n'
             'sem código\n'
             '-- comando:\n'
             'SELEC 1',
