@@ -2,8 +2,8 @@
 
 Each application gets ``aplicacoes/<YYYYmmdd-HHMMSS>-<mode>/`` with:
 
-- ``relatorio.json``: mode, error policy, target adapter and connection without password,
-  timestamps, result and counters per file;
+- ``relatorio.json``: mode, error policy, where the commands came from, target
+  adapter and connection without password, timestamps, result and counters per file;
 - ``erros.txt``: one block per failing statement, written as the errors
   happen, so it can be read during a long application.
 """
@@ -15,6 +15,9 @@ import time
 from dataclasses import dataclass, field
 
 REPORTS_DIR = 'aplicacoes'
+# Where the commands came from: the artifact files, or the generation itself (direct output).
+ARTIFACTS = 'artifacts'
+GENERATION = 'generation'
 REPORT_FILE = 'relatorio.json'
 ERRORS_FILE = 'erros.txt'
 STATEMENT_PREVIEW = 500
@@ -45,9 +48,18 @@ class ApplicationReport:
     ``target`` must not contain the password. ``clock`` exists for tests.
     """
 
-    def __init__(self, run_dir: str, mode: str, on_error: str, target: dict, clock=datetime.datetime.now):
+    def __init__(
+        self,
+        run_dir: str,
+        mode: str,
+        on_error: str,
+        target: dict,
+        clock=datetime.datetime.now,
+        source: str = ARTIFACTS,
+    ):
         self.mode = mode
         self.on_error = on_error
+        self.source = source
         self.target = dict(target)
         self.result = None
         self.failure = None
@@ -122,6 +134,7 @@ class ApplicationReport:
         return {
             'mode': self.mode,
             'on_error': self.on_error,
+            'source': self.source,
             'target': self.target,
             'started_at': self.started_at.isoformat(timespec='seconds'),
             'finished_at': self.finished_at.isoformat(timespec='seconds') if self.finished_at else None,

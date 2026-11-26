@@ -296,7 +296,8 @@ class MongoRenderTest(unittest.TestCase):
                 artifact.writelines(self.target.render(Insert('people', values)))
                 artifact.write('\nisto não é json\n')
             session = MongoSession(FakeClient(FakeDatabase()), FakeDatabase())
-            commands = list(session.commands(path, dry_run=False))
+            with open(path, encoding='utf-8') as lines:
+                commands = list(session.commands(lines, dry_run=False))
 
         document = commands[0].payload['document']
         self.assertEqual(document['birth'], datetime.datetime(1990, 10, 2, tzinfo=datetime.timezone.utc))

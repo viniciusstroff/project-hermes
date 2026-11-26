@@ -19,7 +19,7 @@ Também inclui um plano para desacoplar a forma de saída da migração. Hoje o 
 | # | Melhoria | Esforço | Impacto |
 |---|---|---|---|
 | 1 | Tornar a migração agnóstica de adapter de origem/destino (feito) | Alto | Muito alto |
-| 2 | Tornar a saída configurável: migração direta vs gerar arquivos | Alto | Muito alto |
+| 2 | Tornar a saída configurável: migração direta vs gerar arquivos (feito) | Alto | Muito alto |
 | 3 | Migrar outros Acmes para a nova arquitetura | Alto | Muito alto |
 | 4 | Testes unitários e de contrato do core | Médio | Alto |
 | 5 | Eliminar SQL manual residual dos Acmes | Médio | Alto |
@@ -31,7 +31,7 @@ Também inclui um plano para desacoplar a forma de saída da migração. Hoje o 
 | 11 | Criar camada de execução performática para migrações pesadas, com opção de executor Go | Alto | Muito alto |
 | 12 | Adicionar paralelismo e streaming controlados | Alto | Muito alto |
 | 13 | Registrar checkpoints do estado atual da migração | Médio | Alto |
-| 14 | Evoluir logs, métricas e relatórios de execução | Médio | Alto |
+| 14 | Evoluir logs, métricas e relatórios de execução (primeira parte feita) | Médio | Alto |
 | 15 | Avaliar migração em tempo real com Debezium | Alto | Alto |
 
 ---
@@ -141,7 +141,7 @@ Comportamento atual, em `core/outputs/mirror.py`:
 - `finish` e `close` chegam a todos os outputs mesmo que um falhe e relançam o primeiro erro
 - combinações previstas: arquivo + banco, arquivo + stdout
 
-#### `DirectDatabaseOutput` (adiado)
+#### `DirectDatabaseOutput` (implementado)
 
 Executaria direto no destino, durante a geração:
 - recebe SQL ou operação estruturada
@@ -152,7 +152,7 @@ Executaria direto no destino, durante a geração:
 
 Ao detalhar o desenho apareceu um conflito com a geração da época. O `load_reference_map()` lia o destino enquanto os inserts eram gerados. Com os comandos executados durante a geração, essa leitura veria uma tabela já truncada, se usasse a mesma conexão do output. Numa conexão separada, ficaria esperando o lock do `TRUNCATE` da própria transação. Além disso, o `02_dump_compatible_tables.sql` não passa pelo output, porque o `pg_dump` grava o arquivo direto.
 
-O item 7 resolveu a primeira parte: os mapas de referência são carregados antes da primeira fase e as leituras do destino ficam fechadas depois disso. A `desacoplar-migracao-de-banco-e-versao` resolveu a segunda: a saída do `pg_dump` entra pelo `include_file()` do output. O `DirectDatabaseOutput` está proposto na change `introduzir-direct-database-output`, que executa as operações pela sessão do adapter de destino. Até ela ser implementada, a aplicação no destino é feita pelo `ArtifactApplier`, sobre os arquivos gerados.
+O item 7 resolveu a primeira parte: os mapas de referência são carregados antes da primeira fase e as leituras do destino ficam fechadas depois disso. A `desacoplar-migracao-de-banco-e-versao` resolveu a segunda: a saída do `pg_dump` entra pelo `include_file()` do output. A change `introduzir-direct-database-output` implementou o `DirectDatabaseOutput`: ele executa as operações pela sessão do adapter de destino, em transação única, com os modos, as políticas e as capacidades do `ArtifactApplier`. Ele é escolhido por `--output direct` ou `--output hybrid`. Na AcmeEdu, o `hybrid --dry-run` e o `Aplicar.py` sobre os mesmos arquivos contaram os mesmos comandos em todas as fases. O tempo não caiu: `direct --apply` levou 5,2 s, contra 3,7 s de gerar e aplicar em sequência. O ganho é a falha antecipada e não precisar do `03` em disco.
 
 #### `ManifestOutput`
 
@@ -228,9 +228,9 @@ A combinação `MirrorOutput(SqlFileOutput, DirectDatabaseOutput(mode='rollback'
 
 ### O que ainda precisa mudar
 
-- implementar o `DirectDatabaseOutput` para aplicar durante a geração, depois que o item 7 tirar a leitura do destino do meio da carga
-- permitir que a factory ou o CLI escolham o output
 - medir a política `continue` numa carga real antes de usá-la num banco com réplica
+- medir se o túnel SSH até o destino derruba a conexão ociosa numa geração longa com `--output direct`
+- medir o output direto numa carga real e decidir se vale agrupar operações para reduzir o custo por comando
 
 ### Possível configuração futura
 
@@ -273,9 +273,9 @@ Fase 3 (implementada pela change `aplicar-artefatos-sql-no-destino`):
 - aplicar os arquivos de uma execução no destino em transação única, com dry run e relatório
 - `Aplicar.py` e as opções `--apply` e `--dry-run` no `Migracao.py`
 
-Fase 4 (depende do item 7):
+Fase 4 (implementada pela change `introduzir-direct-database-output`):
 - adicionar `DirectDatabaseOutput` para aplicar durante a geração
-- permitir escolher o output pela factory ou pelo CLI
+- permitir escolher o output pelo CLI
 
 ---
 

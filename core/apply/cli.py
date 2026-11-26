@@ -12,15 +12,10 @@ from typing import Callable
 
 from core.adapters.registry import AdapterResolutionError, resolve_adapter
 from core.application import CapabilityError
-from core.apply.applier import COMMITTED, FAILED, ROLLED_BACK, ArtifactApplier
+from core.apply.applier import ArtifactApplier
+from core.apply.execution import FAILED, RESULT_MESSAGES
 from core.apply.run import GeneratedRun, IncompleteRunError
 from core.connections import ConnectionConfig, ConnectionConfigError
-
-_RESULT_MESSAGES = {
-    COMMITTED: 'COMMIT executado, carga gravada no destino',
-    ROLLED_BACK: 'ROLLBACK executado, destino sem alterações',
-    FAILED: 'ROLLBACK executado, nada da carga foi gravado',
-}
 
 # Exit codes: 1 for a failed or refused application, 2 for a target
 # configuration to fix, 130 for an interruption.
@@ -44,8 +39,12 @@ def target_label(config: ConnectionConfig) -> str:
     return ', '.join(f'{key}={value}' for key, value in config.describe().items() if key != 'adapter')
 
 
-def session_opener(adapter_class, config: ConnectionConfig) -> Callable:
-    """Function that connects the target adapter and opens its application session."""
+def session_opener(adapter_class, config: ConnectionConfig, waits_between_commands: bool = False) -> Callable:
+    """Function that connects the target adapter and opens its application session.
+
+    ``waits_between_commands`` asks for a session that keeps its transaction
+    while the caller takes time between commands, as the direct output does.
+    """
 
     def open_session():
         try:
@@ -54,7 +53,7 @@ def session_opener(adapter_class, config: ConnectionConfig) -> Callable:
             raise
         except Exception as exc:
             raise TargetConnectionError(f'Não foi possível conectar ao destino: {str(exc).strip()}') from exc
-        return adapter.session()
+        return adapter.session(waits_between_commands=waits_between_commands)
 
     return open_session
 
@@ -108,7 +107,13 @@ def run_application(
         log(traceback.format_exc())
         return EXIT_FAILED
 
-    log(f'Resultado: {report.result}. {_RESULT_MESSAGES[report.result]}.')
+    return log_report_summary(report, log)
+
+
+def log_report_summary(report, log: Callable[[str], None]) -> int:
+    """Show the result of an application report and return the exit code."""
+
+    log(f'Resultado: {report.result}. {RESULT_MESSAGES[report.result]}.')
     if report.failure:
         log(f'Motivo: {report.failure}')
     log(f'Comandos com erro: {report.error_count}')

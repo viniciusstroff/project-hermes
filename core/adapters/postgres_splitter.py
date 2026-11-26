@@ -101,6 +101,7 @@ def split_sql(
     lines: Iterable[str],
     source: str = '<sql>',
     standard_conforming_strings: bool = True,
+    first_line: int = 1,
 ) -> Iterator[Statement]:
     """Yield the statements found in ``lines``.
 
@@ -108,11 +109,11 @@ def split_sql(
     ``standard_conforming_strings`` is the server setting at the start of the
     input. ``SET standard_conforming_strings`` statements found in the input
     update it, because with the setting off a backslash escapes the quote in
-    a plain ``'...'`` string.
+    a plain ``'...'`` string. ``first_line`` numbers the first line.
     """
 
     splitter = _StatementSplitter(source, standard_conforming_strings)
-    for lineno, line in enumerate(lines, 1):
+    for lineno, line in enumerate(lines, first_line):
         yield from splitter.feed(line, lineno)
     yield from splitter.finish()
 
@@ -369,7 +370,7 @@ class _StatementSplitter:
         text = self._statement.close(line, end)
         self._state = _GAP
         if text:
-            self.standard_conforming_strings = _standard_conforming_strings_after(
+            self.standard_conforming_strings = standard_conforming_strings_after(
                 text,
                 self.standard_conforming_strings,
                 self._initial_standard_conforming_strings,
@@ -381,7 +382,9 @@ class _StatementSplitter:
         return ready
 
 
-def _standard_conforming_strings_after(text: str, current: bool, initial: bool) -> bool:
+def standard_conforming_strings_after(text: str, current: bool, initial: bool) -> bool:
+    """Value of standard_conforming_strings after ``text`` runs; ``initial`` is the value a RESET gives."""
+
     match = _SCS_SETTING.fullmatch(text)
     if match is None:
         return current

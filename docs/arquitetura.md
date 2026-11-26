@@ -7,8 +7,8 @@ O script `Migracao.py` é uma aplicação CLI que:
 1. Lê a configuração do Acme em `Acme/.env`.
 2. Abre as conexões declaradas no `.env` do cliente: uma ou mais origens e um destino.
 3. Gera os artefatos de cada fase no formato do destino: `.sql` com `TRUNCATE`, `INSERT`, `ALTER TABLE` e `setval` no PostgreSQL.
-4. Não aplica os dados na V2 durante a geração.
-5. Deixa a aplicação para depois, sobre os arquivos gerados em `runs/<cliente>/<timestamp>/comandos/`. Quem aplica é o `Aplicar.py` (ou o próprio `Migracao.py` com `--apply` ou `--dry-run`), numa única transação.
+4. Por padrão, não aplica os dados na V2 durante a geração.
+5. Deixa a aplicação para depois, sobre os arquivos gerados em `runs/<cliente>/<timestamp>/comandos/`. Quem aplica é o `Aplicar.py` (ou o próprio `Migracao.py` com `--apply` ou `--dry-run`), numa única transação. Com `--output direct` ou `hybrid`, os comandos rodam no destino durante a geração, também numa transação.
 
 ## Bancos envolvidos
 
@@ -224,16 +224,31 @@ um falhe, e o primeiro erro é relançado no fim. O `describe()` devolve
 `{"type": "mirror", "outputs": [...]}` com a descrição de cada output. Com
 `MirrorOutput`, a propriedade `BaseMigration.file` devolve `None`.
 
-A `DefaultMigrationContextFactory` ainda monta só o `FileOutput`. Para usar
-o `MirrorOutput` hoje é preciso montar o `MigrationContext` à mão ou trocar
-`context.output` antes de rodar. A escolha pelo CLI fica para quando houver
-outro output concreto.
+O `DirectDatabaseOutput`, em `core/outputs/direct.py`, executa no destino os
+comandos de cada operação durante a geração. O `write()` pede os comandos ao
+adapter de destino do contexto (`render()`), lê o texto com
+`session.commands()` e entrega cada comando à mesma política de erro do
+aplicador, antes de retornar. Ele não separa comandos nem decide o que pular:
+isso é da sessão do adapter. Uma sessão que junta comandos em lote (MongoDB)
+roda o lote quando ele enche, na troca de fase ou no fim.
 
-Nenhum output do core executa comandos no banco de destino. A aplicação acontece
-depois da geração, pelo aplicador descrito na próxima seção. O
-`DirectDatabaseOutput`, que executaria os comandos durante a geração, ficou
-adiado. O motivo está em [Aplicação no destino](#aplicação-no-destino) e no
-item 2 de [melhorias-futuras.md](melhorias-futuras.md).
+A sessão de escrita tem conexão própria, aberta pelo `session_opener()` com
+`waits_between_commands=True` quando a fase `prepare_target` abre. As
+operações de `setup` esperam na memória até lá, porque a factory abre essa
+fase antes de o runner carregar os mapas de referência. A troca de fase
+esvazia a política e chama `end_artifact()` da sessão. O `include_file()`
+lê a saída do `pg_dump` linha a linha pela sessão. O `finish(True)` termina
+em `COMMIT` no `apply` e em `ROLLBACK` no `dry-run`. O `finish(False)` e o
+`close()` sem `finish(True)` terminam em `ROLLBACK`. As capacidades são
+conferidas duas vezes: as declaradas pelo adapter quando o output é montado e
+as da sessão quando ela abre.
+
+O output é escolhido pelo `--output` do `Migracao.py`: `file` (padrão),
+`direct` ou `hybrid`, que é `MirrorOutput(FileOutput, DirectDatabaseOutput)`,
+com o arquivo primeiro. Para a escolha chegar à factory sem mudar o
+construtor dos clientes, o `Migracao.py` instancia o cliente dentro de
+`core.context.output_settings(OutputSettings(...))`, que guarda a escolha numa
+`ContextVar`. Fora desse bloco, a factory monta o `FileOutput`.
 
 ## Aplicação no destino
 
@@ -243,13 +258,19 @@ restrições), `Command` (texto, linha, motivo para pular ou erro) e
 `TargetSession` (`begin`, `commands`, `execute`, `savepoint`, `rollback_to`,
 `release`, `end_artifact`, `commit`, `rollback`, `error_code`, `describe`).
 Cada adapter de destino declara `capabilities` e abre a sua sessão com
-`session()`.
+`session(waits_between_commands=False)`. O `commands(lines, dry_run,
+first_line, source)` lê qualquer sequência de linhas: o aplicador passa o
+arquivo aberto e o output direto passa o texto de cada operação, com a linha
+em que ele começaria no arquivo da fase. Com `waits_between_commands=True`, a
+sessão do PostgreSQL desliga o `idle_in_transaction_session_timeout` no
+`begin()` e de novo depois de cada `RESET ALL`.
 
 O código neutro fica em `core/apply/`:
 
 | Módulo | Papel |
 |---|---|
 | `run.py` | lê o `manifest.json`: adapter de destino e lista de artefatos com fase, caminho e formato, recusando execuções incompletas |
+| `execution.py` | modos (`apply`, `dry-run`), políticas de erro (`stop`, `continue`) e o tratamento de cada comando, comuns ao aplicador e ao output direto |
 | `applier.py` | `ArtifactApplier`: confere capacidades e formato, abre a sessão e aplica os comandos em transação única, com modo e política de erro |
 | `report.py` | grava `relatorio.json` e `erros.txt` em `aplicacoes/<timestamp>-<modo>/` |
 | `cli.py` | fluxo de console comum ao `Aplicar.py` e ao `Migracao.py --apply`, com a conexão de `TARGET_*` |
@@ -264,7 +285,7 @@ O adapter MongoDB (`core/adapters/mongodb.py`) tem a própria sessão. Ela lê o
 transação só em replica set e nenhum savepoint. Os inserts seguidos na mesma
 coleção ficam pendentes e vão num `insert_many` de até 1000. Por isso a sessão
 expõe `pending` e `flush()`. Um erro de lote chega como `DeferredCommandError`,
-com a posição do comando entre os pendentes. A `_StopPolicy` usa essa
+com a posição do comando entre os pendentes. A `StopPolicy` usa essa
 posição para registrar no relatório o comando certo do artefato.
 
 ### Por que depois da geração
@@ -277,9 +298,10 @@ pelo `01_prepare_target` apareceria vazia. Numa conexão separada, a leitura
 esperaria o lock do `TRUNCATE`, que só sai no fim da transação.
 
 Esse impedimento acabou: os mapas de referência são carregados antes da
-primeira fase e as leituras do destino ficam fechadas depois disso. Continua
-valendo o outro motivo para a cópia nativa: a saída do `pg_dump` é gravada
-fora do output e entra no artefato pelo `include_file()`.
+primeira fase e as leituras do destino ficam fechadas depois disso. A saída do
+`pg_dump` entra pelo `include_file()` do output. Por isso o
+`DirectDatabaseOutput` existe hoje como alternativa (ver
+[Saída da migração](#saída-da-migração)). O aplicador continua o padrão.
 
 Aplicando a pasta da execução depois, a aplicação pode rodar em outra máquina.
 O `GeneratedRun` resolve os artefatos do manifesto pelos caminhos relativos à

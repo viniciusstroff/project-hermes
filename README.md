@@ -110,6 +110,8 @@ O `Aplicar.py` lê do `manifest.json` o adapter de destino e a lista de artefato
 
 Para gerar e aplicar de uma vez no destino das chaves `TARGET_*`, use `python3 Migracao.py Acme --dry-run` ou `--apply`. Os modos, as políticas de erro e os cuidados estão em [docs/execucao.md](docs/execucao.md#aplicando-os-sqls-no-destino).
 
+Com `--output direct` ou `--output hybrid`, os comandos rodam no destino durante a geração, numa transação só. O primeiro erro aparece sem esperar a geração terminar. O `hybrid` também grava os arquivos. Os dois exigem `--apply` ou `--dry-run`. Detalhes em [docs/execucao.md](docs/execucao.md#executando-no-destino-durante-a-geração).
+
 ### Depuração
 
 ```bash

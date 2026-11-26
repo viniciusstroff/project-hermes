@@ -271,7 +271,8 @@ class MongoTargetAdapter:
         if self.client is not None:
             self.client.close()
 
-    def session(self):
+    def session(self, waits_between_commands: bool = False):
+        # The transaction limit of MongoDB counts total time, not idle time: nothing to turn off.
         return MongoSession(self.client, self.database)
 
     # Reading ---------------------------------------------------------------
@@ -391,20 +392,19 @@ class MongoSession:
         self._session = self.client.start_session()
         self._session.start_transaction()
 
-    def commands(self, path: str, dry_run: bool):
+    def commands(self, lines, dry_run: bool, first_line: int = 1, source: str = None):
         json_util, options = _json()
-        with open(path, encoding='utf-8') as artifact:
-            for number, line in enumerate(artifact, 1):
-                text = line.strip()
-                if not text:
-                    continue
-                try:
-                    payload = json_util.loads(text, json_options=options)
-                    _check_operation(payload)
-                except Exception as exc:
-                    yield Command(text, number, error=f'linha inválida: {exc}')
-                    continue
-                yield Command(text, number, payload=payload)
+        for number, line in enumerate(lines, first_line):
+            text = line.strip()
+            if not text:
+                continue
+            try:
+                payload = json_util.loads(text, json_options=options)
+                _check_operation(payload)
+            except Exception as exc:
+                yield Command(text, number, error=f'linha inválida: {exc}')
+                continue
+            yield Command(text, number, payload=payload)
 
     def execute(self, command: Command):
         payload = command.payload
