@@ -1,5 +1,5 @@
 """
-Aplica no banco de destino os arquivos SQL de uma execução gerada pelo Migracao.py.
+Aplica no banco de destino os artefatos de uma execução gerada pelo Migracao.py.
 
 Uso:
     python3 Aplicar.py <run_dir> [--dry-run] [--on-error stop|continue]
@@ -8,8 +8,9 @@ Exemplos:
     python3 Aplicar.py runs/Acme/20261124-153000 --dry-run
     python3 Aplicar.py runs/Acme/20261124-153000
 
-A conexão vem das variáveis da libpq, como no psql: PGHOST, PGPORT,
-PGDATABASE, PGUSER e PGPASSWORD. PGHOST e PGDATABASE são obrigatórias.
+O adapter de destino vem do manifest.json da execução. A conexão vem das
+variáveis TARGET_*, com os mesmos nomes do .env do cliente: TARGET_HOST,
+TARGET_PORT, TARGET_NAME, TARGET_USER e TARGET_PASS no PostgreSQL.
 """
 
 import argparse
@@ -19,13 +20,14 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
 from core.apply import APPLY, CONTINUE, DRY_RUN, STOP
-from core.apply.cli import MissingTargetError, libpq_connect, libpq_target, run_application
+from core.apply.cli import run_application
+from core.connections import target_connection
 
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         prog='Aplicar.py',
-        description='Aplica os arquivos .sql de comandos/ de uma execução no destino, em transação única.',
+        description='Aplica os artefatos de comandos/ de uma execução no destino, em transação única.',
     )
     parser.add_argument('run_dir', help='pasta da execução, por exemplo runs/Acme/20261124-153000')
     parser.add_argument(
@@ -37,21 +39,16 @@ def parse_args(argv=None):
         '--on-error',
         choices=(STOP, CONTINUE),
         help=f'{STOP} desfaz tudo no primeiro erro (padrão do apply); '
-             f'{CONTINUE} registra o erro e segue (padrão do dry run)',
+             f'{CONTINUE} registra o erro e segue (padrão do dry run quando o destino tem savepoint)',
     )
     return parser.parse_args(argv)
 
 
-def main(argv=None) -> int:
+def main(argv=None, environ=None) -> int:
     args = parse_args(argv)
-    try:
-        target = libpq_target()
-    except MissingTargetError as exc:
-        print(f'[ERRO] {exc}')
-        return 2
-
     mode = DRY_RUN if args.dry_run else APPLY
-    return run_application(args.run_dir, libpq_connect, target, mode, args.on_error)
+    config = target_connection(os.environ if environ is None else environ)
+    return run_application(args.run_dir, config, mode, args.on_error)
 
 
 if __name__ == '__main__':

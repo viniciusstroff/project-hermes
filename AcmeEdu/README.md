@@ -25,7 +25,7 @@ docker exec project-hermes python3 AcmeEdu/conferir.py
 Para aplicar uma execução já gerada com o `Aplicar.py`:
 
 ```bash
-docker exec -e PGHOST=acmeedu-v2 -e PGDATABASE=acmeedu_v2 -e PGUSER=acmeedu -e PGPASSWORD=acmeedu \
+docker exec -e TARGET_HOST=acmeedu-v2 -e TARGET_NAME=acmeedu_v2 -e TARGET_USER=acmeedu -e TARGET_PASS=acmeedu \
     project-hermes python3 Aplicar.py runs/AcmeEdu/<timestamp> --dry-run
 ```
 

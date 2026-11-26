@@ -6,9 +6,8 @@ class TargetAdapter(Protocol):
 
     The adapter renders the operations of ``core.operations`` into the
     commands of its artifact format and reads reference data with the queries
-    of ``core.queries``. Applying the artifacts (session and capabilities)
-    belongs to the application phase of the change and is not part of this
-    contract yet.
+    of ``core.queries``. To apply the artifacts, it declares its
+    ``capabilities`` and opens a ``TargetSession`` (``core.application``).
     """
 
     name: str
@@ -16,6 +15,12 @@ class TargetAdapter(Protocol):
 
     artifact_format: Any
     """``ArtifactFormat`` of the files written for this target."""
+
+    capabilities: Any
+    """``Capabilities`` declared for the application. A session may report less."""
+
+    required_parameters: tuple
+    """Connection parameters checked before connecting, such as ``('host', 'name', 'user')``."""
 
     @classmethod
     def connect(cls, config) -> 'TargetAdapter':
@@ -28,6 +33,10 @@ class TargetAdapter(Protocol):
 
     def read(self, query) -> Iterator[Mapping[str, Any]]:
         """Rows of a ``SourceQuery`` or ``NativeQuery`` read from the target."""
+        ...
+
+    def session(self):
+        """``TargetSession`` over the connection of the adapter, for one application."""
         ...
 
     def close_reads(self) -> None:

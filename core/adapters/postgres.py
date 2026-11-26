@@ -2,6 +2,7 @@ import itertools
 from typing import Any
 
 from core.adapters.pg_dump import PgDumpCopy
+from core.adapters.postgres_session import CAPABILITIES, PostgresSession
 from core.adapters.sql_source import SqlSourceAdapter
 from core.artifacts import ArtifactFormat
 from core.connections import ConnectionConfigError
@@ -24,12 +25,16 @@ from core.sql import SqlLiteral
 _cursor_counter = itertools.count(1)
 
 
+# Keys of SOURCE_<NAME>_* and TARGET_* that every PostgreSQL connection needs.
+REQUIRED_PARAMETERS = ('host', 'name', 'user')
+
+
 def _connect(config):
     """Open a psycopg2 connection from a ConnectionConfig. The driver is imported only here."""
 
     import psycopg2
 
-    config.require('host', 'name', 'user')
+    config.require(*REQUIRED_PARAMETERS)
     return psycopg2.connect(
         host=config.get('host'),
         port=config.get('port', '5432'),
@@ -129,6 +134,8 @@ class PostgresTargetAdapter:
 
     name = 'postgres'
     artifact_format = ArtifactFormat('sql', 'sql')
+    capabilities = CAPABILITIES
+    required_parameters = REQUIRED_PARAMETERS
 
     def __init__(self, dialect=None, connection=None):
         self.dialect = dialect or PostgresDialect()
@@ -148,6 +155,10 @@ class PostgresTargetAdapter:
     def close(self) -> None:
         if self.connection is not None:
             self.connection.close()
+
+    def session(self):
+        """Application session over the target connection. Closing it closes the connection."""
+        return PostgresSession(self.connection)
 
     # Reading ---------------------------------------------------------------
 

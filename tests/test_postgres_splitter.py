@@ -13,7 +13,7 @@ sys.modules.setdefault('psycopg2', psycopg2)
 sys.modules.setdefault('psycopg2.extras', psycopg2_extras)
 
 from core.adapters.postgres import PostgresTargetAdapter
-from core.apply.splitter import (
+from core.adapters.postgres_splitter import (
     META_COMMAND,
     SQL,
     Statement,

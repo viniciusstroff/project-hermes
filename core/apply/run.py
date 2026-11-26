@@ -4,11 +4,7 @@ import json
 import os
 from dataclasses import dataclass
 
-from core.artifacts import COMMANDS_DIR, PHASES, artifact_name
-
-# Phase order comes from the artifact manager, the same order of generation.
-# The applier only handles SQL artifacts for now.
-PHASE_FILES = tuple(artifact_name(phase, 'sql') for phase in PHASES)
+from core.artifacts import PHASES
 
 
 class IncompleteRunError(Exception):
@@ -17,20 +13,23 @@ class IncompleteRunError(Exception):
 
 @dataclass(frozen=True)
 class Artifact:
+    phase: str
     name: str
     path: str
+    format: str
 
 
 @dataclass(frozen=True)
 class GeneratedRun:
-    """SQL artifacts of a successful generation, in phase order.
+    """Artifacts of a successful generation, in phase order, and the target adapter.
 
-    Paths are resolved from ``run_dir`` and not from the manifest, because
-    the run directory may have been copied to another machine.
+    The list comes from the manifest, with paths relative to the run
+    directory, so the directory may have been copied to another machine.
     """
 
     run_dir: str
     debug: bool
+    target_adapter: str
     artifacts: tuple
 
     @classmethod
@@ -45,20 +44,42 @@ class GeneratedRun:
                 'Só execuções com status success podem ser aplicadas.'
             )
 
-        debug = bool((manifest.get('debug') or {}).get('enabled'))
+        target_adapter = (manifest.get('target') or {}).get('adapter')
+        if not target_adapter:
+            raise IncompleteRunError(f'{run_dir}: o manifesto não registra o adapter de destino.')
+
+        listed = manifest.get('artifacts') or []
+        if not listed:
+            raise IncompleteRunError(f'{run_dir}: o manifesto não lista artefatos.')
+
         artifacts = []
         missing = []
-        for name in PHASE_FILES:
-            path = os.path.join(run_dir, COMMANDS_DIR, name)
+        for entry in sorted(listed, key=lambda entry: _phase_position(run_dir, entry)):
+            path = _artifact_path(run_dir, entry.get('path', ''))
             if os.path.isfile(path):
-                artifacts.append(Artifact(name, path))
+                artifacts.append(Artifact(entry['phase'], os.path.basename(path), path, entry.get('format')))
             else:
-                missing.append(name)
-
+                missing.append(entry.get('path'))
         if missing:
-            raise IncompleteRunError(f'{run_dir}: artefatos ausentes em {COMMANDS_DIR}/: {", ".join(missing)}')
+            raise IncompleteRunError(f'{run_dir}: artefatos do manifesto ausentes: {", ".join(missing)}')
 
-        return cls(run_dir, debug, tuple(artifacts))
+        debug = bool((manifest.get('debug') or {}).get('enabled'))
+        return cls(run_dir, debug, target_adapter, tuple(artifacts))
+
+
+def _phase_position(run_dir: str, entry: dict) -> int:
+    phase = entry.get('phase')
+    if phase not in PHASES:
+        raise IncompleteRunError(f'{run_dir}: o manifesto lista a fase desconhecida {phase!r}.')
+    return PHASES.index(phase)
+
+
+def _artifact_path(run_dir: str, relative: str) -> str:
+    # Artifacts live inside the run directory; anything else is not ours.
+    path = os.path.normpath(os.path.join(run_dir, relative))
+    if os.path.isabs(relative) or not path.startswith(run_dir + os.sep):
+        raise IncompleteRunError(f'{run_dir}: caminho de artefato fora da execução: {relative!r}')
+    return path
 
 
 def _read_manifest(run_dir: str) -> dict:

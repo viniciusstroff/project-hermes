@@ -86,7 +86,7 @@ Criar quatro camadas explícitas:
 
 ### Estrutura atual
 
-A estrutura e os contratos que já existem estão em [arquitetura.md](arquitetura.md). Os adapters ficam em `core/adapters/`, os dialetos em `core/dialects/`, as consultas neutras em `core/queries.py`, as operações de escrita em `core/operations.py` e os outputs em `core/outputs/`. As migrações (`TableMigration`, `ExpandMigration` e `MultiTargetMigration`) ficam na raiz de `core/`. A leitura e a escrita já não trafegam SQL. A aplicação dos artefatos ainda é só PostgreSQL. As próximas fases da `desacoplar-migracao-de-banco-e-versao` cuidam disso.
+A estrutura e os contratos que já existem estão em [arquitetura.md](arquitetura.md). Os adapters ficam em `core/adapters/`, os dialetos em `core/dialects/`, as consultas neutras em `core/queries.py`, as operações de escrita em `core/operations.py` e os outputs em `core/outputs/`. As migrações (`TableMigration`, `ExpandMigration` e `MultiTargetMigration`) ficam na raiz de `core/`. A leitura e a escrita já não trafegam SQL. A aplicação dos artefatos passa pela sessão do adapter de destino, guiada pelas capacidades dele, mas por enquanto só existe a sessão do PostgreSQL.
 
 ### O que precisa mudar
 

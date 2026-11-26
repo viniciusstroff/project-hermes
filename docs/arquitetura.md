@@ -212,15 +212,27 @@ item 2 de [melhorias-futuras.md](melhorias-futuras.md).
 
 ## Aplicação no destino
 
-O código fica em `core/apply/`:
+O aplicador não conhece linguagem de banco. O contrato fica em
+`core/application.py`: `Capabilities` (transação, savepoint, suspender
+restrições), `Command` (texto, linha, motivo para pular ou erro) e
+`TargetSession` (`begin`, `commands`, `execute`, `savepoint`, `rollback_to`,
+`release`, `end_artifact`, `commit`, `rollback`, `error_code`, `describe`).
+Cada adapter de destino declara `capabilities` e abre a sua sessão com
+`session()`.
+
+O código neutro fica em `core/apply/`:
 
 | Módulo | Papel |
 |---|---|
-| `splitter.py` | separa um arquivo SQL em comandos pelas regras léxicas do PostgreSQL |
-| `run.py` | lê o `manifest.json` e lista os arquivos de uma execução, recusando execuções incompletas |
-| `applier.py` | `SqlArtifactApplier`: aplica os arquivos em transação única, com modo e política de erro |
+| `run.py` | lê o `manifest.json`: adapter de destino e lista de artefatos com fase, caminho e formato, recusando execuções incompletas |
+| `applier.py` | `ArtifactApplier`: confere capacidades e formato, abre a sessão e aplica os comandos em transação única, com modo e política de erro |
 | `report.py` | grava `relatorio.json` e `erros.txt` em `aplicacoes/<timestamp>-<modo>/` |
-| `cli.py` | fluxo de console comum ao `Aplicar.py` e ao `Migracao.py --apply` |
+| `cli.py` | fluxo de console comum ao `Aplicar.py` e ao `Migracao.py --apply`, com a conexão de `TARGET_*` |
+
+O que é do PostgreSQL fica no adapter: `core/adapters/postgres_splitter.py`
+separa os `.sql` em comandos e `core/adapters/postgres_session.py` tem as
+regras de comandos pulados, o `RESET ALL`, o `standard_conforming_strings`
+lido do servidor, os savepoints e o `SQLSTATE` como código de erro.
 
 ### Por que depois da geração
 
@@ -236,13 +248,13 @@ primeira fase e as leituras do destino ficam fechadas depois disso. Continua
 valendo o outro motivo para a cópia nativa: a saída do `pg_dump` é gravada
 fora do output e entra no artefato pelo `include_file()`.
 
-Aplicando a pasta da execução depois, o dump entra pela ordem dos arquivos e a
-aplicação pode rodar em outra máquina. O `GeneratedRun` resolve os arquivos a
-partir da pasta da execução. Os caminhos absolutos do manifesto não são usados.
+Aplicando a pasta da execução depois, a aplicação pode rodar em outra máquina.
+O `GeneratedRun` resolve os artefatos do manifesto pelos caminhos relativos à
+pasta da execução. Um caminho que saia dela é recusado.
 
-### Separador de comandos
+### Separador de comandos do PostgreSQL
 
-O `split_sql_file()` lê o arquivo linha a linha e devolve objetos `Statement`
+O `split_sql_file()` do adapter PostgreSQL lê o arquivo linha a linha e devolve objetos `Statement`
 com o tipo (`sql` ou `meta-command`), o texto sem `;` final e a linha inicial.
 Um `;` só encerra o comando fora de strings `'...'` e `E'...'`, identificadores
 `"..."`, dollar quotes `$tag$...$tag$` e comentários, inclusive `/* */`
@@ -262,22 +274,26 @@ testadas. A diferença conhecida é a barra invertida no meio de um comando: o
 
 ### Aplicador
 
-O `SqlArtifactApplier(run_dir, connect, mode, on_error, batch_size=1000)`
-recebe uma função `connect` e só a chama depois de validar a execução, então
-uma execução incompleta não abre conexão. A conexão roda com `autocommit`
-desligado e cada comando vai num `execute()`.
+O `ArtifactApplier(run, open_session, mode, on_error, batch_size=1000)` lê a
+execução, resolve o adapter de destino pelo registro e confere o formato dos
+artefatos e as capacidades declaradas. A política padrão vem daí: `stop` no
+`apply` e, no dry run, `continue` quando o destino tem savepoint. A função
+`open_session` só é chamada depois disso, então uma execução incompleta ou um
+modo que o destino não cumpre não abre conexão. Com a sessão aberta, ele confere
+de novo as capacidades, que podem ser menores que as declaradas.
 
 Duas escolhas definem uma aplicação, cada uma representada por um objeto:
 
-- o modo (`_ApplyMode` ou `_DryRunMode`) decide como a transação termina e
-  quais comandos pular;
+- o modo (`_ApplyMode` ou `_DryRunMode`) decide como a transação termina e a
+  política padrão;
 - a política de erro (`_StopPolicy` ou `_ContinuePolicy`) decide o que fazer
   quando um comando falha.
 
-Os comandos que não vão ao servidor estão numa tabela de regras (`_SkipRule`):
-metacomandos do `psql`, controle de transação e, no dry run, `setval`. Um
-`COPY ... FROM stdin` encerra a aplicação. Depois de cada arquivo o aplicador
-executa `RESET ALL`, porque antes cada arquivo rodava numa sessão de `psql` e as
+A sessão marca os comandos que não executa (`Command.skip`) e os que encerram
+a aplicação (`Command.error`). No PostgreSQL são pulados os metacomandos do
+`psql`, o controle de transação e, no dry run, `setval`. Um `COPY ... FROM
+stdin` encerra a aplicação. Depois de cada arquivo a sessão executa
+`RESET ALL`, porque antes cada arquivo rodava numa sessão de `psql` e as
 configurações do dump morriam com ela.
 
 A `_ContinuePolicy` abre um savepoint por lote. Se um comando falha, volta ao

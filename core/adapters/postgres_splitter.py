@@ -1,5 +1,7 @@
 """Split SQL artifacts into statements following PostgreSQL lexical rules.
 
+Part of the PostgreSQL adapter: the session reads ``.sql`` artifacts with it.
+
 The splitter reads its input line by line, so a dump of several gigabytes is
 never loaded in memory. It only needs to know where each statement ends: a
 semicolon outside string literals, quoted identifiers, dollar quotes and
@@ -23,6 +25,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Iterable, Iterator
 
+from core.application import ArtifactReadError
+
 SQL = 'sql'
 META_COMMAND = 'meta-command'
 
@@ -42,7 +46,7 @@ class Statement:
     line: int
 
 
-class UnterminatedLiteralError(ValueError):
+class UnterminatedLiteralError(ArtifactReadError):
     """Raised when the input ends inside a literal, identifier or comment."""
 
     def __init__(self, source: str, line: int, literal: str):

@@ -94,7 +94,7 @@ O segundo arquivo de compose sobe um PostgreSQL 16 como destino. Dentro da rede 
 ### Aplicando o SQL no destino
 
 ```bash
-export PGHOST=localhost PGPORT=5432 PGDATABASE=tenant PGUSER=tenant PGPASSWORD=tenant
+export TARGET_HOST=localhost TARGET_PORT=5432 TARGET_NAME=tenant TARGET_USER=tenant TARGET_PASS=tenant
 
 # dry run: executa tudo e termina em ROLLBACK
 python3 Aplicar.py runs/Acme/20261120-153000 --dry-run
@@ -103,7 +103,7 @@ python3 Aplicar.py runs/Acme/20261120-153000 --dry-run
 python3 Aplicar.py runs/Acme/20261120-153000
 ```
 
-O `Aplicar.py` roda os arquivos `.sql` de `comandos/` na ordem das fases, numa única transação. Se algo falha, nada da carga fica no destino. O dry run usa `--on-error continue` por padrão e lista todos os erros de uma vez. Cada aplicação grava `relatorio.json` e `erros.txt` em `aplicacoes/<timestamp>-<modo>/`, dentro da pasta da execução.
+O `Aplicar.py` lê do `manifest.json` o adapter de destino e a lista de artefatos e roda os comandos na ordem das fases, numa única transação. A conexão vem das variáveis `TARGET_*`, com os mesmos nomes do `.env` do cliente. Se algo falha, nada da carga fica no destino. Quando o destino tem savepoint, o dry run usa `--on-error continue` por padrão e lista todos os erros de uma vez. Cada aplicação grava `relatorio.json` e `erros.txt` em `aplicacoes/<timestamp>-<modo>/`, dentro da pasta da execução.
 
 Para gerar e aplicar de uma vez no destino das chaves `TARGET_*`, use `python3 Migracao.py Acme --dry-run` ou `--apply`. Os modos, as políticas de erro e os cuidados estão em [docs/execucao.md](docs/execucao.md#aplicando-os-sqls-no-destino).
 

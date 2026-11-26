@@ -18,21 +18,40 @@ DEFAULT_FILES = {
 }
 
 
-def make_run(tmpdir, files=None, status='success', debug=False):
+def make_run(tmpdir, files=None, status='success', debug=False, listed=None, target='postgres'):
+    """Run directory with a manifest like the generation writes.
+
+    ``listed`` names the artifacts of the manifest; by default, every file written.
+    """
+
+    files = DEFAULT_FILES if files is None else files
     run_dir = os.path.join(tmpdir, 'runs', 'Acme', '20261124-100000')
     os.makedirs(os.path.join(run_dir, 'comandos'))
     manifest = {
         'client': 'Acme',
         'status': status,
         'debug': {'enabled': debug, 'limit': 100 if debug else None},
+        'target': {'adapter': target},
+        'artifacts': [
+            {'phase': name[3:].rsplit('.', 1)[0], 'path': f'comandos/{name}', 'format': name.rsplit('.', 1)[1]}
+            for name in (files if listed is None else listed)
+        ],
     }
     with open(os.path.join(run_dir, 'manifest.json'), 'w', encoding='utf-8') as manifest_file:
         json.dump(manifest, manifest_file)
 
-    for name, content in (DEFAULT_FILES if files is None else files).items():
+    for name, content in files.items():
         with open(os.path.join(run_dir, 'comandos', name), 'w', encoding='utf-8') as sql_file:
             sql_file.write(content)
     return run_dir
+
+
+def session_of(connection):
+    """Session opener of the PostgreSQL adapter over a fake connection."""
+
+    from core.adapters.postgres_session import PostgresSession
+
+    return lambda: PostgresSession(connection)
 
 
 class FakeDatabaseError(Exception):
