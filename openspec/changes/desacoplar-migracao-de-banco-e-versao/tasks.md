@@ -2,7 +2,7 @@
 
 - [x] 1.1 Archive `aplicar-artefatos-sql-no-destino`, `preservar-barra-invertida-nos-literais` and `criar-cliente-ficticio-educacional`, so the capabilities modified here exist in `openspec/specs/`.
 - [x] 1.2 Implement `revisar-estrategias-dependentes-de-dialeto` and `padronizar-lookups-de-referencia`.
-- [ ] 1.3 Revise `introduzir-direct-database-output` so the direct output executes operations through the adapter session. (Phase 2 recorded the dependency and switched it to `TARGET_*`; the rewrite on top of `TargetSession` waits for phase 6, when that contract exists.)
+- [x] 1.3 Revise `introduzir-direct-database-output` so the direct output executes operations through the adapter session. (Phase 2 recorded the dependency and switched it to `TARGET_*`; the rewrite on top of `TargetSession` waits for phase 6, when that contract exists.)
 
 ## 2. Named Connections and Adapter Registry
 

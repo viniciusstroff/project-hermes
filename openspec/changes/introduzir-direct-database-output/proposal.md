@@ -1,35 +1,41 @@
 ## Why
 
-Hoje a migração só entrega o SQL em arquivos. A aplicação no destino acontece depois, pelo `SqlArtifactApplier`, quando a geração inteira terminou. Numa carga longa isso tem dois custos. Um erro no SQL gerado só aparece quando o aplicador chega ao comando, depois de toda a geração. E o `03_load_transformed_data.sql` de um cliente grande ocupa gigabytes em disco para ser lido uma vez.
+Hoje a migração entrega as operações em arquivos, em `comandos/`. A aplicação no destino acontece depois, pelo `ArtifactApplier`, quando a geração inteira terminou. Numa carga longa isso tem dois custos. Um erro num comando só aparece quando o aplicador chega a ele, depois de toda a geração. E o `03_load_transformed_data` de um cliente grande ocupa gigabytes em disco para ser lido uma vez.
 
-O item 2 de `docs/melhorias-futuras.md` previa um `DirectDatabaseOutput` que executa os comandos no destino durante a geração. Ele foi adiado porque a geração lia o destino no meio da carga para montar mapas de referência (decisão 1 do design de `aplicar-artefatos-sql-no-destino`). A change `padronizar-lookups-de-referencia` tira essa leitura do meio da carga: os mapas são carregados antes da fase `prepare_target` e o provider recusa leituras depois disso. Com isso o output direto volta a ser viável. Também falta escolher o output pela linha de comando, o que hoje não existe.
+O item 2 de `docs/melhorias-futuras.md` previa um `DirectDatabaseOutput` que executa os comandos no destino durante a geração. Ele foi adiado porque a geração lia o destino no meio da carga. A `padronizar-lookups-de-referencia` resolveu isso: os mapas de referência carregam antes da primeira fase e as leituras do destino fecham em seguida.
+
+A `desacoplar-migracao-de-banco-e-versao` deixou o output direto pequeno. O output recebe operações completas, não pedaços de texto. A sessão do adapter de destino (`TargetSession`) já sabe ler comandos, pular os que não executa, abrir transação e savepoint e dar o código de um erro. As capacidades dizem o que o destino cumpre. O output direto não precisa de separador, de regras de comandos pulados nem de driver próprios: ele liga as operações à mesma sessão que o aplicador usa. Falta escolher o output pela linha de comando.
 
 ## What Changes
 
-- Novo `DirectDatabaseOutput`, em `core/outputs/direct_db.py`. Ele executa cada comando gerado no destino assim que o comando fica completo, numa transação única para a execução inteira.
-- Modos `apply` (termina em `COMMIT`) e `dry-run` (termina sempre em `ROLLBACK`) e políticas de erro `stop` e `continue`, com o mesmo comportamento do `SqlArtifactApplier`. A execução de comandos, as regras de comandos pulados e o relatório passam a ser compartilhados entre os dois.
-- Os comandos da fase `setup` ficam em memória e só rodam quando a fase `prepare_target` abre, depois que as leituras do destino foram fechadas.
-- O contrato `OutputAdapter` ganha `include_file(phase, path)`, para fases cujo conteúdo foi gravado fora do output. O `MigrationRunner` usa esse método para entregar o `02_dump_compatible_tables.sql` entre `prepare_target` e `load_transformed_data`. O `SqlFileOutput` mantém o arquivo como está. O `DirectDatabaseOutput` executa o dump na mesma transação.
-- Nova opção `--output sql-file|direct-db|hybrid` no `Migracao.py`. O padrão continua `sql-file`. `hybrid` grava os arquivos e executa no destino pelo `MirrorOutput`. Com `direct-db` ou `hybrid`, `--apply` ou `--dry-run` é obrigatório e define o modo do output. Nesse caso nada é aplicado depois da geração.
-- O `DefaultMigrationContextFactory` monta o output escolhido e abre a conexão de escrita com as chaves `TARGET_*`.
+- Novo `DirectDatabaseOutput`, em `core/outputs/direct.py`. Ele pede ao adapter de destino os comandos de cada operação (`render`), passa o texto pela sessão do adapter e entrega os comandos à sessão antes de o `write()` retornar, numa transação única para a execução inteira. Uma sessão que junta comandos em lote (MongoDB) roda o lote quando ele enche, na troca de fase ou no fim.
+- A sessão de escrita é aberta numa conexão própria, só quando a fase `prepare_target` abre, depois de as leituras do destino fecharem. Os comandos da fase `setup` esperam na memória até lá.
+- Modos (`apply` e `dry-run`) e políticas de erro (`stop` e `continue`) saem do `applier.py` para `core/apply/execution.py`, usados pelo aplicador e pelo output direto. A conferência de capacidades continua em `core/application.py`.
+- O `TargetSession.commands()` passa a ler linhas, não um caminho: o aplicador passa o arquivo aberto e o output direto passa o texto renderizado de cada operação.
+- O `session()` do adapter de destino ganha `waits_between_commands=False`. O output direto pede `True`, porque a sessão espera o Python entre um comando e outro. Com isso, o PostgreSQL desliga o `idle_in_transaction_session_timeout` da sessão.
+- O `include_file(path)` do contrato, que já existe para a cópia nativa, executa o arquivo do `pg_dump` na mesma transação.
+- Nova opção `--output file|direct|hybrid` no `Migracao.py`. O padrão continua `file`. `hybrid` grava os arquivos e executa no destino pelo `MirrorOutput`. Com `direct` ou `hybrid`, `--apply` ou `--dry-run` é obrigatório e define o modo do output. Nesse caso nada é aplicado depois da geração.
+- O `DefaultMigrationContextFactory` monta o output escolhido.
 - Atualização de `docs/execucao.md`, `docs/arquitetura.md`, `docs/melhorias-futuras.md` e do `README.md`.
 
 ## Capabilities
 
 ### New Capabilities
 
-- `direct-database-output`: executa no destino, durante a geração, os comandos entregues ao output, em transação única, com modo, política de erro e relatório.
+- `direct-database-output`: executa no destino, durante a geração, os comandos das operações entregues ao output, pela sessão do adapter de destino, em transação única, com modo, política de erro, capacidades e relatório.
 
 ### Modified Capabilities
 
-- `configurable-migration-output`: o output passa a ser escolhido pelo CLI, o contrato ganha `include_file()` e o runner entrega o dump ao output. Sai o requisito que proibia a camada de output de executar SQL no destino.
+- `configurable-migration-output`: o output passa a ser escolhido pelo CLI. Sai o requisito que proibia a camada de output de executar comandos no destino.
+- `database-adapters`: a sessão do adapter de destino lê comandos de qualquer sequência de linhas e aceita esperar entre um comando e outro.
+- `sql-artifact-application`: o relatório de aplicação registra de onde vieram os comandos (`source`).
 
 ## Impact
 
-- Novo módulo `core/outputs/direct_db.py`.
-- Código afetado: `core/outputs/base.py`, `core/outputs/sql_file.py`, `core/outputs/mirror.py`, `core/runner.py`, `core/context.py`, `core/base_migration.py` (`dump_tables()` registra o arquivo gerado), `core/metadata/postgres.py`, `core/apply/` (execução compartilhada e separador incremental) e `Migracao.py`.
-- Depende de `padronizar-lookups-de-referencia` e só pode ser implementada depois dela.
-- Depende também de `desacoplar-migracao-de-banco-e-versao`. Depois dela, o output recebe operações e não SQL. Quem executa no destino é a sessão do adapter (`TargetSession`), guiada pelas capacidades que ele declara. Esta change precisa ser reescrita sobre esse contrato antes de ser implementada: o `DirectDatabaseOutput` deixa de ter separador, regras de comandos pulados e `psycopg2` próprios. O `include_file(path)` já existe no `OutputAdapter` desde a fase 5 dela, para a cópia nativa das entidades compatíveis. O `dump_tables()` saiu.
-- Com `sql-file`, nada muda nos arquivos gerados. O `Aplicar.py` e as opções `--apply` e `--dry-run` sem `--output` continuam como estão.
+- Novos módulos: `core/outputs/direct.py` e `core/apply/execution.py`.
+- Código afetado: `core/application.py` (`commands()` sobre linhas), `core/apply/applier.py`, `core/apply/cli.py`, `core/apply/report.py`, `core/adapters/postgres.py`, `core/adapters/postgres_session.py`, `core/adapters/mongodb.py`, `core/context.py` e `Migracao.py`.
+- Depende de `desacoplar-migracao-de-banco-e-versao`, que precisa ser arquivada antes, porque os deltas desta change partem das specs que ela cria.
+- Com `--output file`, nada muda nos arquivos gerados. O `Aplicar.py` e as opções `--apply` e `--dry-run` sem `--output` continuam como estão.
 - Na execução direta, o destino fica bloqueado pelo `TRUNCATE` desde a fase `prepare_target` até o fim da geração, não só durante a aplicação. A premissa de destino sem uso concorrente continua.
 - Um cliente que lê o destino direto pela conexão do adapter (`context.target.connection`) no meio da geração fica fora da garantia e pode esperar o lock da conexão de escrita.
+- Num destino MongoDB, a transação tem um limite de vida (`transactionLifetimeLimitSeconds`) que passa a cobrir a geração inteira, não só a aplicação.
