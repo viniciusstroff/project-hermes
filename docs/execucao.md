@@ -169,6 +169,8 @@ O checkpoint vale por tarefa. Uma tarefa interrompida recomeça do zero. Um clie
 
 Cada geração nova tem a própria pasta. Se outra já usou o mesmo segundo, a pasta ganha `-2`, `-3` e assim por diante.
 
+O `AcmeEdu/provar_retomada.py` prova a retomada contra bases reais: interrompe uma geração com `SIGKILL`, retoma e compara os arquivos com uma geração limpa. Ver [AcmeEdu/README.md](../AcmeEdu/README.md#prova-da-retomada).
+
 ## Arquivos gerados
 
 Após a execução, os artefatos ficam em `runs/<cliente>/<YYYYmmdd-HHMMSS>/`:

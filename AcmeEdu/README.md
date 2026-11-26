@@ -137,3 +137,24 @@ O nome da imagem é o que o `docker compose build` der ao serviço `app` (`docke
 | `fb5-pg` | Firebird 5.0.4 | PostgreSQL 16.15 | ROLLBACK | COMMIT | 58 de 58 |
 
 A tabela registra a última rodada completa da matriz, anterior à verificação dos textos com `\r`. Depois dela, os caminhos `pg96-pg16` e `pg-mongo` rodaram de novo e passaram em 59 de 59 e 29 de 29, também com a cópia pelo `pg_dump`.
+
+## Prova da retomada
+
+O `provar_retomada.py` prova o checkpoint da geração contra a V1 e a V2 reais. Ele roda dentro de um container na rede `hermes-net`, com as conexões do `.env`. Não precisa de acesso ao Docker:
+
+```bash
+docker run --rm --network hermes-net -v "$PWD":/home/project-hermes project-hermes-app python3 AcmeEdu/provar_retomada.py --aplicar
+```
+
+O script gera a AcmeEdu do zero, como referência. Depois, em sequência e com 4 threads, começa outra geração e mata o processo com `SIGKILL` assim que o `checkpoint.json` confirma a primeira tarefa da carga, como numa queda do servidor de geração. Em seguida, retoma com `--resume` e confere:
+
+- a retomada termina com sucesso;
+- as tarefas confirmadas não rodam de novo;
+- os arquivos de `comandos/` saem iguais, byte a byte, aos da referência;
+- o relatório registra as duas tentativas;
+- não sobra a pasta `tarefas/`.
+
+Ele também confere as recusas. Uma execução que já terminou não é retomada. Uma retomada com outro limite de debug é recusada sem mudar a pasta. A retomada seguinte, sem o limite, ainda pula as tarefas confirmadas. Com `--aplicar`, a última retomada aplica no destino e o `conferir.py` roda no fim. As pastas criadas saem quando tudo passa; com `--manter`, ficam. Numa falha, ficam para conferência.
+
+Na última rodada, as 16 verificações passaram.
+
