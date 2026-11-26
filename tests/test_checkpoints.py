@@ -314,6 +314,15 @@ class RefusalTest(CheckpointTestCase):
 
         self.assert_refused_without_changes(failed, 'limite de debug', debug=10)
 
+    def test_refused_resume_keeps_the_checkpoint_usable(self):
+        failed = self.failed_run({'teachers'})
+        self.assert_refused_without_changes(failed, 'limite de debug', debug=10)
+
+        resumed = self.generate(self.clientdir(), resume=ResumeSettings(failed.timestamp))
+
+        self.assertEqual(self.manifest(resumed)['status'], 'success')
+        self.assertEqual(Escola.RAN, ['teachers', 'enrollments'])
+
     def test_changed_source_is_refused(self):
         failed = self.failed_run({'teachers'})
         grown = [*TABLES['tb_aluno'], {'id': 201, 'name': 'Novo', 'notes': None}]

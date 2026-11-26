@@ -85,6 +85,8 @@ class PhasePlan:
     cut: int = 0
     sha256: str = EMPTY_SHA256
     marks: list = field(default_factory=list)
+    # A phase that closed: it is replayed up to its end and nothing more is written to it.
+    closed: bool = False
 
 
 def check_resumable(run_dir: str):
@@ -172,7 +174,7 @@ class Checkpoint:
                 continue
             closed = info.get('closed')
             if closed:
-                plans[phase] = PhasePlan(closed['size'], closed['sha256'], list(marks))
+                plans[phase] = PhasePlan(closed['size'], closed['sha256'], list(marks), closed=True)
             else:
                 last = marks[-1] if marks else None
                 plans[phase] = PhasePlan(last['end'] if last else 0, last['sha256'] if last else EMPTY_SHA256, list(marks))
@@ -328,6 +330,7 @@ class CheckpointedFileOutput(FileOutput):
         self._task_start = None
         self._task_start_sha256 = None
         self._plan = None
+        self._frozen = False
 
     # Phases -------------------------------------------------------------------
 
@@ -338,7 +341,7 @@ class CheckpointedFileOutput(FileOutput):
         self.position = 0
         self._hash = hashlib.sha256()
         plan = self.checkpoint.plan(phase)
-        if plan is None or plan.cut == 0:
+        if plan is None or (plan.cut == 0 and not plan.closed):
             self.file = open(self._path, 'w+', encoding='utf-8', newline='')
             self._skip_until = None
             self._pending_marks = []
@@ -348,6 +351,8 @@ class CheckpointedFileOutput(FileOutput):
         self._reader = open(self._path, 'rb')
         self._skip_until = plan.cut
         self._pending_marks = list(plan.marks)
+        # A closed phase is only replayed: its checkpoint record does not change.
+        self._frozen = plan.closed
         # The checkpoint of the phase changes only when writing goes on, so a
         # resume that diverges before the cut leaves it as it was.
         self._plan = plan
@@ -355,6 +360,8 @@ class CheckpointedFileOutput(FileOutput):
     def _verify_prefix(self, plan: PhasePlan):
         if not os.path.exists(self._path) or os.path.getsize(self._path) < plan.cut:
             raise CheckpointError(f'{self._path} é menor que o trecho confirmado ({plan.cut} bytes): não dá para retomar.')
+        if plan.closed and os.path.getsize(self._path) != plan.cut:
+            raise CheckpointError(f'{self._path} mudou depois da última tentativa: o tamanho não é o da fase fechada.')
         with open(self._path, 'rb') as artifact:
             remaining = plan.cut
             while remaining:
@@ -366,6 +373,17 @@ class CheckpointedFileOutput(FileOutput):
 
     def _close_phase(self):
         if self.phase is None:
+            return
+        if self._frozen:
+            if self.position != self._skip_until:
+                raise CheckpointError(
+                    f'A fase {self.phase} terminou na posição {self.position}, e na tentativa anterior terminou em '
+                    f'{self._skip_until}: o script não gera o mesmo que antes.'
+                )
+            self._close_files()
+            self._frozen = False
+            self._skip_until = None
+            self.phase = None
             return
         if self._skipping():
             raise CheckpointError(
@@ -477,10 +495,10 @@ class CheckpointedFileOutput(FileOutput):
     # Internals ----------------------------------------------------------------
 
     def _skipping(self) -> bool:
-        return self._skip_until is not None and self.position < self._skip_until
+        return self._skip_until is not None and (self._frozen or self.position < self._skip_until)
 
     def _resume_writing_at_cut(self):
-        if self._skip_until is None or self.position != self._skip_until:
+        if self._frozen or self._skip_until is None or self.position != self._skip_until:
             return
         # Writing goes on from the cut: what the failed attempt wrote past it goes away.
         self._reader.close()
