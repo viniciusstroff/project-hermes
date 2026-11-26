@@ -22,7 +22,7 @@ Durante `__init__()` o script:
 
 - carrega `Acme/.env`;
 - cria `runs/Acme/<timestamp>/`;
-- inicializa `manifest.json` e `logs/migration.log`;
+- inicializa `manifest.json`, `logs/migration.log` e `logs/migration.jsonl`;
 - abre cada origem declarada no `.env` (`SOURCE_<NOME>_*`) e o destino (`TARGET_*`), pelo adapter de cada uma;
 - abre `comandos/00_setup.sql`, com a extensão do adapter de destino;
 - inicializa mapas e buffers de comandos.

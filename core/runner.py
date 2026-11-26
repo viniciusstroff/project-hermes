@@ -20,18 +20,18 @@ class MigrationRunner:
 
             self._load_reference_maps()
 
-            output.open_phase('prepare_target')
+            self.context.open_phase('prepare_target')
             self._call_hook('run_initial')
 
-            output.open_phase('copy_compatible_entities')
+            self.context.open_phase('copy_compatible_entities')
             self._copy_compatible_entities()
 
-            output.open_phase('load_transformed_data')
+            self.context.open_phase('load_transformed_data')
             self.context.progress.reset()
             self._call_hook('run_inserts')
             self.context.progress.finish()
 
-            output.open_phase('finalize_target')
+            self.context.open_phase('finalize_target')
             self._call_hook('reset_sequences')
             self._resume_constraints()
             output.flush()
@@ -40,23 +40,32 @@ class MigrationRunner:
             # followed by finish(False).
             finish_called = True
             output.finish(True)
+            self._write_generation_report('success')
 
             self.context.logger.print_log('----- Fim do script de importação V1 - V2 -----')
             self.context.write_manifest('success')
 
         except Exception as exc:
             self.context.progress.finish()
-            self.context.logger.print_log('[ERRO] ' + str(exc))
-            self.context.logger.print_log(traceback.format_exc())
+            self.context.logger.print_log('[ERRO] ' + str(exc), level='error')
+            self.context.logger.print_log(traceback.format_exc(), level='error')
             if not finish_called:
                 self._finish_failed_output(output)
+            self._write_generation_report('failed', str(exc))
             self.context.write_manifest('failed', str(exc))
 
     def _finish_failed_output(self, output):
         try:
             output.finish(False)
         except Exception as exc:
-            self.context.logger.print_log('[ERRO] Falha ao finalizar o output: ' + str(exc))
+            self.context.logger.print_log('[ERRO] Falha ao finalizar o output: ' + str(exc), level='error')
+
+    def _write_generation_report(self, status: str, error: str = None):
+        # The report describes the run: failing to write it does not change the run result.
+        try:
+            self.context.write_generation_report(status, error)
+        except Exception as exc:
+            self.context.logger.print_log('[ERRO] Falha ao gravar o relatório da geração: ' + str(exc), level='error')
 
     def _load_reference_maps(self):
         """Load the declared maps, then close target reads before the first phase."""

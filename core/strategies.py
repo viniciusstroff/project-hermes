@@ -9,6 +9,8 @@ Interface comum:
   - select_columns   → list       campos a ler da origem (Fixed retorna [])
   - insert_col       → str        nome da coluna no INSERT
   - raw_value(row)   → any        valor Python que vai para o destino
+  - resolve(row)     → any        o mesmo valor, ou um LostValue quando a estratégia
+                                  não conseguiu manter o valor da origem (opcional)
 
 Código de um banco específico continua possível em dois pontos, sempre preso
 a um adapter:
@@ -19,9 +21,12 @@ from abc import ABC, abstractmethod
 import datetime
 import re
 
+from core.metrics import EMAIL_NOT_FOUND, INVALID_DATE, LOOKUP_MISS, LostValue, is_blank
 from core.references import LoadedReferenceMap
 
 REQUIRED_FIELD_ATTRIBUTES = ('select_columns', 'insert_col', 'raw_value')
+# Marks a key missing from a lookup map, where None may be a valid value.
+_MISSING = object()
 
 
 class FieldStrategy(ABC):
@@ -40,6 +45,14 @@ class FieldStrategy(ABC):
     @abstractmethod
     def raw_value(self, row):
         raise NotImplementedError
+
+    def resolve(self, row):
+        """Valor para o destino, ou LostValue quando o valor da origem se perdeu.
+
+        A migração registra a perda no relatório da geração e grava o valor do
+        LostValue. O padrão é o próprio raw_value, sem perda.
+        """
+        return self.raw_value(row)
 
 
 def validate_field_strategies(fields):
@@ -140,11 +153,21 @@ class Lookup(FieldStrategy):
         return self.v2_name
 
     def raw_value(self, row):
+        value = self.resolve(row)
+        return value.value if isinstance(value, LostValue) else value
+
+    def resolve(self, row):
         raw = row[self.name]
         if raw is None:
             return self.fallback
         key = self.key_normalizer(raw)
-        return self.lookup_dict.get(key, self.fallback)
+        value = self.lookup_dict.get(key, _MISSING)
+        if value is not _MISSING:
+            return value
+        if is_blank(raw):
+            return self.fallback
+        name = self.lookup_dict.name if isinstance(self.lookup_dict, LoadedReferenceMap) else None
+        return LostValue(self.fallback, LOOKUP_MISS, key, reference_map=name)
 
 
 class Transform(FieldStrategy):
@@ -290,6 +313,13 @@ class DateConvert(ColumnStrategy):
             return None
         return parsed if self.as_datetime else parsed.date()
 
+    def resolve(self, row):
+        value = row[self.name]
+        converted = self.convert(value)
+        if converted is None and not is_blank(value):
+            return LostValue(None, INVALID_DATE, value)
+        return converted
+
 
 class EmailExtract(FieldStrategy):
     """Extrai o primeiro e-mail válido do valor ou retorna None."""
@@ -306,10 +336,14 @@ class EmailExtract(FieldStrategy):
         return self.name
 
     def raw_value(self, row):
+        value = self.resolve(row)
+        return None if isinstance(value, LostValue) else value
+
+    def resolve(self, row):
         raw = row[self.name]
-        if raw is None or str(raw).strip() == '':
+        if is_blank(raw):
             return None
         match = re.search(r'[\w.\-+]+@[\w.\-]+', str(raw))
         if match:
             return match.group(0)
-        return None
+        return LostValue(None, EMAIL_NOT_FOUND, raw)

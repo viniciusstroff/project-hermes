@@ -45,21 +45,21 @@ class MultiTargetMigration:
     def source_query(self):
         return with_default_fields(self.source, self.source_select_columns())
 
-    def run_row(self, row: dict, engine):
-        for target in self.targets:
-            if target.should_write(row):
-                engine.insert(target.target, [(field.insert_col, field.raw_value(row)) for field in target.fields])
-
     def run(self, engine):
-        query = self.source_query()
-        total = engine.total_rows(query)
-        engine.report_progress(self.label, 0, total)
+        with engine.unit(self.label) as unit:
+            query = self.source_query()
+            total = engine.total_rows(query)
+            engine.report_progress(self.label, 0, total)
+            targets = [(target, engine.field_values(target.target, target.fields)) for target in self.targets]
 
-        processed = 0
-        for row in engine.read(query):
-            self.run_row(row, engine)
-            processed += 1
-            if processed % engine.progress_every == 0:
-                engine.report_progress(self.label, processed, total)
+            processed = 0
+            for row in engine.read(query):
+                unit.row_read()
+                for target, values in targets:
+                    if target.should_write(row):
+                        engine.insert(target.target, values(row))
+                processed += 1
+                if processed % engine.progress_every == 0:
+                    engine.report_progress(self.label, processed, total)
 
-        engine.report_progress(self.label, processed, total, done=True)
+            engine.report_progress(self.label, processed, total, done=True)

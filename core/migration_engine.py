@@ -1,5 +1,9 @@
+from contextlib import nullcontext
+
+from core.metrics import NULL_UNIT, LostValue
 from core.operations import Insert
 from core.queries import UnsupportedQueryError, with_limit
+from core.strategies import FieldStrategy
 
 DEFAULT_PROGRESS_EVERY = 1000
 BINARY_TYPES = (bytes, bytearray, memoryview)
@@ -17,6 +21,8 @@ class MigrationEngine:
         progress_fn=None,
         progress_every: int = DEFAULT_PROGRESS_EVERY,
         warn_fn=None,
+        metrics=None,
+        source_name: str = None,
     ):
         self.source_adapter = source_adapter
         self.target_adapter = target_adapter
@@ -27,6 +33,49 @@ class MigrationEngine:
         self.progress_every = progress_every if progress_every and progress_every > 0 else DEFAULT_PROGRESS_EVERY
         # warn_fn(key, message) logs a message once per key.
         self.warn_fn = warn_fn
+        # GenerationMetrics of the run, or None (an engine built by hand counts nothing).
+        self.metrics = metrics
+        self.source_name = source_name
+
+    def unit(self, label: str):
+        """Context manager of one migration unit: rows read, inserts and losses of the block."""
+
+        if self.metrics is None:
+            return nullcontext(NULL_UNIT)
+        return self.metrics.unit(label, source=self.source_name)
+
+    def field_values(self, entity: str, fields):
+        """Function from a source row to the (column, value) pairs of an Insert into ``entity``.
+
+        Built once per migration run, so the per-row work stays the strategy
+        itself. A strategy that overrides ``resolve`` may report a lost value:
+        the function records it in the open unit and keeps the value of the
+        ``LostValue``. The others, client strategies without ``resolve``
+        included, are read with ``raw_value``.
+        """
+
+        readers = [(field.insert_col, self._field_reader(entity, field)) for field in fields]
+        return lambda row: [(column, read(row)) for column, read in readers]
+
+    def _field_reader(self, entity: str, field):
+        resolve = getattr(type(field), 'resolve', None)
+        if resolve is None or resolve is FieldStrategy.resolve:
+            return field.raw_value
+
+        resolve = field.resolve
+        lost = self.metrics.lost if self.metrics is not None else None
+        column, strategy = field.insert_col, type(field).__name__
+
+        def read(row):
+            value = resolve(row)
+            # An exact type check: this runs for every field of every row.
+            if type(value) is LostValue:
+                if lost is not None:
+                    lost(entity, column, strategy, value)
+                return value.value
+            return value
+
+        return read
 
     def read(self, query):
         """Rows of a SourceQuery or NativeQuery, with the debug limit applied."""
@@ -68,6 +117,8 @@ class MigrationEngine:
                     f'{entity}.{column} recebeu valor binário. Se a coluna é de texto, decodifique com Transform.',
                 )
         self.emit(Insert(entity, values))
+        if self.metrics is not None:
+            self.metrics.inserted(entity)
 
     def report_progress(self, table: str, count: int, total: int = None, done: bool = False):
         if self.progress_fn is not None:

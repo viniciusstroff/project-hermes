@@ -1,23 +1,39 @@
 import datetime
+import json
 import shutil
 import sys
 import time
 
 
+LEVELS = ('info', 'warning', 'error')
+
+
 class MigrationLogger:
-    """Writes timestamped migration logs to the log artifact and stdout."""
+    """Writes timestamped migration logs to the log artifact and stdout.
+
+    ``migration.log`` keeps one text line per message. ``migration.jsonl``
+    receives one JSON object per event: each message is a ``log`` event and
+    the metrics collector adds its own (``phase_started``, ``unit_finished``,
+    ``data_loss``...). The current phase and unit come from ``metrics``.
+    """
 
     def __init__(self, artifacts):
         self.artifacts = artifacts
         self.progress = None
+        # GenerationMetrics of the run, set by the context factory.
+        self.metrics = None
+        client, timestamp = getattr(artifacts, 'client_name', None), getattr(artifacts, 'timestamp', None)
+        self.run_id = f'{client}/{timestamp}' if client and timestamp else None
         self._log_file = open(self.artifacts.log_path('migration.log'), 'a', encoding='utf-8')
+        self._events_file = open(self.artifacts.log_path('migration.jsonl'), 'a', encoding='utf-8')
 
-    def print_log(self, line: str):
+    def print_log(self, line: str, level: str = 'info'):
         now = datetime.datetime.now()
         text = '[' + now.strftime('%d/%m/%Y %H:%M:%S') + '] ' + line
         if not self._log_file.closed:
             self._log_file.write(text + '\n')
             self._log_file.flush()
+        self._write_event(now, level, 'log', line, {})
 
         if self.progress is not None and self.progress.tui_active:
             self.progress.write_log_line(text)
@@ -25,9 +41,33 @@ class MigrationLogger:
             sys.stdout.write(text + '\n')
         sys.stdout.flush()
 
+    def event(self, event: str, message: str, level: str = 'info', data: dict = None):
+        """Write a structured event to ``migration.jsonl`` only."""
+
+        self._write_event(datetime.datetime.now(), level, event, message, data or {})
+
+    def _write_event(self, now, level: str, event: str, message: str, data: dict):
+        if level not in LEVELS:
+            raise ValueError(f'nível de log inválido: {level!r}. Use {", ".join(LEVELS)}.')
+        if self._events_file.closed:
+            return
+        record = {
+            'ts': now.isoformat(timespec='milliseconds'),
+            'run_id': self.run_id,
+            'level': level,
+            'phase': self.metrics.phase_name if self.metrics is not None else None,
+            'unit': self.metrics.unit_label if self.metrics is not None else None,
+            'event': event,
+            'message': message,
+            'data': data,
+        }
+        self._events_file.write(json.dumps(record, ensure_ascii=False, default=str) + '\n')
+        self._events_file.flush()
+
     def close(self):
-        if not self._log_file.closed:
-            self._log_file.close()
+        for log_file in (self._log_file, self._events_file):
+            if not log_file.closed:
+                log_file.close()
 
 
 class MigrationProgress:

@@ -345,12 +345,46 @@ resultado `failed`. Qualquer outra exceção, inclusive Ctrl+C, também faz
 O uso pela linha de comando, o formato do relatório e os cuidados de operação
 estão em [execucao.md](execucao.md#aplicando-os-sqls-no-destino).
 
+## Métricas da geração
+
+O contexto tem um coletor, `context.metrics`, definido em `core/metrics.py`. O
+`context.source(nome)` passa o coletor e o nome da origem ao engine. Cada
+migração roda dentro de uma unidade:
+
+```python
+with engine.unit(self.target) as unit:
+    values = engine.field_values(self.target, self.fields)
+    for row in engine.read(query):
+        unit.row_read()
+        engine.insert(self.target, values(row))
+```
+
+O `engine.insert()` conta o insert na unidade aberta, por entidade. Um insert
+fora de uma unidade não é contado. O `engine.field_values()` monta, uma vez por
+execução, a função que transforma uma linha nos pares coluna e valor. Nas
+estratégias que sobrescrevem `resolve()`, ela registra a perda que a estratégia
+informa com um `LostValue` e grava o valor dele. As outras são lidas com
+`raw_value()`. Uma exceção que sai do bloco fecha a unidade como `interrupted`.
+
+O contexto abre as fases com `context.open_phase()`, que avisa o coletor e o
+output. No fim, o runner chama `context.write_generation_report()`: o coletor
+fecha o que estiver aberto, o resumo vai para o log e o
+`relatorio-geracao.json` é gravado antes do manifesto, no sucesso e na falha.
+Uma falha ao gravar o relatório vai para o log e não muda o resultado da
+execução. O manifesto não recebe métricas: ele é reescrito a cada mudança de
+status e lido pelo aplicador.
+
+O `MigrationLogger` grava cada linha também em `logs/migration.jsonl`, com a
+fase e a unidade correntes, que ele pergunta ao coletor. O `print_log()` aceita
+`level` (`info`, `warning` ou `error`). O texto do `migration.log` não muda.
+
 ## Artefatos gerados
 
 Os artefatos ficam em `runs/<cliente>/<YYYYmmdd-HHMMSS>/`:
 
 - `manifest.json`
-- `logs/migration.log`
+- `logs/migration.log` e `logs/migration.jsonl`
+- `relatorio-geracao.json`
 - `comandos/00_setup.sql`
 - `comandos/01_prepare_target.sql`
 - `comandos/02_copy_compatible_entities.sql`

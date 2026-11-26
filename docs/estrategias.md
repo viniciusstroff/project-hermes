@@ -11,8 +11,9 @@ Toda estratégia expõe três membros:
 | `select_columns` | `list` | Campos a ler da origem, por nome ou como `NativeField`. `Fixed` retorna `[]`. |
 | `insert_col` | `str` | Nome da coluna no `INSERT` da V2. |
 | `raw_value(row)` | qualquer valor Python | Valor que vai para a coluna de destino. |
+| `resolve(row)` | valor ou `LostValue` | Opcional. O mesmo valor, ou um `LostValue` quando o valor da origem se perdeu. O padrão de `FieldStrategy` devolve o `raw_value()`. |
 
-Nenhuma estratégia gera SQL. O `TableMigration`, o `ExpandMigration` e o `MultiTargetMigration` montam a consulta da origem com os campos das estratégias, pedem o `raw_value()` de cada estratégia e entregam os valores ao adapter de destino, que serializa no formato do banco. Um objeto de campo sem `select_columns`, `insert_col` ou `raw_value` é recusado com `TypeError` quando a migração é criada.
+Nenhuma estratégia gera SQL. O `TableMigration`, o `ExpandMigration` e o `MultiTargetMigration` montam a consulta da origem com os campos das estratégias, pedem o valor de cada estratégia e entregam os valores ao adapter de destino, que serializa no formato do banco. Um objeto de campo sem `select_columns`, `insert_col` ou `raw_value` é recusado com `TypeError` quando a migração é criada.
 
 As estratégias se dividem em dois grupos:
 
@@ -112,6 +113,8 @@ Campos do `ReferenceMap`:
 
 O runner carrega os mapas declarados antes de abrir a primeira fase e registra no log cada um com a quantidade de chaves. Depois disso a geração não consulta mais a V2. Viram erro, antes de qualquer fase: nome repetido, declaração com `table` e `query` juntos ou sem nenhum dos dois e chave que, depois de normalizada, aparece com dois valores diferentes. Pedir um mapa que não foi declarado também é erro. Um mapa vazio gera só um aviso no log.
 
+Uma chave que não está no mapa vira o `fallback` e é contada como perda (`lookup_miss`) no relatório da geração, com o nome do mapa quando ele é um mapa de referência. Valor nulo ou vazio não conta.
+
 **Use quando:** um campo da V1 tem valores discretos que precisam ser convertidos para IDs ou valores diferentes na V2.
 
 ### `Transform`: transformação por callback
@@ -171,7 +174,7 @@ PhoneClean('f_mobile2', 'f_number1')
 
 ### `DateConvert`: texto para data
 
-Faz o parse com `from_fmt` e devolve `datetime.date`, ou `datetime.datetime` com `as_datetime=True`. Valor vazio ou inválido vira `None`. O formato gravado no destino é decidido pelo adapter: no PostgreSQL, `'2026-06-06'` e `'2026-06-06 10:30:00'`.
+Faz o parse com `from_fmt` e devolve `datetime.date`, ou `datetime.datetime` com `as_datetime=True`. Valor vazio ou inválido vira `None`. O inválido é contado como perda (`invalid_date`) no relatório da geração. O formato gravado no destino é decidido pelo adapter: no PostgreSQL, `'2026-06-06'` e `'2026-06-06 10:30:00'`.
 
 ```python
 DateConvert('f_nascimento')                                              # DD/MM/YYYY
@@ -193,7 +196,7 @@ O antigo `to_fmt` saiu. Para gravar a data como texto num formato próprio, use 
 
 ### `EmailExtract`: extração de e-mail
 
-Extrai o primeiro endereço de e-mail do valor. Devolve `None` se não encontrar nenhum.
+Extrai o primeiro endereço de e-mail do valor. Devolve `None` se não encontrar nenhum. Um texto não vazio sem e-mail é contado como perda (`email_not_found`) no relatório da geração.
 
 ```python
 EmailExtract('f_email')
@@ -337,6 +340,34 @@ for row in engine.read(SourceQuery('public.pedidos', order_by='f_id')):
 ```
 
 O adapter de destino serializa os valores do `Insert`. Um comando que só existe num banco, como um `UPDATE` com junção, vai em `Native('postgres', sql)`. Ele é recusado por qualquer outro destino.
+
+---
+
+## Perda de dado
+
+Uma estratégia que troca o valor da origem por `None` ou por um padrão deve contar isso, para a perda aparecer no relatório da geração em vez de passar em silêncio. Ela sobrescreve `resolve(row)` e devolve um `LostValue` quando perde o valor:
+
+```python
+from core.metrics import LostValue, is_blank
+from core.strategies import ColumnStrategy
+
+
+class CepClean(ColumnStrategy):
+    def convert(self, value):
+        digits = ''.join(ch for ch in str(value or '') if ch.isdigit())
+        return digits if len(digits) == 8 else None
+
+    def resolve(self, row):
+        value = row[self.name]
+        cleaned = self.convert(value)
+        if cleaned is None and not is_blank(value):
+            return LostValue(None, 'invalid_cep', value)
+        return cleaned
+```
+
+O `LostValue(value, reason, sample, reference_map=None)` leva o valor que vai para o destino, o motivo, o valor original de exemplo e o nome do mapa, num lookup. A migração grava o `value` e conta a perda. O `raw_value()` continua devolvendo o valor puro.
+
+O `Transform` não conta perdas, porque não sabe distinguir perda de transformação. Uma estratégia de cliente sem `resolve()` também não conta.
 
 ---
 
