@@ -25,7 +25,7 @@ Depois da `desacoplar-migracao-de-banco-e-versao`, a geração e a aplicação f
 - Não usar `COPY`, staging ou lotes além dos que a sessão do adapter já faz.
 - Não paralelizar geração e execução. As duas rodam na mesma thread (item 12).
 - Não criar checkpoints nem retomar uma execução interrompida (item 13).
-- Não remover o `rodar2.sh` nem mudar o `Aplicar.py`.
+- Não mudar o `Aplicar.py`.
 
 ## Decisions
 
