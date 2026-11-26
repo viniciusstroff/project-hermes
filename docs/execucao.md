@@ -5,10 +5,21 @@
 ### Dependências Python
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements/postgres.txt -r requirements/firebird.txt
 ```
 
-Pacotes: `firebirdsql`, `psycopg2-binary`, `python-dotenv`. O driver de cada banco só é importado quando uma conexão daquele adapter abre, então o `firebirdsql` só faz falta para quem tem origem Firebird.
+O `requirements.txt` tem só o core (`python-dotenv`). Os drivers ficam em `requirements/<adapter>.txt`: `psycopg2-binary` no `postgres.txt` e `firebirdsql` no `firebird.txt`. Instale só os dos adapters que o cliente usa. O driver de cada banco só é importado quando uma conexão daquele adapter abre.
+
+### Versões dos servidores
+
+Cada adapter lê a versão do servidor ao conectar e confere a faixa que aceita. Fora dela, a execução para antes da geração, com o adapter, a versão encontrada e a mínima na mensagem. A versão de cada conexão vai para o `manifest.json`.
+
+| Adapter | Origem | Destino |
+|---|---|---|
+| `postgres` | 9.6 ou mais novo | 12 ou mais novo |
+| `firebird` | 2.5 ou mais novo | não se aplica |
+
+Um `pg_dump` mais novo que o destino grava parâmetros que o destino não conhece, como o `SET transaction_timeout` do 17. Na aplicação, a sessão PostgreSQL lê os parâmetros do servidor e pula esses comandos, contados como `unknown_setting` no relatório.
 
 ### Conectividade SSH
 
@@ -65,6 +76,14 @@ docker exec -it project-hermes python3 Migracao.py Acme --debug 100
 # Debug com dry run no target-db
 docker exec -it project-hermes python3 Migracao.py Acme --debug 100 --dry-run
 ```
+
+A imagem instala os drivers de todos os adapters e, por padrão, não traz `pg_dump` nem `psql`. Quem usa a cópia nativa (`SOURCE_<NOME>_NATIVE_COPY=pg_dump`) ou o `rodar2.sh` constrói a imagem com o cliente de uma versão principal:
+
+```bash
+PG_CLIENT_VERSION=17 docker compose build
+```
+
+O `pg_dump` precisa ser da versão do servidor de origem ou mais novo. Um cliente novo exporta de servidores antigos: o 17 exporta de um 9.6. A conferência é feita ao conectar.
 
 O contrato Docker do destino usa o hostname interno `target-db` na rede `hermes-net`.
 Para alterar a porta exposta no host sem mudar o contrato interno, ajuste `TARGET_DB_PUBLISHED_PORT`.

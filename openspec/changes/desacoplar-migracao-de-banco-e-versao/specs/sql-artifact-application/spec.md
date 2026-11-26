@@ -54,6 +54,11 @@ When the target adapter is PostgreSQL, the application SHALL skip transaction co
 - **WHEN** a PostgreSQL `dry-run` application reaches a statement that calls `setval`
 - **THEN** the statement is not executed and is counted as a skipped sequence change
 
+#### Scenario: Dump from a newer pg_dump
+- **WHEN** a copy artifact written by `pg_dump` 17 runs `SET transaction_timeout = 0;` on a PostgreSQL 16 target
+- **THEN** the statement is not executed and is counted as a skipped unknown setting
+- **AND** a `SET` or `set_config` of a parameter the server has runs as before
+
 ### Requirement: Statements are split by PostgreSQL lexical rules
 The PostgreSQL target session SHALL split `.sql` artifacts into commands, ending a statement only at a semicolon outside string literals, escape string literals, quoted identifiers, dollar-quoted strings and comments, and following the `standard_conforming_strings` setting of the server.
 

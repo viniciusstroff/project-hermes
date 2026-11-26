@@ -1,4 +1,4 @@
-firebirdsql==1.2.2
-psycopg2-binary>=2.9.9
+# Dependências do core. Os drivers de banco ficam em requirements/<adapter>.txt:
+# instale só os dos adapters que o cliente usa, por exemplo
+#   pip install -r requirements.txt -r requirements/postgres.txt
 python-dotenv>=1.2.1
-

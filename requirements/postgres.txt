@@ -1,0 +1,2 @@
+# Driver do adapter postgres (origem e destino).
+psycopg2-binary>=2.9.9

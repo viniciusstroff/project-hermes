@@ -52,7 +52,7 @@ A AcmeEdu declara o destino e uma origem só, `v1`. Ela não usa Firebird, entã
 | `banco/v1_dados.sql` | dados gerados por aritmética sobre o número da linha, sem `random()`, então a base sai sempre igual |
 | `banco/v2_esquema.sql` | V2, PostgreSQL 16, com a tabela de domínio `student_statuses` já preenchida e a extensão `amcheck` |
 
-A V1 roda no 9.6, a versão da V1 real. A cópia de `holidays` é linha a linha por padrão. Com `SOURCE_V1_NATIVE_COPY=pg_dump` no `.env`, ela vai pelo `pg_dump` 9.6 da imagem do Hermes, que não exporta de servidor mais novo e por isso é conferido ao conectar.
+A V1 roda no 9.6, a versão da V1 real. A cópia de `holidays` é linha a linha por padrão. Com `SOURCE_V1_NATIVE_COPY=pg_dump` no `.env`, ela vai pelo `pg_dump` da imagem do Hermes, construída com `PG_CLIENT_VERSION` (9.6 ou mais novo). A versão é conferida ao conectar. Um `pg_dump` 17 grava `SET transaction_timeout`, que o destino 16 não conhece e a aplicação pula.
 
 A V1 tem sujeira proposital:
 

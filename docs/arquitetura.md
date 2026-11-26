@@ -361,11 +361,11 @@ O script já incorpora decisões de compatibilidade:
 Para funcionar, o ambiente precisa ter:
 
 - `python3`
-- `psycopg2`
-- `firebirdsql`
 - `python-dotenv`
-- `pg_dump`, só com a cópia nativa ligada
+- o driver de cada adapter usado, de `requirements/<adapter>.txt`: `psycopg2` no `postgres` e `firebirdsql` no `firebird`
+- `pg_dump`, só com a cópia nativa ligada, da versão do servidor de origem ou mais nova
 - `psql`, só para aplicar com o `rodar2.sh`
+- servidores dentro da faixa de cada adapter, conferida ao conectar (`supported_versions` e `core/versions.py`)
 - acesso de rede aos bancos configurados
 
 O `Aplicar.py` sozinho precisa apenas de Python 3, `psycopg2` e da pasta `core/`.

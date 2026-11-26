@@ -43,9 +43,9 @@
 
 ## 7. Version Independence
 
-- [ ] 7.1 Read the server version on connect in each adapter and enforce the declared ranges.
-- [ ] 7.2 Move version-dependent behavior (Firebird row limit, PostgreSQL dump headers) behind adapter methods.
-- [ ] 7.3 Remove `postgresql-client-9.6` from the `Dockerfile`, with an optional build argument for native copy, and split drivers into `requirements/<adapter>.txt`.
+- [x] 7.1 Read the server version on connect in each adapter and enforce the declared ranges.
+- [x] 7.2 Move version-dependent behavior (Firebird row limit, PostgreSQL dump headers) behind adapter methods. (`ROWS` works from 2.0, so the Firebird limit needs no version branch; the PostgreSQL session skips settings the target server does not have.)
+- [x] 7.3 Remove `postgresql-client-9.6` from the `Dockerfile`, with an optional build argument for native copy, and split drivers into `requirements/<adapter>.txt`.
 
 ## 8. MongoDB Adapter
 
