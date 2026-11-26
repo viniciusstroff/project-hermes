@@ -169,7 +169,7 @@ A ideia é rodar a migração contra o destino e descobrir o que falharia antes 
 
 Esta avaliação foi escrita antes da implementação. A opção 1 foi implementada no `SqlArtifactApplier`, que aplica os arquivos depois da geração em vez de executar dentro de um output. O resultado está em [O que foi implementado](#o-que-foi-implementado).
 
-Hoje o `rodar2.sh` aplica cada arquivo com `psql` em autocommit e sem `ON_ERROR_STOP`. Um erro não interrompe a carga: o comando que falhou é pulado, o resto é aplicado e os erros são filtrados do log depois. Quando algo dá errado, o destino fica carregado pela metade e a saída é recriar a base a partir do dump de homologação, como descrito em [execucao.md](execucao.md). O dry run resolve exatamente isso: mostrar os erros antes de tocar no destino real.
+Na época, o `rodar2.sh` aplicava cada arquivo com `psql` em autocommit e sem `ON_ERROR_STOP`. Um erro não interrompia a carga: o comando que falhou era pulado, o resto era aplicado e os erros eram filtrados do log depois. Quando algo dava errado, o destino ficava carregado pela metade e a saída era recriar a base a partir do dump de homologação, como descrito em [execucao.md](execucao.md). O dry run resolve exatamente isso: mostrar os erros antes de tocar no destino real.
 
 #### Opção 1: transação com rollback
 
@@ -231,7 +231,6 @@ A combinação `MirrorOutput(SqlFileOutput, DirectDatabaseOutput(mode='rollback'
 - implementar o `DirectDatabaseOutput` para aplicar durante a geração, depois que o item 7 tirar a leitura do destino do meio da carga
 - permitir que a factory ou o CLI escolham o output
 - medir a política `continue` numa carga real antes de usá-la num banco com réplica
-- decidir se o `rodar2.sh` sai, o que depende de o servidor de carga ter Python com `psycopg2`
 
 ### Possível configuração futura
 
@@ -421,7 +420,7 @@ Ficaram de fora, porque outras changes cuidam deles:
 
 - `FieldStrategy.value()`, `sql_value()` e o `RegexClean`, na `revisar-estrategias-dependentes-de-dialeto`;
 - `load_reference_map()`, na `padronizar-lookups-de-referencia`;
-- as conexões `pg_v1_conn`, `pg_v2_conn` e `fb_v1_conn` e o `rodar2.sh`, na `desacoplar-migracao-de-banco-e-versao`.
+- as conexões `pg_v1_conn`, `pg_v2_conn` e `fb_v1_conn`, na `desacoplar-migracao-de-banco-e-versao`. O `rodar2.sh` saiu depois dela, porque o `Aplicar.py` com `--on-error continue` faz o mesmo numa transação e lista os erros.
 
 ---
 

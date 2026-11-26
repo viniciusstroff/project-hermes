@@ -3,8 +3,8 @@ FROM python:3.12-slim
 ARG USER=project-hermes
 ARG HOME=/home/$USER
 
-# Cliente PostgreSQL (pg_dump e psql) de uma versão principal, só para quem liga
-# a cópia nativa (SOURCE_<NOME>_NATIVE_COPY=pg_dump) ou aplica com o rodar2.sh.
+# Cliente PostgreSQL (pg_dump) de uma versão principal, só para quem liga a
+# cópia nativa (SOURCE_<NOME>_NATIVE_COPY=pg_dump).
 # O pg_dump precisa ser da versão do servidor de origem ou mais novo. Vazio,
 # a imagem fica sem cliente. Ex.: docker compose build --build-arg PG_CLIENT_VERSION=17
 ARG PG_CLIENT_VERSION=

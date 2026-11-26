@@ -25,7 +25,6 @@ O núcleo em `core/` trabalha com contratos em vez de drivers. A origem é lida 
 - Python 3.12 (a versão da imagem Docker)
 - `pg_dump` da versão principal do PostgreSQL da V1 ou mais novo, só para quem liga a cópia nativa (`SOURCE_<NOME>_NATIVE_COPY=pg_dump`). A imagem só instala o cliente com o argumento de build `PG_CLIENT_VERSION`
 - servidores dentro da faixa de cada adapter: PostgreSQL 9.6 ou mais novo como origem e 12 ou mais novo como destino, Firebird 2.5 ou mais novo como origem
-- `psql`, só se for aplicar os arquivos pelo `rodar2.sh`
 - acesso de rede aos bancos de origem, em geral por túnel SSH
 - Docker e Docker Compose, se quiser rodar em container ou subir um destino local
 
@@ -91,7 +90,7 @@ docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
 docker exec -it project-hermes python3 Migracao.py Acme
 ```
 
-A imagem instala os drivers de todos os adapters e não traz `pg_dump` nem `psql`. Para a cópia nativa ou o `rodar2.sh`, construa com o cliente da versão que precisar, por exemplo `PG_CLIENT_VERSION=17 docker compose build`, ou ponha `PG_CLIENT_VERSION` no `.env` da raiz.
+A imagem instala os drivers de todos os adapters e não traz `pg_dump`. Para a cópia nativa, construa com o cliente da versão que precisar, por exemplo `PG_CLIENT_VERSION=17 docker compose build`, ou ponha `PG_CLIENT_VERSION` no `.env` da raiz.
 
 O segundo arquivo de compose sobe um PostgreSQL 16 como destino. Dentro da rede `hermes-net` ele responde em `target-db:5432`. No host, aparece na porta definida em `TARGET_DB_PUBLISHED_PORT`. Para usar outro destino basta não incluir esse arquivo e apontar as chaves `TARGET_*` do `.env` do cliente para o banco desejado.
 
@@ -110,8 +109,6 @@ python3 Aplicar.py runs/Acme/20261120-153000
 O `Aplicar.py` lê do `manifest.json` o adapter de destino e a lista de artefatos e roda os comandos na ordem das fases, numa única transação. A conexão vem das variáveis `TARGET_*`, com os mesmos nomes do `.env` do cliente. Se algo falha, nada da carga fica no destino. Quando o destino tem savepoint, o dry run usa `--on-error continue` por padrão e lista todos os erros de uma vez. Cada aplicação grava `relatorio.json` e `erros.txt` em `aplicacoes/<timestamp>-<modo>/`, dentro da pasta da execução.
 
 Para gerar e aplicar de uma vez no destino das chaves `TARGET_*`, use `python3 Migracao.py Acme --dry-run` ou `--apply`. Os modos, as políticas de erro e os cuidados estão em [docs/execucao.md](docs/execucao.md#aplicando-os-sqls-no-destino).
-
-O `rodar2.sh` continua disponível para quem aplica com `psql`. Ele roda cada arquivo em autocommit e não para no erro, então uma falha deixa o destino carregado pela metade.
 
 ### Depuração
 
@@ -144,14 +141,12 @@ Acme/            cliente modelo, sem banco
 AcmeEdu/         cliente fictício com V1 e V2 em Docker, para rodar de ponta a ponta
 core/            runner, contexto, migrations e estratégias de campo
   adapters/      leitura da origem e renderização para o destino
-  apply/         separador de comandos, aplicador e relatório
+  apply/         aplicador e relatório
   dialects/      diferenças de sintaxe entre bancos
-  metadata/      triggers, índices, sequences e mapas de referência do destino
-  outputs/       para onde vai o SQL gerado
+  outputs/       para onde vão as operações geradas
 tests/           testes unitários
 docs/            documentação técnica
 openspec/        specs e changes do fluxo OpenSpec
-rodar2.sh        alternativa ao Aplicar.py, com psql
 ```
 
 ## Documentação

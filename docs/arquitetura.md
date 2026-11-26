@@ -8,7 +8,7 @@ O script `Migracao.py` é uma aplicação CLI que:
 2. Abre as conexões declaradas no `.env` do cliente: uma ou mais origens e um destino.
 3. Gera os artefatos de cada fase no formato do destino: `.sql` com `TRUNCATE`, `INSERT`, `ALTER TABLE` e `setval` no PostgreSQL.
 4. Não aplica os dados na V2 durante a geração.
-5. Deixa a aplicação para depois, sobre os arquivos gerados em `runs/<cliente>/<timestamp>/comandos/`. Quem aplica é o `Aplicar.py` (ou o próprio `Migracao.py` com `--apply` ou `--dry-run`), numa única transação. O `rodar2.sh` com `psql` continua como alternativa.
+5. Deixa a aplicação para depois, sobre os arquivos gerados em `runs/<cliente>/<timestamp>/comandos/`. Quem aplica é o `Aplicar.py` (ou o próprio `Migracao.py` com `--apply` ou `--dry-run`), numa única transação.
 
 ## Bancos envolvidos
 
@@ -351,8 +351,6 @@ Os artefatos ficam em `runs/<cliente>/<YYYYmmdd-HHMMSS>/`:
 
 - `manifest.json`
 - `logs/migration.log`
-- `logs/*.sql.log`, gravados pelo `rodar2.sh`
-- `erros/*.txt`, gravados pelo `rodar2.sh`
 - `comandos/00_setup.sql`
 - `comandos/01_prepare_target.sql`
 - `comandos/02_copy_compatible_entities.sql`
@@ -398,7 +396,6 @@ Para funcionar, o ambiente precisa ter:
 - `python-dotenv`
 - o driver de cada adapter usado, de `requirements/<adapter>.txt`: `psycopg2` no `postgres`, `firebirdsql` no `firebird` e `pymongo` no `mongodb`
 - `pg_dump`, só com a cópia nativa ligada, da versão do servidor de origem ou mais nova
-- `psql`, só para aplicar com o `rodar2.sh`
 - servidores dentro da faixa de cada adapter, conferida ao conectar (`supported_versions` e `core/versions.py`)
 - acesso de rede aos bancos configurados
 

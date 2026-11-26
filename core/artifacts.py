@@ -42,11 +42,10 @@ class ArtifactManager:
         self.run_dir = os.path.join(self.rootdir, 'runs', self.client_name, self.timestamp)
         self.commands_dir = os.path.join(self.run_dir, COMMANDS_DIR)
         self.logs_dir = os.path.join(self.run_dir, 'logs')
-        self.errors_dir = os.path.join(self.run_dir, 'erros')
         self.manifest_path = os.path.join(self.run_dir, 'manifest.json')
         self._artifacts = {}
 
-        for directory in (self.commands_dir, self.logs_dir, self.errors_dir):
+        for directory in (self.commands_dir, self.logs_dir):
             os.makedirs(directory, exist_ok=True)
 
     def command_path(self, phase: str, extension: str) -> str:
@@ -68,9 +67,6 @@ class ArtifactManager:
     def log_path(self, name: str) -> str:
         return os.path.join(self.logs_dir, name)
 
-    def error_path(self, name: str) -> str:
-        return os.path.join(self.errors_dir, name)
-
     def write_manifest(
         self,
         *,
@@ -91,7 +87,6 @@ class ArtifactManager:
             'run_dir': self.run_dir,
             'artifacts': self.artifacts(),
             'logs_dir': self.logs_dir,
-            'errors_dir': self.errors_dir,
             # Adapter, parameters and server version of each connection, without passwords.
             'sources': (connections or {}).get('sources', {}),
             'target': (connections or {}).get('target'),

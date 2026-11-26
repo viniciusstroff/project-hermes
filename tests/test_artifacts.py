@@ -34,7 +34,7 @@ class ArtifactManagerTest(unittest.TestCase):
             self.assertTrue(os.path.isdir(artifacts.commands_dir))
             self.assertEqual(artifacts.commands_dir, os.path.join(artifacts.run_dir, 'comandos'))
             self.assertTrue(os.path.isdir(artifacts.logs_dir))
-            self.assertTrue(os.path.isdir(artifacts.errors_dir))
+            self.assertFalse(os.path.exists(os.path.join(artifacts.run_dir, 'erros')))
             self.assertEqual(
                 artifacts.command_path('copy_compatible_entities', 'sql'),
                 os.path.join(artifacts.commands_dir, '02_copy_compatible_entities.sql'),

@@ -144,4 +144,4 @@ Rollback: reverter os commits. O SQL gerado, o manifesto e o relatório de aplic
 
 - A amostra de valores deve poder ser desligada por configuração, para clientes com exigência maior de privacidade? Ou o relatório deve guardar só contagens por padrão?
 - Vale contar perdas também nas strategies de limpeza (`CpfClean`, `PhoneClean`) quando o resultado fica vazio ou com tamanho inesperado? Hoje elas não trocam o valor por `NULL`, então ficaram de fora.
-- O `rodar2.sh` e o `Aplicar.py` devem mostrar o resumo de perdas antes de aplicar? Isso ligaria o relatório da geração à aplicação, o que esta change evitou.
+- O `Aplicar.py` deve mostrar o resumo de perdas antes de aplicar? Isso ligaria o relatório da geração à aplicação, o que esta change evitou.

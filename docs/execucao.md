@@ -86,7 +86,7 @@ docker exec -it project-hermes python3 Migracao.py Acme --debug 100
 docker exec -it project-hermes python3 Migracao.py Acme --debug 100 --dry-run
 ```
 
-A imagem instala os drivers de todos os adapters e, por padrão, não traz `pg_dump` nem `psql`. Quem usa a cópia nativa (`SOURCE_<NOME>_NATIVE_COPY=pg_dump`) ou o `rodar2.sh` constrói a imagem com o cliente de uma versão principal:
+Por padrão, a imagem instala os drivers de todos os adapters e não traz o `pg_dump`. Quem usa a cópia nativa (`SOURCE_<NOME>_NATIVE_COPY=pg_dump`) constrói a imagem com o cliente de uma versão principal:
 
 ```bash
 PG_CLIENT_VERSION=17 docker compose build
@@ -157,7 +157,7 @@ O aplicador confere as capacidades do adapter antes de conectar e de novo na ses
 
 Com `--on-error stop`, o primeiro comando com erro desfaz tudo. O relatório aponta o arquivo, a posição do comando e a mensagem do banco.
 
-Com `--on-error continue`, só os comandos que falharam são desfeitos. Cada erro vai para o relatório e a aplicação segue. É o que o `rodar2.sh` faz, só que agora com os erros listados. No dry run isso mostra todos os erros de uma vez. No `apply`, a carga é confirmada sem as linhas que falharam, então use com cuidado.
+Com `--on-error continue`, só os comandos que falharam são desfeitos. Cada erro vai para o relatório e a aplicação segue. No dry run isso mostra todos os erros de uma vez. No `apply`, a carga é confirmada sem as linhas que falharam, então use com cuidado.
 
 O `continue` agrupa os comandos em lotes de 1000 com um savepoint por lote. Quando um comando falha, o lote volta ao savepoint e é reexecutado comando a comando.
 
@@ -220,42 +220,11 @@ Um dry run com erros termina com código 0. Confira a linha `Comandos com erro` 
 - No dry run, o `nextval` dos defaults de coluna avança as sequences. A carga real corrige isso pelos `setval` do `04` e também pelos do `pg_dump` quando a cópia nativa está ligada.
 - Um erro perto do fim descarta a carga inteira. Em cargas longas, rode o dry run antes, de preferência numa cópia do destino.
 
-### Alternativa: `rodar2.sh`
-
-O `rodar2.sh` continua disponível, por exemplo para um servidor sem Python. Ele aplica cada arquivo com `psql` em autocommit e não para no erro. Quando algo falha, o destino fica carregado pela metade e precisa ser recriado (ver [Resetar o banco V2 local](#resetar-o-banco-v2-local-antes-de-reexecutar)).
-
-```bash
-RUN_DIR=runs/Acme/20260910-220000 ./rodar2.sh
-```
-
-O script lê os SQLs de `$RUN_DIR/comandos/`, grava logs em `$RUN_DIR/logs/` e grava erros filtrados em `$RUN_DIR/erros/`.
-
-#### Com Docker manual
-
-```bash
-date ; cat "$RUN_DIR/comandos/00_setup.sql" | psql -a -h target-db -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/00_setup.sql.log" 2>&1 ; date
-date ; cat "$RUN_DIR/comandos/01_prepare_target.sql" | psql -a -h target-db -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/01_prepare_target.sql.log" 2>&1 ; date
-date ; cat "$RUN_DIR/comandos/02_copy_compatible_entities.sql" | psql -a -h target-db -d tenant -p 5432 -U tenant tenant > "$RUN_DIR/logs/02_copy_compatible_entities.sql.log" 2>&1 ; date
-date ; cat "$RUN_DIR/comandos/03_load_transformed_data.sql" | psql -a -h target-db -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/03_load_transformed_data.sql.log" 2>&1 ; date
-date ; cat "$RUN_DIR/comandos/04_finalize_target.sql" | psql -a -h target-db -d tenant -p 5432 -U tenant > "$RUN_DIR/logs/04_finalize_target.sql.log" 2>&1 ; date
-```
-
-#### Verificando erros nos logs
-
-```bash
-grep "ERROR:\|WARNING:" -B 5 -A 5 "$RUN_DIR/logs/04_finalize_target.sql.log" > "$RUN_DIR/erros/04_finalize_target_contexto.txt"
-grep "ERROR:\|WARNING:" -B 15 -A 15 "$RUN_DIR/logs/03_load_transformed_data.sql.log" > "$RUN_DIR/erros/03_load_transformed_data_contexto.txt"
-grep "ERROR:\|WARNING:" -B 5 -A 5 "$RUN_DIR/logs/02_copy_compatible_entities.sql.log" > "$RUN_DIR/erros/02_copy_compatible_entities_contexto.txt"
-grep "ERROR:\|WARNING:" -B 5 -A 5 "$RUN_DIR/logs/01_prepare_target.sql.log" > "$RUN_DIR/erros/01_prepare_target_contexto.txt"
-```
-
-Os arquivos em `$RUN_DIR/erros/` ficam vazios se não houver problemas.
-
 ---
 
 ## Resetar o banco V2 local antes de reexecutar
 
-Útil para simular o ambiente de produção a partir de um dump de homologação. Com o `rodar2.sh`, é o caminho depois de uma carga que deu erro. Com o `Aplicar.py`, uma carga que falha não deixa dados no destino. Nesse caso o reset só é preciso para refazer uma carga confirmada.
+Útil para simular o ambiente de produção a partir de um dump de homologação. Com o `Aplicar.py`, uma carga que falha não deixa dados no destino. O reset só é preciso para refazer uma carga confirmada.
 
 ```bash
 dropdb -h localhost -p 4003 -U tenant-demo tenant-demo
@@ -284,4 +253,4 @@ scp "$RUN_DIR"/Acme.zip seu_usuario@servidor:
 scp seu_usuario@servidor-demo:/tmp/Acme_logs.zip .
 ```
 
-Para rodar o `Aplicar.py` no servidor, ele precisa de Python 3 com `psycopg2` e de uma cópia do `Aplicar.py` e da pasta `core/`. A pasta da execução pode vir de outra máquina, porque o aplicador resolve os arquivos a partir dela e não pelos caminhos do manifesto. Se o servidor não tiver Python, rode o `Aplicar.py` de uma máquina com acesso ao destino ou use o `rodar2.sh` no servidor.
+Para rodar o `Aplicar.py` no servidor, ele precisa de Python 3 com o driver do destino (`requirements/<adapter>.txt`) e de uma cópia do `Aplicar.py` e da pasta `core/`. A pasta da execução pode vir de outra máquina, porque o aplicador resolve os arquivos a partir dela e não pelos caminhos do manifesto. Se o servidor não tiver Python, rode o `Aplicar.py` de uma máquina com acesso ao destino.
