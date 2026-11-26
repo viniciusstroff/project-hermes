@@ -91,9 +91,14 @@ _TRUE_VALUES = {'on', 'true', 'yes', '1'}
 
 
 def split_sql_file(path: str, standard_conforming_strings: bool = True) -> Iterator[Statement]:
-    """Yield the statements of an SQL file encoded in UTF-8."""
+    """Yield the statements of an SQL file encoded in UTF-8.
 
-    with open(path, encoding='utf-8') as sql_file:
+    The file is read without newline translation: lines end at ``\n``,
+    ``\r\n`` or ``\r``, as in the server lexer, and a carriage return inside
+    a literal stays in it.
+    """
+
+    with open(path, encoding='utf-8', newline='') as sql_file:
         yield from split_sql(sql_file, source=path, standard_conforming_strings=standard_conforming_strings)
 
 

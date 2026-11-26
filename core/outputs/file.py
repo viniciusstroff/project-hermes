@@ -22,7 +22,10 @@ class FileOutput:
         self.flush()
         if self.file:
             self.file.close()
-        self.file = open(self.artifacts.command_path(phase, self.format.extension), 'w+', encoding='utf-8')
+        # newline='': a carriage return inside a value is written as it is.
+        self.file = open(
+            self.artifacts.command_path(phase, self.format.extension), 'w+', encoding='utf-8', newline='',
+        )
 
     def write(self, operation):
         # Rendering may fail (a value the target cannot store): the error goes
@@ -33,7 +36,8 @@ class FileOutput:
 
     def include_file(self, path: str):
         self.flush()
-        with open(path, encoding='utf-8') as source:
+        # newline='': copied byte for byte, \r\n and lone \r included.
+        with open(path, encoding='utf-8', newline='') as source:
             shutil.copyfileobj(source, self.file)
 
     def flush(self):

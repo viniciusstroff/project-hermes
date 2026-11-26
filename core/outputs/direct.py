@@ -12,6 +12,7 @@ opens, after target reads closed. Operations of the ``setup`` phase wait in
 memory until then, so nothing reaches the target while reference maps load.
 """
 
+import io
 import os
 from typing import Callable
 
@@ -107,15 +108,15 @@ class DirectDatabaseOutput:
             return
         text = ''.join(self.target.render(operation))
         if text:
-            self._run_lines(text.splitlines(keepends=True))
+            self._run_lines(_lines(text))
 
     def include_file(self, path: str):
         if self._session is None:
-            with open(path, encoding='utf-8') as lines:
+            with open(path, encoding='utf-8', newline='') as lines:
                 self._hold('lines', lines.readlines())
             return
-        # Read line by line: a native copy may be several gigabytes.
-        with open(path, encoding='utf-8') as lines:
+        # Read line by line: a native copy may be several gigabytes. newline='' keeps \r\n in literals.
+        with open(path, encoding='utf-8', newline='') as lines:
             self._run_lines(lines)
 
     def flush(self):
@@ -249,6 +250,17 @@ class DirectDatabaseOutput:
             self._log(
                 f'Limite de vida da transação do MongoDB: {limit} s. A geração inteira precisa caber nele.'
             )
+
+
+def _lines(text: str) -> list:
+    """Lines of rendered text, split as a file opened with ``newline=''`` would be.
+
+    ``str.splitlines()`` also splits at characters such as ``\x85`` and
+    ``\u2028``, which would change the line numbers and end a ``--`` comment
+    early. A file splits only at ``\n``, ``\r\n`` and ``\r``.
+    """
+
+    return list(io.StringIO(text, newline=''))
 
 
 class _CountedLines:
